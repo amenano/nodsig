@@ -54,6 +54,17 @@ none of this is worth building.
   point of keeping an archive of revelations rather than only a history of
   locks, but the archive stores digests, not dates.
 
+- **Has one of your signatures ever reused its nonce point?** Signing two
+  different messages with the same nonce hands the private key to anyone who
+  noticed, which is why the census records every signature's nonce point,
+  ECDSA and schnorr alike. `nonces address` asks the question about one of
+  your addresses, from your own node; `nonces groups` asks it of the whole
+  chain at once. The census is careful about what a repetition means: a
+  repeated point is not yet a reused nonce (the same signature copied twice
+  shares the point and exposes nothing), and where the evidence cannot
+  settle the difference, the output says undecided instead of guessing.
+  [`docs/nonce-check.md`](docs/nonce-check.md) is the walkthrough.
+
 - **What is this outpoint's whole story?** Created when, worth what, under
   which lock, spent by whom.
 
@@ -353,7 +364,7 @@ also repeats when one signature is copied onto a second input, and telling the
 two apart takes re-reading the blocks. It is the one addition here that a later
 pass could not reconstruct: the artifacts kept afterwards hold no unlocking
 data. Seal it with `nodsig nonces merge`, then read it with `nodsig nonces
-groups`. To ask the same question about one address of yours, `nodsig nonces
+groups`. To ask the same question about one of your addresses, `nodsig nonces
 address` joins the index, the derivatives and your node on the outpoint:
 [`docs/nonce-check.md`](docs/nonce-check.md) is the walkthrough.
 

@@ -356,7 +356,7 @@ they read, time or explain something you already have.
 | `nonces resolve` | re-read the blocks those points name and keep the evidence that decides them (**needs the node**) | 4b |
 | `nonces witness-verify` | audit that evidence, re-derive its resolutions, `--csv` to export them | 5 |
 | `nonces lookup` | was this nonce point published? | - |
-| `nonces address` | the same question for one address of yours (**needs the node**) | 6 |
+| `nonces address` | the same question for one of your addresses (**needs the node**) | 6 |
 | `nonces bench` | time the extraction over real blocks | - |
 | `index build` | number the chain once, spends resolved | 4 |
 | `index rewind` | back to a height already covered | rewind |

@@ -80,7 +80,7 @@ Not all of it. Pick by the question you came for.
 | per-block statistics | `archive scan --graph` → `blockstats build` |
 | to repeat the scan's checks later, or to put real dates on a curve | `archive scan --headers` → `headers fingerprint` |
 | whether a signing key ever gave itself away by repeating a nonce | `archive scan --nonces` → `nonces merge` → `nonces groups` |
-| the same, for one address of yours | `index build` → `derived build`, then `nonces address` (needs a node) |
+| the same, for one of your addresses | `index build` → `derived build`, then `nonces address` (needs a node) |
 
 ### The second road, and why it is not in the list
 
