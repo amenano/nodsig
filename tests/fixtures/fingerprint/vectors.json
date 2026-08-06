@@ -1,0 +1,188 @@
+{
+  "note": "Canonical artifact identity and its fingerprint. The identity is serialized to the byte string in `canonical_bytes_hex` and hashed with sha256; the recipe is in docs/contracts/Artifact.md. Every field shown moves the fingerprint: file order, format tag, coverage and the digests are what an artifact IS. A parent is NOT part of it, and the last vector pins that.",
+  "recipe": [
+    "b\"nodsig-identity-v3\\x00\"",
+    "lp(identity.format)",
+    "u32be(coverage.from) || u32be(coverage.to)",
+    "u32be(file count) || for each file in order: lp(name) || raw32(sha256)",
+    "lp(s) = u16be(len(utf8(s))) || utf8(s)"
+  ],
+  "vectors": [
+    {
+      "note": "root, two files in order",
+      "identity": {
+        "format": "demo-v2",
+        "coverage": {
+          "from": 1,
+          "to": 4
+        },
+        "files": [
+          {
+            "name": "alpha",
+            "sha256": "8ed3f6ad685b959ead7022518e1af76cd816f8e8ec7ccdda1ed4018e8f2223f8"
+          },
+          {
+            "name": "beta",
+            "sha256": "f44e64e75f3948e9f73f8dfa94721c4ce8cbb4f265c4790c702b2d41cfbf2753"
+          }
+        ]
+      },
+      "canonical_bytes_hex": "6e6f647369672d6964656e746974792d763300000764656d6f2d76320000000100000004000000020005616c7068618ed3f6ad685b959ead7022518e1af76cd816f8e8ec7ccdda1ed4018e8f2223f8000462657461f44e64e75f3948e9f73f8dfa94721c4ce8cbb4f265c4790c702b2d41cfbf2753",
+      "fingerprint": "4b170c2d9d52b2e3e2553c090a5d4e164b74a17d426f9707644663570648e5ca"
+    },
+    {
+      "note": "the same files, reordered",
+      "identity": {
+        "format": "demo-v2",
+        "coverage": {
+          "from": 1,
+          "to": 4
+        },
+        "files": [
+          {
+            "name": "beta",
+            "sha256": "f44e64e75f3948e9f73f8dfa94721c4ce8cbb4f265c4790c702b2d41cfbf2753"
+          },
+          {
+            "name": "alpha",
+            "sha256": "8ed3f6ad685b959ead7022518e1af76cd816f8e8ec7ccdda1ed4018e8f2223f8"
+          }
+        ]
+      },
+      "canonical_bytes_hex": "6e6f647369672d6964656e746974792d763300000764656d6f2d7632000000010000000400000002000462657461f44e64e75f3948e9f73f8dfa94721c4ce8cbb4f265c4790c702b2d41cfbf27530005616c7068618ed3f6ad685b959ead7022518e1af76cd816f8e8ec7ccdda1ed4018e8f2223f8",
+      "fingerprint": "a7aafa6063aa005a942256bb4fae17b4cb759f5ead8e54765b8ba95aea9cedaf"
+    },
+    {
+      "note": "another format tag",
+      "identity": {
+        "format": "other-v2",
+        "coverage": {
+          "from": 1,
+          "to": 4
+        },
+        "files": [
+          {
+            "name": "alpha",
+            "sha256": "8ed3f6ad685b959ead7022518e1af76cd816f8e8ec7ccdda1ed4018e8f2223f8"
+          },
+          {
+            "name": "beta",
+            "sha256": "f44e64e75f3948e9f73f8dfa94721c4ce8cbb4f265c4790c702b2d41cfbf2753"
+          }
+        ]
+      },
+      "canonical_bytes_hex": "6e6f647369672d6964656e746974792d76330000086f746865722d76320000000100000004000000020005616c7068618ed3f6ad685b959ead7022518e1af76cd816f8e8ec7ccdda1ed4018e8f2223f8000462657461f44e64e75f3948e9f73f8dfa94721c4ce8cbb4f265c4790c702b2d41cfbf2753",
+      "fingerprint": "1d21f9b52773bcf19e557c453fc17221afecb01a9c6d8e406657abd115d3e51a"
+    },
+    {
+      "note": "the same bytes, a shorter coverage",
+      "identity": {
+        "format": "demo-v2",
+        "coverage": {
+          "from": 1,
+          "to": 3
+        },
+        "files": [
+          {
+            "name": "alpha",
+            "sha256": "8ed3f6ad685b959ead7022518e1af76cd816f8e8ec7ccdda1ed4018e8f2223f8"
+          },
+          {
+            "name": "beta",
+            "sha256": "f44e64e75f3948e9f73f8dfa94721c4ce8cbb4f265c4790c702b2d41cfbf2753"
+          }
+        ]
+      },
+      "canonical_bytes_hex": "6e6f647369672d6964656e746974792d763300000764656d6f2d76320000000100000003000000020005616c7068618ed3f6ad685b959ead7022518e1af76cd816f8e8ec7ccdda1ed4018e8f2223f8000462657461f44e64e75f3948e9f73f8dfa94721c4ce8cbb4f265c4790c702b2d41cfbf2753",
+      "fingerprint": "455cbf546ad5cf90e7bd90217c188994d7ba0217eddf19ad077068a7ea9f6c30"
+    },
+    {
+      "note": "one file, root",
+      "identity": {
+        "format": "demo-v2",
+        "coverage": {
+          "from": 1,
+          "to": 2
+        },
+        "files": [
+          {
+            "name": "only",
+            "sha256": "f905b19542ed08c9a9c26543cca32e5711d207dcffb81b4cdb44ce0b989431c9"
+          }
+        ]
+      },
+      "canonical_bytes_hex": "6e6f647369672d6964656e746974792d763300000764656d6f2d763200000001000000020000000100046f6e6c79f905b19542ed08c9a9c26543cca32e5711d207dcffb81b4cdb44ce0b989431c9",
+      "fingerprint": "8f8272ac245de202793fc28f00aff79c712bc77239607ad49984d01da8683726"
+    },
+    {
+      "note": "names ab|c: only the length prefixes tell it from a|bc",
+      "identity": {
+        "format": "demo-v2",
+        "coverage": {
+          "from": 1,
+          "to": 2
+        },
+        "files": [
+          {
+            "name": "ab",
+            "sha256": "8ed3f6ad685b959ead7022518e1af76cd816f8e8ec7ccdda1ed4018e8f2223f8"
+          },
+          {
+            "name": "c",
+            "sha256": "f44e64e75f3948e9f73f8dfa94721c4ce8cbb4f265c4790c702b2d41cfbf2753"
+          }
+        ]
+      },
+      "canonical_bytes_hex": "6e6f647369672d6964656e746974792d763300000764656d6f2d7632000000010000000200000002000261628ed3f6ad685b959ead7022518e1af76cd816f8e8ec7ccdda1ed4018e8f2223f8000163f44e64e75f3948e9f73f8dfa94721c4ce8cbb4f265c4790c702b2d41cfbf2753",
+      "fingerprint": "92a900d1b08d1203c7a8013017aa65a58a47b7a2303df287fa4cd0479e229618"
+    },
+    {
+      "note": "names a|bc",
+      "identity": {
+        "format": "demo-v2",
+        "coverage": {
+          "from": 1,
+          "to": 2
+        },
+        "files": [
+          {
+            "name": "a",
+            "sha256": "8ed3f6ad685b959ead7022518e1af76cd816f8e8ec7ccdda1ed4018e8f2223f8"
+          },
+          {
+            "name": "bc",
+            "sha256": "f44e64e75f3948e9f73f8dfa94721c4ce8cbb4f265c4790c702b2d41cfbf2753"
+          }
+        ]
+      },
+      "canonical_bytes_hex": "6e6f647369672d6964656e746974792d763300000764656d6f2d76320000000100000002000000020001618ed3f6ad685b959ead7022518e1af76cd816f8e8ec7ccdda1ed4018e8f2223f800026263f44e64e75f3948e9f73f8dfa94721c4ce8cbb4f265c4790c702b2d41cfbf2753",
+      "fingerprint": "f1a7608bf6d5863cd787e9a543b1fdfe8e5e456b3d2cde862ee7675f6edd0c7c"
+    },
+    {
+      "note": "a parent key in the manifest is ignored: same identity, same number",
+      "identity": {
+        "format": "demo-v2",
+        "coverage": {
+          "from": 1,
+          "to": 4
+        },
+        "files": [
+          {
+            "name": "alpha",
+            "sha256": "8ed3f6ad685b959ead7022518e1af76cd816f8e8ec7ccdda1ed4018e8f2223f8"
+          },
+          {
+            "name": "beta",
+            "sha256": "f44e64e75f3948e9f73f8dfa94721c4ce8cbb4f265c4790c702b2d41cfbf2753"
+          }
+        ],
+        "parent": {
+          "format": "demo-parent-v2",
+          "fingerprint": "e47125968b3b71049fbc4802d1e40a71ea1359decfabacf70b34588037d4ff0c"
+        }
+      },
+      "canonical_bytes_hex": "6e6f647369672d6964656e746974792d763300000764656d6f2d76320000000100000004000000020005616c7068618ed3f6ad685b959ead7022518e1af76cd816f8e8ec7ccdda1ed4018e8f2223f8000462657461f44e64e75f3948e9f73f8dfa94721c4ce8cbb4f265c4790c702b2d41cfbf2753",
+      "fingerprint": "4b170c2d9d52b2e3e2553c090a5d4e164b74a17d426f9707644663570648e5ca"
+    }
+  ]
+}

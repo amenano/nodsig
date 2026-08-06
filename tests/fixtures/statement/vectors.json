@@ -1,0 +1,79 @@
+{
+  "note": "The statement a signature would be over. It binds exactly what is neither inside the fingerprint nor recomputable from the artifact's bytes, which is the declared parent and nothing else; the recipe is in docs/contracts/Artifact.md. Nothing here signs anything: this exists so that two independent signature layers agree on what they are signing.",
+  "recipe": [
+    "b\"nodsig-statement-v1\\x00\"",
+    "lp(manifest.format)",
+    "raw32(manifest.fingerprint)",
+    "u8(build.parent present) || [ lp(parent.format) || raw32(parent.fingerprint) ]",
+    "lp(s) = u16be(len(utf8(s))) || utf8(s)",
+    "statement = sha256(the above), lowercase hex"
+  ],
+  "vectors": [
+    {
+      "note": "root artifact: no parent to declare",
+      "manifest": {
+        "format": "demo-v2",
+        "fingerprint": "44863b03e9909b7100e05b02526909a346fd7455183f6619e0fe6198c89981e0",
+        "build": {
+          "generation": 1
+        }
+      },
+      "canonical_bytes_hex": "6e6f647369672d73746174656d656e742d763100000764656d6f2d763244863b03e9909b7100e05b02526909a346fd7455183f6619e0fe6198c89981e000",
+      "statement": "844fd9f4f9ecbb9ba69d34798777c04829478718e31cb77b8af36f7163333e22"
+    },
+    {
+      "note": "the same artifact, with a parent declared",
+      "manifest": {
+        "format": "demo-v2",
+        "fingerprint": "44863b03e9909b7100e05b02526909a346fd7455183f6619e0fe6198c89981e0",
+        "build": {
+          "generation": 1,
+          "parent": {
+            "format": "demo-parent-v2",
+            "fingerprint": "559aead08264d5795d3909718cdd05abd49572e84fe55590eef31a88a08fdffd"
+          }
+        }
+      },
+      "canonical_bytes_hex": "6e6f647369672d73746174656d656e742d763100000764656d6f2d763244863b03e9909b7100e05b02526909a346fd7455183f6619e0fe6198c89981e001000e64656d6f2d706172656e742d7632559aead08264d5795d3909718cdd05abd49572e84fe55590eef31a88a08fdffd",
+      "statement": "31c7c7b6e204ec473bd3aa68bed4452ccd93cfc3e3076f61bf7614b8c28b420b"
+    },
+    {
+      "note": "another parent: the statement moves",
+      "manifest": {
+        "format": "demo-v2",
+        "fingerprint": "44863b03e9909b7100e05b02526909a346fd7455183f6619e0fe6198c89981e0",
+        "build": {
+          "generation": 1,
+          "parent": {
+            "format": "demo-parent-v2",
+            "fingerprint": "df7e70e5021544f4834bbee64a9e3789febc4be81470df629cad6ddb03320a5c"
+          }
+        }
+      },
+      "canonical_bytes_hex": "6e6f647369672d73746174656d656e742d763100000764656d6f2d763244863b03e9909b7100e05b02526909a346fd7455183f6619e0fe6198c89981e001000e64656d6f2d706172656e742d7632df7e70e5021544f4834bbee64a9e3789febc4be81470df629cad6ddb03320a5c",
+      "statement": "003f65cfd43d55cc4cef1a947af7aa4346493b3d69b1c1854392e5db86ed17dd"
+    },
+    {
+      "note": "build counters differ, the statement does not: a signature is about an artifact, not about a copy",
+      "manifest": {
+        "format": "demo-v2",
+        "fingerprint": "44863b03e9909b7100e05b02526909a346fd7455183f6619e0fe6198c89981e0",
+        "build": {
+          "generation": 44,
+          "rows": 999,
+          "files": {
+            "x": {
+              "file": "x_g0044.bin"
+            }
+          },
+          "parent": {
+            "format": "demo-parent-v2",
+            "fingerprint": "559aead08264d5795d3909718cdd05abd49572e84fe55590eef31a88a08fdffd"
+          }
+        }
+      },
+      "canonical_bytes_hex": "6e6f647369672d73746174656d656e742d763100000764656d6f2d763244863b03e9909b7100e05b02526909a346fd7455183f6619e0fe6198c89981e001000e64656d6f2d706172656e742d7632559aead08264d5795d3909718cdd05abd49572e84fe55590eef31a88a08fdffd",
+      "statement": "31c7c7b6e204ec473bd3aa68bed4452ccd93cfc3e3076f61bf7614b8c28b420b"
+    }
+  ]
+}

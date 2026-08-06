@@ -1,0 +1,39 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "nodsig"
+dynamic = ["version"]
+description = "Verifiable, own-node Bitcoin on-chain analysis — reproduce the numbers yourself."
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.10"
+authors = [{ name = "NodSig authors" }]
+keywords = ["bitcoin", "utxo", "on-chain", "verifiable", "reproducible"]
+dependencies = []
+
+[project.urls]
+# Declared so an installed wheel can still say where it came from: package
+# metadata outlives the directory it was installed from.
+Repository = "https://github.com/amenano/nodsig"
+Issues = "https://github.com/amenano/nodsig/issues"
+
+[project.scripts]
+# The published command surface: one verb per artefact, stable within a
+# major version. See src/nodsig/cli.py for why it is not the module layout.
+nodsig = "nodsig.cli:main"
+
+[project.optional-dependencies]
+dev = ["pytest"]
+
+[tool.hatch.version]
+# One author for the number: src/nodsig/__init__.py.
+path = "src/nodsig/__init__.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/nodsig"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]

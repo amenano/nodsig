@@ -1,0 +1,176 @@
+# AGENTS.md — orientation for agents (neutral)
+
+Instructions for anyone working on this repo with the help of an assistant/LLM.
+**Deliberately neutral:** not specific to any model or tool.
+
+## What this is
+
+NodSig is a toolkit to analyze the Bitcoin chain with your **own node**, in a
+**reproducible and fingerprint-verifiable** way. It does not validate consensus,
+does not serve real-time state, and is not an online service: it is a replica
+optimized for analytical reads.
+
+## Where the truth lives
+
+1. **Module docstrings** = canonical spec of format/behavior.
+2. **`docs/`** = architecture (`ARCHITECTURE.md`), contracts (`contracts/`),
+   byte formats (`formats/`), types (`types.md`), glossary, invariants.
+3. **Tests + conformance vectors** = the *executable* contract. If code and a
+   doc disagree, the test is the arbiter.
+
+## Build / test
+
+- Python, minimal dependencies. Tests with `pytest`.
+- Do not add heavy dependencies without reason: minimalism is a value here.
+
+## Invariants — do NOT violate
+
+- **Determinism**: same inputs → same bytes → same canonical fingerprint.
+- **Source in every answer**: watermark + source + fingerprint.
+- **Never silent data**: an absent/unknown capability yields an explicit state
+  (UNDETERMINED/UNSUPPORTED), never a silent default or an uncounted drop.
+- **Big-endian integers** in the formats (byte order is numeric order).
+- **One-way contracts**: public code never names private extensions.
+
+## Out of scope (do not add it)
+
+Consensus validation, mempool/real-time state in the core, wallet, online
+service. These are deliberate choices, not gaps.
+
+## Conventions
+
+- **Pure kernels** (parse / hash / sort-merge / record codec / address codec)
+  with no I/O and no state; the **orchestration** (CLI, resume, source)
+  calls them.
+- Code **readable before clever**; comments explain *what* and *why*.
+- Extend a contract by implementing its interface and passing the **conformance
+  vectors**; see the recipes in `docs/`.
+
+### Words this project does not use to NAME what it produces
+
+This tool **measures and does not judge**, and the vocabulary has to carry
+that or the code drifts out of it before the behaviour does. The rule is
+about naming and labelling, because that is where it bites first: a function
+named after a judgment grows a docstring that defends one, and a CSV header
+teaches every reader the wrong noun before any prose gets a chance.
+
+Never as an identifier, a parameter, a CSV header, a file or figure name, or
+a label in printed output:
+
+| not this | because | use |
+|---|---|---|
+| `verdict` | names a judgment we do not pass. The artifacts *store* and *resolve*; a court reaches verdicts | `resolution`, `answer`, `outcome` |
+| `victim`, `attacker` | assigns roles to people nobody here has identified | name the fact: an exposed key, a repeated point |
+| `risk`, `safe`, `unsafe` | a risk assessment is exactly what this does not do | `exposed`, `not exposed`, `undetermined` |
+| `discovery`, `first`, `novel` | claims novelty. What is measured here is public, and mostly already known | `measurement`, `count`, `what the run produced` |
+
+**Stating the opposite is required, not forbidden.** "nodsig measures a fact,
+it does not assess a risk", "no statement about whether anyone's funds are
+safe", "a candidate and not a conclusion": these sentences are the doctrine
+and they must stay. The rule forbids the word as a **label on our output**,
+not the sentence that denies we produce one. And it does not reach ordinary
+engineering compounds: a *crash-safe* commit order is exactly that.
+
+`verdict` is the one flat case: it is gone from the tree entirely, including
+from the denials, and `conclusion` says the same thing there.
+
+**The rule follows the words, not the file.** It holds for anything written
+about this project for somebody else to read — a note to a collaborator, a
+draft handed to whoever writes about the numbers, an answer to a question —
+and in any language, since a translated judgment is still a judgment. A tool
+that measures and does not judge cannot describe itself with the vocabulary
+of judgment the moment it stops talking to a compiler. Where an equivalent is
+needed: *risoluzione* for `resolution`, *conclusione* for `conclusion`.
+
+**Why this section exists, and it is not hypothetical.** `verdict` was
+removed from the per-address report in July, for these reasons, written out
+in the commit message and nowhere else. It came back months later as the name
+of a public API. Two lessons, and this file is the fix for both:
+
+- **a rule that lives in a commit message is not recorded.** Nobody greps the
+  log for vocabulary. It goes here, where a reader with no memory will look;
+- **do not leave silent exceptions in the tree.** That removal deliberately
+  kept three uses where the word DENIED. Sound reasoning, and a trap: the
+  next reader grepped, found the word in three curated files, and read
+  precedent where a prohibition was meant. An exception is only safe when it
+  is written down beside the rule, as the paragraph above does.
+
+### Naming an output file
+
+Two shapes, and which one applies is decided by **what happens to the file
+next**, not by taste:
+
+- **a terminal report**, that nothing here reads back, is named
+  `<command>-results.<ext>`. The only question a reader has in front of it is
+  where it came from, and the name answers that. `check` writes
+  `check-results.txt`;
+- **a file another command consumes** is named for its **content**. At the
+  point of use the reader needs to know what is inside, not who made it:
+  `curve deltas curve.csv` says what it is doing, while a name carrying the
+  producing command would hide it behind provenance nobody needs there.
+  `curve.csv`, `revelations.csv`, `block-stats.csv`, `resolutions.csv`.
+
+If a file starts as terminal and later gets a reader, it moves to the second
+shape and the default changes with it.
+
+## Repo hygiene (pseudonymity)
+
+- **One development identity, always.** Every commit carries the identity
+  configured in this repo. Never override it — not with `git -c user.email=…`,
+  not with `git commit --author=…`, not "just this once". A `pre-commit` hook
+  refuses both, because git history is public after the first push and cannot
+  be corrected afterwards. If the project's identity ever has to change, that
+  is an explicit decision and the hook is edited by hand.
+- **One voice in the log.** A commit message carries no co-author trailer and
+  no mark of assistance — no `Co-Authored-By:`, no "generated with", no tool or
+  model name. This is not about what gets published: it is about what gets
+  written, so it holds for every commit from the first. Assistants that add
+  such a trailer by default must be told not to, here.
+- No real data in fixtures (addresses / xpubs / your node's paths): public,
+  synthetic fixtures only. Local paths live in uncommitted config.
+- **Nothing in this directory is private.** Write nothing here — code,
+  comment, doc, test fixture, commit message — that you would not want
+  published under this identity forever. Machine paths, host names and
+  directory layouts count: a sample path in a docstring is still a
+  description of somebody's machine. Use neutral placeholders
+  (`/srv/artifacts/…`).
+
+## Cutting a release
+
+A release is a version number, a commit that explains it, and an annotated tag.
+The version has a single source, `src/nodsig/__init__.py`: `pyproject.toml`
+reads it from there, so the two can never disagree. The tag spells the same
+version the way git tags read it, with a hyphen before a pre-release segment:
+`__version__ = "1.0.0"` is tagged `v1.0.0`, and `"1.1.0rc1"` would be tagged
+`v1.1.0-rc1`.
+
+This number is not the formats' number. An artifact declares its own format tag
+(`reveal-archive-v2`, and `nodsig-identity-v3` for the recipe every fingerprint
+is taken over), and those move when a format moves, which has nothing to do with
+when a release is cut. Do not align them.
+
+The order matters, because each step is what makes the next one honest:
+
+1. **bump** `__version__`, and the tag name in the comment beside it;
+2. **commit** as `release: <version>, <what it is>`, with a body that says what
+   changed *for the reader* rather than listing the commits, which the log
+   already holds. The one thing worth naming explicitly is anything that
+   changes the BYTES an artifact will hold, because that is what makes this
+   version and the previous one different artifacts rather than different
+   packaging;
+3. **check**, before tagging: the tests are green; every commit about to be
+   pushed carries the repository's identity; no message carries a co-author
+   trailer or a mark of assistance; the diff contains no machine path, host
+   name or non-English text; nothing private is tracked;
+4. **tag**, annotated, and only then push.
+
+Why a release matters here beyond packaging: every sealed manifest records
+`build.producer`, which carries this version string. Running a multi-hour build
+from an untagged tree stamps its artifacts with the version of the *last*
+release, which names code that may no longer produce those bytes. Bump before
+the run, not after it.
+
+**The tag and the push are asked for, every time.** An annotated tag is as
+public as a commit and additionally carries the identity of the tagger, which
+the `pre-commit` hook does not check. Committing locally is free; publishing is
+the step that cannot be undone by deleting anything.

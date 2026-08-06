@@ -1,0 +1,38 @@
+<svg viewBox="0 0 720 336" role="img" xmlns="http://www.w3.org/2000/svg" style="max-width:100%;height:auto;font-family:system-ui,sans-serif">
+<rect width="100%" height="100%" fill="#fdfdfc"/>
+<defs><pattern id="hatch" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="6" height="6" fill="#666"/><line x1="0" y1="0" x2="0" y2="6" stroke="#fdfdfc" stroke-width="2.5"/></pattern></defs>
+<line x1="84.0" y1="20" x2="84.0" y2="302" stroke="#e6e6e3"/>
+<text x="84.0" y="318" text-anchor="middle" fill="#666" font-size="12">0 M</text>
+<line x1="188.4" y1="20" x2="188.4" y2="302" stroke="#e6e6e3"/>
+<text x="188.4" y="318" text-anchor="middle" fill="#666" font-size="12">2 M</text>
+<line x1="292.7" y1="20" x2="292.7" y2="302" stroke="#e6e6e3"/>
+<text x="292.7" y="318" text-anchor="middle" fill="#666" font-size="12">4 M</text>
+<line x1="397.1" y1="20" x2="397.1" y2="302" stroke="#e6e6e3"/>
+<text x="397.1" y="318" text-anchor="middle" fill="#666" font-size="12">6 M</text>
+<line x1="501.5" y1="20" x2="501.5" y2="302" stroke="#e6e6e3"/>
+<text x="501.5" y="318" text-anchor="middle" fill="#666" font-size="12">8 M</text>
+<text x="74" y="53.0" text-anchor="end" font-size="12" font-weight="600" fill="#1a1a1a">P2WPKH</text>
+<rect x="84" y="41.0" width="426.0" height="16" rx="2" fill="#e6e6e3"/>
+<rect x="84" y="41.0" width="100.4" height="16" rx="2" fill="#2a78d6"><title>P2WPKH: 1,924,332 BTC exposed of 8,163,122</title></rect>
+<text x="518.0" y="53.0" fill="#666" font-size="12">1.92 of 8.16M (24%)</text>
+<text x="74" y="99.0" text-anchor="end" font-size="12" font-weight="600" fill="#1a1a1a">P2PKH</text>
+<rect x="84" y="87.0" width="240.0" height="16" rx="2" fill="#e6e6e3"/>
+<rect x="84" y="87.0" width="61.9" height="16" rx="2" fill="#e87ba4"><title>P2PKH: 1,185,752 BTC exposed of 4,599,484</title></rect>
+<text x="332.0" y="99.0" fill="#666" font-size="12">1.19 of 4.60M (26%)</text>
+<text x="74" y="145.0" text-anchor="end" font-size="12" font-weight="600" fill="#1a1a1a">P2SH</text>
+<rect x="84" y="133.0" width="205.5" height="16" rx="2" fill="#e6e6e3"/>
+<rect x="84" y="133.0" width="67.0" height="16" rx="2" fill="#008300"><title>P2SH: 1,283,224 BTC exposed of 3,937,453</title></rect>
+<text x="297.5" y="145.0" fill="#666" font-size="12">1.28 of 3.94M (33%)</text>
+<text x="74" y="191.0" text-anchor="end" font-size="12" font-weight="600" fill="#1a1a1a">P2PK</text>
+<rect x="84" y="179.0" width="89.8" height="16" rx="2" fill="#e6e6e3"/>
+<rect x="84" y="179.0" width="89.8" height="16" rx="2" fill="url(#hatch)"><title>P2PK: 1,720,000 BTC exposed of 1,720,000</title></rect>
+<text x="181.8" y="191.0" fill="#666" font-size="12">1.72M, by construction (100%)</text>
+<text x="74" y="237.0" text-anchor="end" font-size="12" font-weight="600" fill="#1a1a1a">P2WSH</text>
+<rect x="84" y="225.0" width="74.0" height="16" rx="2" fill="#e6e6e3"/>
+<rect x="84" y="225.0" width="36.1" height="16" rx="2" fill="#eda100"><title>P2WSH: 691,417 BTC exposed of 1,418,573</title></rect>
+<text x="166.0" y="237.0" fill="#666" font-size="12">0.69 of 1.42M (49%)</text>
+<text x="74" y="283.0" text-anchor="end" font-size="12" font-weight="600" fill="#1a1a1a">Taproot</text>
+<rect x="84" y="271.0" width="11.3" height="16" rx="2" fill="#e6e6e3"/>
+<rect x="84" y="271.0" width="11.3" height="16" rx="2" fill="url(#hatch)"><title>Taproot: 217,000 BTC exposed of 217,000</title></rect>
+<text x="103.3" y="283.0" fill="#666" font-size="12">0.22M, by construction (100%)</text>
+</svg>

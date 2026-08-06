@@ -1,0 +1,895 @@
+#!/usr/bin/env python3
+"""
+check_addresses.py — the address check: given a list of addresses,
+describe the QUANTUM EXPOSURE situation of each one, asking only
+infrastructure you run yourself.
+
+Why this exists: the census (utxo_census.py) and the reuse scan
+(reuse_scan.py) answer the aggregate question — how much value sits
+behind exposed keys, chain-wide. The natural next question is personal:
+"and MY addresses?". Answering it must not cost your privacy: pasting
+addresses into a public block explorer tells a third party exactly
+which coins you care about. This tool asks only your own node and your
+own archives. (Privacy rule, from the manual: NEVER send your own
+addresses to public explorers or APIs. Develop and test with public
+fixtures only.)
+
+THE PER-CAPABILITY INTERFACE (architectural, decided 2026-07-11)
+================================================================
+An answer is assembled from independent CAPABILITIES, each one a
+question with its own backend, each backend swappable WITHOUT touching
+the others. This is a deliberate design element, not plumbing: the
+provider mix is already heterogeneous today (exposure = our own
+revelation archive; balance = Bitcoin Core RPC; history/co-inputs =
+not plugged yet, Electrs or a graph derivative when a concrete need
+arrives), and it will drift over time as graph-v2 derivatives replace
+external indexes capacity by capacity. The contract each backend
+signs:
+
+    capability  question answered            backend today
+    ----------  -------------------------    -------------------------
+    exposure    was the key/script behind    RevealArchiveExposure
+                this address ever revealed      (reveal-archive-v2 dir)
+                on-chain?
+    balance     how many satoshis sit         CoreBalance (scantxoutset
+                behind it right now?             via your node's RPC)
+    history     which coins came, which       IndexHistory (outpoint
+                went, what remains?              index + derivatives,
+                                                 --index + --derived)
+    co-inputs   what was spent together       IndexCoInputs (same two
+                with its coins?                  directories)
+
+history and co-inputs were NOT PLUGGED stubs until 2026-07-21, with
+"Electrs or a graph-v2 derivative" on the label: the derivative
+arrived (outpoint-index-v2 + outpoint-derived-v2), so the interface
+absorbed it exactly as designed — two new classes, zero changes
+elsewhere, and no third-party indexer was ever needed. Both answer
+from local sorted files (one ~40 KB bucket read per question) and
+carry their own watermark, which may differ from the archive's: each
+capability states its own perimeter.
+
+Every backend answers in the same envelope (`capability.Result`):
+status, value, and the source that says WHO answered and up to
+which height, under which fingerprint. That is what keeps three cases
+apart which would otherwise read alike — "not configured"
+(UNSUPPORTED), "looked and found nothing" (OK with an empty value),
+"cannot decide" (UNDETERMINED) — and only the middle one is
+reassuring. A missing backend therefore never fakes an answer: the
+answer degrades honestly ("UNDETERMINED" plus the reason), the same
+rule the archive's lookup applies to absence. Adding an implementation
+= one class with `source()`, `describe()` and `query()`, registered
+in build_backends(); nothing else changes.
+
+The source is also why a report names `outpoint-derived-v2` and a
+fingerprint instead of the directory it read: a result must be
+portable and must not describe the machine that produced it. Defaults are OUR documented choice; flags exist so that
+third parties can explore other mixes (same philosophy as the scan's
+perimeter flags).
+
+WHAT THE ANSWERS MEAN
+======================
+- EXPOSED (by construction): the address itself contains the public
+  key (bc1p… Taproot: the "program" IS the tweaked key, a point on the
+  curve — Shor applies to it directly; same class as ancient P2PK).
+- EXPOSED (by reuse): the address is a hash of key or script, but the
+  archive has seen the preimage revealed in some confirmed spend. The
+  flags say where (scriptSig / witness / inside a revealed script —
+  the last one meaning: your key became public because a script it
+  belongs to was spent, possibly by a co-signer).
+- PROTECTED until first spend: hash-guarded and never revealed up to
+  the archive watermark. Not a certificate: one spend changes it.
+- exposed but empty: nothing at stake (needs the balance capability).
+- UNDETERMINED: the capability that could answer is not configured.
+
+Printed caveats (the tool repeats them, because an answer without its
+perimeter is a number with too many decimals): off-chain exposure
+(shared xpubs) is invisible by declaration; a P2SH/P2WSH address hides
+its script until spent, so "protected" says nothing about WHO can
+spend; unconfirmed mempool spends already reveal keys but confirmed
+blocks are the archive's perimeter.
+
+Usage:
+    python3 check_addresses.py ADDR [ADDR...] --archive DIR
+    python3 check_addresses.py --file list.txt --archive DIR \\
+            [--rpc URL --cookie-file PATH] [--csv out.csv]
+
+The report goes to a LOCAL FILE by default (check-results.txt, or --out):
+screens get shared and terminals get logged, files stay where you put
+them (manual privacy rule). --stdout prints to the screen instead,
+for public fixtures or piping.
+
+Mainnet only, on purpose: the archive is a mainnet artifact.
+"""
+
+import argparse
+import base64
+import csv
+import json
+import os
+import sys
+import urllib.error
+import urllib.request
+
+from nodsig import derivatives as dvm
+from nodsig import outpoint_index as oi
+from nodsig import reveal_archive as ra
+from nodsig.capability import Source, Result, Status
+from nodsig.hashing import hash160, sha256d
+from nodsig.reuse_scan import SAT, resolve_auth
+
+# ---------------------------------------------------------------------------
+# Address decoding — from text to (kind, digest)
+#
+# On-chain there are no addresses, only script patterns; an address is
+# a checksummed TEXT ENCODING of the part of the pattern that varies
+# (a hash, or for Taproot the key itself). Decoding is therefore pure
+# arithmetic, no network: base58check for the 1…/3… families (sha256d
+# checksum), bech32/bech32m for the bc1… families (BIP-173/BIP-350
+# polynomial checksum). Both implemented here from the specs, stdlib
+# only, with the BIP test vectors in test_check_addresses.py.
+# ---------------------------------------------------------------------------
+
+B58_ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
+
+BECH32_CHARSET = "qpzry9x8gf2tvdw0s3jn54khce6mua7l"
+BECH32M_CONST = 0x2bc830a3   # BIP-350; plain bech32 uses 1
+
+
+class AddressError(ValueError):
+    """The string is not a valid mainnet address, with the reason."""
+
+
+def _b58check_decode(addr):
+    """base58check → payload bytes (version byte included)."""
+    n = 0
+    for ch in addr:
+        try:
+            n = n * 58 + B58_ALPHABET.index(ch)
+        except ValueError:
+            raise AddressError(f"invalid base58 character {ch!r}")
+    raw = n.to_bytes((n.bit_length() + 7) // 8, "big")
+    # each leading '1' encodes a leading zero byte the bigint lost
+    raw = b"\x00" * (len(addr) - len(addr.lstrip("1"))) + raw
+    if len(raw) < 5:
+        raise AddressError("too short for a checksum")
+    payload, checksum = raw[:-4], raw[-4:]
+    if sha256d(payload)[:4] != checksum:
+        raise AddressError("base58 checksum mismatch")
+    return payload
+
+
+def _bech32_polymod(values):
+    gen = (0x3b6a57b2, 0x26508e6d, 0x1ea119fa, 0x3d4233dd, 0x2a1462b3)
+    chk = 1
+    for v in values:
+        top = chk >> 25
+        chk = (chk & 0x1ffffff) << 5 ^ v
+        for i in range(5):
+            chk ^= gen[i] if (top >> i) & 1 else 0
+    return chk
+
+
+def _bech32_decode(addr):
+    """bech32/bech32m string → (hrp, data values, encoding constant)."""
+    if addr != addr.lower() and addr != addr.upper():
+        raise AddressError("mixed case")
+    addr = addr.lower()
+    pos = addr.rfind("1")
+    if pos < 1 or pos + 7 > len(addr):
+        raise AddressError("missing or misplaced separator")
+    hrp, rest = addr[:pos], addr[pos + 1:]
+    try:
+        data = [BECH32_CHARSET.index(c) for c in rest]
+    except ValueError:
+        raise AddressError("invalid bech32 character")
+    expanded = ([ord(c) >> 5 for c in hrp] + [0]
+                + [ord(c) & 31 for c in hrp])
+    const = _bech32_polymod(expanded + data)
+    if const not in (1, BECH32M_CONST):
+        raise AddressError("bech32 checksum mismatch")
+    return hrp, data[:-6], const
+
+
+def _convertbits(data, frombits, tobits):
+    """Regroup a bit stream (5→8 here); strict padding per BIP-173."""
+    acc = bits = 0
+    out = []
+    maxv = (1 << tobits) - 1
+    for v in data:
+        acc = (acc << frombits) | v
+        bits += frombits
+        while bits >= tobits:
+            bits -= tobits
+            out.append((acc >> bits) & maxv)
+    if bits >= frombits or ((acc << (tobits - bits)) & maxv):
+        raise AddressError("invalid bit padding")
+    return bytes(out)
+
+
+# What decoding yields: enough to route the capabilities. `category`
+# names the archive category holding the preimage for hash-guarded
+# kinds (None when the address exposes the key by construction).
+KINDS = {
+    "p2pkh":  ("keys",      "pay-to-pubkey-hash (1…)"),
+    "p2sh":   ("scripts20", "pay-to-script-hash (3…)"),
+    "p2wpkh": ("keys",      "native segwit v0 key hash (bc1q…, 20B)"),
+    "p2wsh":  ("scripts32", "native segwit v0 script hash (bc1q…, 32B)"),
+    "p2tr":   (None,        "taproot (bc1p…): the program IS the key"),
+}
+
+
+class Address:
+    def __init__(self, text, kind, digest):
+        self.text = text
+        self.kind = kind
+        self.digest = digest          # bytes, or the key for p2tr
+        self.category = KINDS[kind][0]
+
+    @property
+    def by_construction(self):
+        return self.category is None
+
+
+def decode_address(text):
+    """Mainnet address string → Address. Loud on anything else."""
+    if text[:1] in ("1", "3"):
+        payload = _b58check_decode(text)
+        if len(payload) != 21:
+            raise AddressError(f"unexpected payload length {len(payload)}")
+        version, digest = payload[0], payload[1:]
+        if version == 0x00:
+            return Address(text, "p2pkh", digest)
+        if version == 0x05:
+            return Address(text, "p2sh", digest)
+        raise AddressError(f"unknown base58 version {version:#04x} "
+                           "(mainnet only)")
+    if text.lower().startswith("bc1"):
+        hrp, data, const = _bech32_decode(text)
+        if hrp != "bc":
+            raise AddressError(f"not a mainnet hrp: {hrp!r}")
+        if not data:
+            raise AddressError("empty witness data")
+        version, program = data[0], _convertbits(data[1:], 5, 8)
+        if version > 16 or not 2 <= len(program) <= 40:
+            raise AddressError("invalid witness program")
+        if version == 0:
+            if const != 1:
+                raise AddressError("segwit v0 must use plain bech32")
+            if len(program) == 20:
+                return Address(text, "p2wpkh", program)
+            if len(program) == 32:
+                return Address(text, "p2wsh", program)
+            raise AddressError("v0 program must be 20 or 32 bytes")
+        if const != BECH32M_CONST:
+            raise AddressError("segwit v1+ must use bech32m")
+        if version == 1 and len(program) == 32:
+            return Address(text, "p2tr", program)
+        raise AddressError(f"witness v{version} has no defined meaning "
+                           "yet: refusing to guess an answer")
+    raise AddressError("not a recognized mainnet address form")
+
+
+def script_pubkey(address):
+    """The scriptPubKey the address encodes — the exact bytes a sender
+    locks coins with. The index derivatives key everything by hash160
+    of these bytes (a LOCK, the honest boundary: one identical
+    script, not a wallet, not a key under its other faces), so this
+    mapping is the whole bridge between an address and its history."""
+    d = address.digest
+    if address.kind == "p2pkh":
+        return b"\x76\xa9\x14" + d + b"\x88\xac"
+    if address.kind == "p2sh":
+        return b"\xa9\x14" + d + b"\x87"
+    if address.kind == "p2wpkh":
+        return b"\x00\x14" + d
+    if address.kind == "p2wsh":
+        return b"\x00\x20" + d
+    return b"\x51\x20" + d                     # p2tr
+
+
+# ---------------------------------------------------------------------------
+# Capability backends
+# ---------------------------------------------------------------------------
+
+class RevealArchiveExposure:
+    """Exposure via OUR archive: a sorted-file membership check
+    answered entirely from local disk. The answer carries the archive
+    watermark: 'not revealed' always means 'not revealed UP TO height
+    H, in confirmed blocks'.
+
+    The merged files are read through the archive's own ladder-backed
+    reader — one resident ladder bisected in RAM, then ONE ~40 KB
+    bucket read — and the readers are opened once and reused across the
+    whole address list, so a hundred addresses pay the ladder load
+    once. (This used to be the blind on-disk bisect, ~35 seeks per
+    address per category, while the archive's own `lookup` already had
+    the ladder: same files, two roads, and the slow one was in the
+    tool people actually run.) Unfused runs keep the blind bisect:
+    they have no ladder, and there are few of them."""
+
+    def __init__(self, archive_dir):
+        self.dir = archive_dir
+        self.state = ra._load_state(archive_dir)
+        self.manifest = ra._load_manifest(archive_dir)
+        self.watermark = self.state["last_height"]
+        self._readers = {}
+
+    def _reader(self, cat):
+        """The merged reader for a category, opened (and its ladder
+        sha-checked) on first use."""
+        if cat not in self._readers:
+            self._readers[cat] = (
+                None if self.manifest is None
+                else ra._open_merged(self.dir, self.manifest, cat))
+        return self._readers[cat]
+
+    def close(self):
+        for reader in self._readers.values():
+            if reader is not None:
+                reader.close()
+        self._readers = {}
+
+    def source(self):
+        # The answers OR the merged file with any run not yet fused, so
+        # a leftover run means the reply covers more than the manifest
+        # describes: that is precisely the unsealed case, and the
+        # fingerprint must be withheld rather than implied.
+        sealed = self.manifest is not None and not self.state["runs"]
+        return Source.artifact(
+            ra.FORMAT_TAG, self.watermark,
+            self.manifest["fingerprint"] if sealed else None)
+
+    def describe(self):
+        return self.source().describe("exposure")
+
+    def query(self, address):
+        """→ Result whose value is (byte, first_height), reduced across
+        the merged file and any unfused runs, or a definite negative when
+        the digest was never revealed. Categories don't mix: a p2sh digest
+        is only looked up among revealed redeem scripts."""
+        cat = address.category
+        hit = None
+        if self.manifest is not None:
+            hit = ra._merged_sighting(self.dir, self.manifest, cat,
+                                      address.digest, self._reader(cat))
+        for run in self.state["runs"]:
+            if run["category"] != cat:
+                continue
+            got = ra._bisect_file(
+                os.path.join(self.dir, ra.RUNS_DIR, run["name"]),
+                cat, address.digest)
+            if got is not None:
+                hit = got if hit is None else ra._reduce(
+                    cat, hit[0], hit[1], got[0], got[1])
+        return Result.ok(hit, self.source())
+
+
+class CoreBalance:
+    """Balance via your own node: ONE scantxoutset call for the whole
+    list (the RPC accepts many descriptors per call — on a Raspberry
+    Pi that is minutes for the lot instead of minutes each). The rpc
+    callable is injectable so tests never need a node — and so this
+    tool NEVER touches the node by surprise: no --rpc flag, no call."""
+
+    def __init__(self, rpc_url, auth, rpc_call=None):
+        self.rpc_url = rpc_url
+        self.auth = auth
+        self._call = rpc_call or self._http_call
+        # True only when we will really hit a node (no injected call):
+        # gates the "this is slow" heads-up so tests stay silent.
+        self._real_node = rpc_call is None
+        self.height = None
+        self._unspents = None
+
+    def _http_call(self, method, params):
+        req = urllib.request.Request(
+            self.rpc_url,
+            json.dumps({"jsonrpc": "2.0", "id": 0, "method": method,
+                        "params": params}).encode(),
+            {"Content-Type": "application/json",
+             "Authorization": "Basic " + base64.b64encode(
+                 self.auth.encode()).decode()})
+        with urllib.request.urlopen(req, timeout=7200) as resp:
+            reply = json.loads(resp.read())
+        if reply.get("error"):
+            raise RuntimeError(f"RPC {method}: {reply['error']}")
+        return reply["result"]
+
+    @property
+    def scanned(self):
+        """True once `scan` has run: until then there is no answer to
+        give, and asking would report a false zero."""
+        return self._unspents is not None
+
+    def source(self):
+        # A live node is not a sealed artifact: no fingerprint, and the
+        # watermark is the tip it scanned, known only after the call.
+        # The URL stays out — it is topology, like a path.
+        return Source.node("bitcoin-core-rpc scantxoutset",
+                               self.height)
+
+    def describe(self):
+        return self.source().describe("balance")
+
+    def scan(self, addresses):
+        """One pass for all addresses; keeps per-script totals."""
+        if self._real_node:
+            # scantxoutset walks the WHOLE UTXO set (one call for the
+            # whole list): minutes on a Pi, more on a cold cache. Say so
+            # before we block, or it looks hung. Goes to stderr so it
+            # never mixes with the answers on stdout.
+            print(f"scanning the UTXO set on your node ({self.rpc_url}): "
+                  f"one scantxoutset call for all {len(addresses)} "
+                  "address(es) — this can take several minutes, longer "
+                  "on a Raspberry Pi / cold cache. The client waits.",
+                  file=sys.stderr, flush=True)
+        result = self._call("scantxoutset",
+                            ["start",
+                             [f"addr({a.text})" for a in addresses]])
+        self.height = result.get("height")
+        # Keyed by scriptPubKey, not by the descriptor's text. The node
+        # does NOT echo back the addr() that was asked: `desc` is what
+        # the node infers from the script it matched, and for a taproot
+        # output that inference is `rawtr(<x-only key>)`, which no
+        # address string ever equals. Reading the address out of it
+        # left every p2tr balance at zero — and zero is the answer that
+        # reassures, on the one class this tool calls exposed by
+        # construction. The scriptPubKey is in the reply and is exactly
+        # what `script_pubkey` builds, so the two sides meet on bytes.
+        wanted = {script_pubkey(a).hex(): a.text for a in addresses}
+        self._unspents = {}
+        for u in result.get("unspents", []):
+            key = wanted.get(u.get("scriptPubKey", ""))
+            if key is None:
+                # An unspent that matches no address we asked about
+                # cannot be attributed; counting it under some other
+                # address would invent a balance.
+                continue
+            sats = round(u["amount"] * 100_000_000)
+            self._unspents[key] = self._unspents.get(key, 0) + sats
+
+    def query(self, address):
+        """→ Result whose value is the satoshis behind the address at
+        the scanned tip. Zero is a value, not an absence."""
+        return Result.ok(self._unspents.get(address.text, 0),
+                         self.source())
+
+
+def _btc(sats):
+    return f"{sats / SAT:,.8f} BTC"
+
+
+class IndexHistory:
+    """History via OUR outpoint index and its derivatives: one ladder
+    bucket read streams every output that ever paid this lock, each
+    row already carrying its spend. Nothing leaves the machine, and
+    the answer is as-of the index watermark — an OFFLINE view, older
+    than the node's tip by construction and honest about it."""
+
+    def __init__(self, index, derived):
+        self.index = index
+        self.derived = derived
+        self.watermark = index.watermark
+
+    def source(self):
+        return Source.artifact(dvm.FORMAT_TAG, self.watermark,
+                                   self.derived.manifest["fingerprint"])
+
+    def describe(self):
+        return self.source().describe("history")
+
+    def close(self):
+        """The Index/Derived pair is shared with IndexCoInputs, so both
+        close it and the second call must be a no-op — it is."""
+        self.derived.close()
+        self.index.close()
+
+    def query(self, address):
+        """→ Result whose value is a dict of totals, or a definite
+        negative when the lock never appeared."""
+        idx, first, last = self.index, None, 0
+        n = received = spent_sats = n_spent = unspent_sats = 0
+        for out_ord, spender, value in self.derived.rows(
+                hash160(script_pubkey(address))):
+            n += 1
+            received += value
+            h = idx.height_of_output(out_ord)
+            first = h if first is None else first
+            last = max(last, h)
+            if spender is None:
+                unspent_sats += value
+            else:
+                n_spent += 1
+                spent_sats += value
+                last = max(last, idx.height_of_tx(spender))
+        if n == 0:
+            return Result.ok(None, self.source())
+        return Result.ok({"outputs": n, "received_sats": received,
+                          "spent_outputs": n_spent,
+                          "spent_sats": spent_sats,
+                          "unspent_outputs": n - n_spent,
+                          "unspent_sats": unspent_sats,
+                          "first_height": first, "last_height": last},
+                         self.source())
+
+    def report(self, address):
+        s = self.query(address).value
+        if s is None:
+            return ("history: no confirmed activity up to height "
+                    f"{self.watermark:,}")
+        return (f"history: received {s['outputs']}× "
+                f"{_btc(s['received_sats'])}, spent "
+                f"{s['spent_outputs']}× {_btc(s['spent_sats'])}, "
+                f"unspent {s['unspent_outputs']}× "
+                f"{_btc(s['unspent_sats'])} "
+                f"(heights {s['first_height']:,}–{s['last_height']:,}, "
+                f"index at {self.watermark:,})")
+
+
+class IndexCoInputs:
+    """Co-spends via the same derivatives: for every spend of this
+    lock's coins, the spending transaction's OTHER inputs and their
+    locks. What it means is stated every time it is printed: outputs
+    consumed by one transaction usually share an owner (the
+    common-input heuristic, Q2) — a HINT, never proof, and CoinJoin
+    breaks the assumption on purpose. Enumeration is capped for
+    pathological locks (an exchange address with millions of spends):
+    the report says when it sampled."""
+
+    CAP = 10_000
+
+    def __init__(self, index, derived):
+        self.index = index
+        self.derived = derived
+        self.watermark = index.watermark
+
+    def source(self):
+        return Source.artifact(dvm.FORMAT_TAG, self.watermark,
+                                   self.derived.manifest["fingerprint"])
+
+    def describe(self):
+        return self.source().describe("co-inputs")
+
+    def close(self):
+        self.derived.close()
+        self.index.close()
+
+    def query(self, address):
+        """→ Result whose value is a dict of counts, or a definite
+        negative when nothing was ever spent (an unspent coin has no
+        co-spend surface)."""
+        lock = hash160(script_pubkey(address))
+        spenders = set()
+        truncated = False
+        for _out, spender, _value in self.derived.rows(lock):
+            if spender is None:
+                continue
+            if len(spenders) >= self.CAP:
+                truncated = True
+                break
+            spenders.add(spender)
+        if not spenders:
+            return Result.ok(None, self.source())
+        co_locks = set()
+        co_outputs = 0
+        for tx_ord in spenders:
+            for so in self.derived.inputs_of(tx_ord):
+                _v, so_lock = self.index.output(so)
+                if so_lock != lock:
+                    co_locks.add(so_lock)
+                    co_outputs += 1
+        return Result.ok({"spending_txs": len(spenders),
+                          "co_outputs": co_outputs,
+                          "co_locks": len(co_locks),
+                          "truncated": truncated},
+                         self.source())
+
+    def report(self, address):
+        s = self.query(address).value
+        if s is None:
+            return "co-inputs: never spent — no co-spend surface"
+        text = (f"co-inputs: spent in {s['spending_txs']} tx(s), "
+                f"co-spent with {s['co_outputs']} output(s) under "
+                f"{s['co_locks']} other lock(s)")
+        if s["truncated"]:
+            text += f" (first {self.CAP:,} spends sampled)"
+        return text + (" — common-input HINT, not ownership proof "
+                       "(CoinJoin breaks the assumption)")
+
+
+class NotPlugged:
+    """The honest stub: the capability exists in the design, no backend
+    is configured. It says so instead of guessing — and it documents
+    what WOULD plug in, because the gap is a roadmap, not a bug."""
+
+    def __init__(self, capability, candidates):
+        self.capability = capability
+        self.candidates = candidates
+
+    def source(self):
+        return Source(f"not configured (pluggable: "
+                          f"{self.candidates})")
+
+    def describe(self):
+        return self.source().describe(self.capability)
+
+    def query(self, address):
+        """UNSUPPORTED, never a negative: "no backend" and "the backend
+        looked and found nothing" are different answers, and only one
+        of them is reassuring."""
+        return Result.unsupported(self.source())
+
+
+def _private_file(path, **kw):
+    """Open a file for writing that only its owner can read.
+
+    Both files this tool writes list the addresses somebody asked
+    about, which is the one thing this whole project exists not to
+    disclose. Created with 0600 instead of whatever the umask says,
+    because the usual 0644 hands them to every other account on the
+    machine, and a tool that tells you not to send your questions to a
+    stranger should not leave them readable by the next login.
+
+    The mode applies at CREATION: a file that already exists keeps the
+    permissions it has. Changing those would be this tool deciding
+    something about a path the user chose, and truncating it is already
+    as much as it should do to a file it was merely pointed at.
+    """
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    return os.fdopen(fd, "w", **kw)
+
+
+def build_backends(args, rpc_call=None):
+    """The single registration point of the interface. Order and
+    content ARE the configuration: our defaults, overridable by flags,
+    explorable by anyone who clones the tools."""
+    backends = {}
+    if args.archive:
+        backends["exposure"] = RevealArchiveExposure(args.archive)
+    if args.rpc:
+        # One single path for credentials, the same as every other
+        # command: the cookie file, or NODSIG_RPC_AUTH. Never the argv.
+        # See resolve_auth in reuse_scan.py.
+        backends["balance"] = CoreBalance(
+            args.rpc, resolve_auth(args.cookie_file), rpc_call)
+    if getattr(args, "index", None) and getattr(args, "derived", None):
+        # One Index/Derived pair shared by both capabilities: the
+        # resident tables (blocks.bin, ladders) are paid for once.
+        index = oi.Index(args.index)
+        derived = dvm.Derived(args.derived, index)
+        backends["history"] = IndexHistory(index, derived)
+        backends["co-inputs"] = IndexCoInputs(index, derived)
+    backends.setdefault(
+        "history", NotPlugged("history",
+                              "outpoint-index derivatives "
+                              "(--index + --derived)"))
+    backends.setdefault(
+        "co-inputs", NotPlugged("co-inputs",
+                                "outpoint-index derivatives "
+                                "(--index + --derived)"))
+    return backends
+
+
+# ---------------------------------------------------------------------------
+# Answers
+# ---------------------------------------------------------------------------
+
+def flags_story(flags):
+    """Turn a KEY record's flags byte into words. The distinction
+    that matters: FLAG_SIG/FLAG_WIT mean the key itself signed in
+    public; the INNER flags mean the key surfaced because a script
+    containing it was revealed — possibly by a co-signer, not by the
+    key's owner. Different behaviour, same exposure.
+
+    FLAG_UNCOMPRESSED is read and deliberately NOT reported here: the
+    form a key was serialized in says nothing about whether it is
+    exposed, and this report answers exposure. The archive's own
+    `lookup` prints it, because that command describes the record
+    rather than the owner's risk."""
+    where = []
+    if flags & ra.FLAG_SIG:
+        where.append("key seen in a scriptSig")
+    if flags & ra.FLAG_WIT:
+        where.append("key seen in a witness")
+    if flags & (ra.FLAG_INNER_SIG | ra.FLAG_INNER_WIT):
+        where.append("seen inside a revealed script "
+                     "(co-signer exposure counts)")
+    return "; ".join(where) if where else "key revealed by a spend"
+
+
+def sighting_story(address, byte):
+    """The record's third byte means two different things, and the
+    address's category says which — same split the archive's own
+    `lookup` makes. For a key it holds the flags. For a
+    revealed redeem/witness script it holds HOW MANY public keys the
+    script carried (in the byte that was reserved and zero under v1):
+    reading that count as flags told a multisig owner their key had
+    signed in a scriptSig when only the script had surfaced."""
+    if address.category == "keys":
+        return flags_story(byte)
+    inside = (f" ({byte} key{'s' if byte != 1 else ''} inside, "
+              "co-signer exposure counts)" if byte else "")
+    return "script revealed by a spend" + inside
+
+
+def answer(address, backends):
+    """→ (answer text, detail text, balance sats or None)."""
+    balance = None
+    bal = backends.get("balance")
+    if isinstance(bal, CoreBalance) and bal.scanned:
+        balance = bal.query(address).value
+
+    if address.by_construction:
+        v = "EXPOSED (by construction)"
+        d = KINDS[address.kind][1]
+    else:
+        exp = backends.get("exposure")
+        # The status decides, not the class: a source that declines the
+        # capability and one that answers "nothing" must not collapse
+        # into the same answer — only the second is reassuring.
+        res = exp.query(address) if exp is not None else None
+        if res is None or res.status != Status.OK:
+            return ("UNDETERMINED",
+                    "no exposure backend configured (--archive)", balance)
+        hit = res.value
+        if hit is not None:
+            byte, first_height = hit
+            v = "EXPOSED (by reuse)"
+            d = (f"{sighting_story(address, byte)}, "
+                 f"first seen at height {first_height:,}")
+        else:
+            v = "PROTECTED until first spend"
+            # The height comes off the answer's own source, not off
+            # the backend object: that is the whole point of the
+            # envelope, and it keeps `answer` working with any
+            # exposure backend, not only this one.
+            d = (f"not revealed in confirmed blocks up to "
+                 f"height {res.source.watermark:,}")
+
+    if v.startswith("EXPOSED") and balance == 0:
+        v += " but empty: nothing at stake"
+    return v, d, balance
+
+
+CAVEATS = """\
+caveats (the perimeter of every answer above):
+- off-chain exposure is invisible here: an xpub shared with a service
+  exposes descendant keys without any on-chain trace;
+- a P2SH/P2WSH address hides its script until it spends: "protected"
+  speaks of the hash, not of who could spend behind it;
+- perimeter is CONFIRMED blocks up to the stated heights: a spend
+  sitting in the mempool has already revealed its keys."""
+
+
+def run(addresses_text, backends, csv_path=None, out=sys.stdout):
+    addresses, bad = [], []
+    for t in addresses_text:
+        try:
+            addresses.append(decode_address(t))
+        except AddressError as e:
+            bad.append((t, str(e)))
+
+    bal = backends.get("balance")
+    if isinstance(bal, CoreBalance) and addresses:
+        bal.scan(addresses)
+
+    # One source line per capability: who answered, up to what
+    # height, under which fingerprint. No paths — a report must be
+    # portable and must not describe the machine that produced it.
+    for cap in ("exposure", "balance", "history", "co-inputs"):
+        if cap in backends:
+            print(f"# {backends[cap].describe()}", file=out)
+    print(file=out)
+
+    rows = []
+    for a in addresses:
+        v, d, sats = answer(a, backends)
+        line = f"{a.text}\n    {a.kind}: {v}\n    {d}"
+        if sats is not None:
+            line += f"\n    balance: {sats:,} sats"
+        extra = {}
+        for cap in ("history", "co-inputs"):
+            b = backends.get(cap)
+            if b is not None and not isinstance(b, NotPlugged):
+                extra[cap] = b.report(a)
+                line += f"\n    {extra[cap]}"
+        print(line, file=out)
+        rows.append([a.text, a.kind, v, d,
+                     "" if sats is None else sats,
+                     extra.get("history", ""),
+                     extra.get("co-inputs", "")])
+    for t, why in bad:
+        print(f"{t}\n    NOT AN ADDRESS: {why}", file=out)
+        rows.append([t, "invalid", "NOT AN ADDRESS", why, "", "", ""])
+
+    print(file=out)
+    print(CAVEATS, file=out)
+
+    if csv_path:
+        with _private_file(csv_path, newline="") as f:
+            w = csv.writer(f)
+            w.writerow(["address", "kind", "answer", "detail",
+                        "balance_sats", "history", "co_inputs"])
+            w.writerows(rows)
+        print(f"\nCSV written: {csv_path} — it lists YOUR addresses: "
+              "treat the file as sensitive.", file=out)
+
+
+def main(argv=None):
+    p = argparse.ArgumentParser(
+        description="per-address exposure answers, self-hosted only")
+    p.add_argument("addresses", nargs="*", help="addresses to check")
+    p.add_argument("--file", help="text file, one address per line, "
+                                  "# comments allowed")
+    p.add_argument("--archive", help="reveal-archive-v2 directory "
+                                     "(enables the exposure capability)")
+    p.add_argument("--index", help="outpoint-index-v2 directory "
+                                   "(with --derived enables history "
+                                   "and co-inputs)")
+    p.add_argument("--derived", help="outpoint-derived-v2 directory "
+                                     "built from that same index")
+    p.add_argument("--rpc", help="node RPC URL (enables balance; the "
+                                 "node is only contacted if given)")
+    p.add_argument("--cookie-file", help="path to the node's .cookie file: "
+                                         "read from the file, out of the "
+                                         "argv and always current "
+                                         "(recommended). Without a cookie: "
+                                         "NODSIG_RPC_AUTH=user:password in "
+                                         "the environment.")
+    p.add_argument("--csv", help="also write the answers as CSV")
+    p.add_argument("--out", default="check-results.txt",
+                   help="report file (default: check-results.txt). Results "
+                        "list YOUR addresses, so they go to a local "
+                        "file, not to a screen that can be shared.")
+    p.add_argument("--stdout", action="store_true",
+                   help="print the report to stdout instead of a file "
+                        "(fine for public fixtures, or for piping)")
+    args = p.parse_args(argv)
+
+    todo = list(args.addresses)
+    if args.file:
+        with open(args.file) as f:
+            for line in f:
+                line = line.split("#", 1)[0].strip()
+                if line:
+                    todo.append(line)
+    if not todo:
+        p.error("no addresses given (positional or --file)")
+
+    if bool(args.index) != bool(args.derived):
+        p.error("--index and --derived go together (the derivatives are "
+                "bound to the index they were built from)")
+
+    # The expected failures of this tool are an archive/index directory
+    # that is not one, or a node that will not answer: they get the
+    # one-line ERROR every other command in the suite prints, not a
+    # traceback. ScanError and OutpointError are both RuntimeError, as
+    # is the RPC failure, so one clause covers the three.
+    backends = {}
+    try:
+        backends = build_backends(args)
+        if args.stdout:
+            run(todo, backends, args.csv)
+        else:
+            with _private_file(args.out, encoding="utf-8") as f:
+                print("# this file lists YOUR addresses and their "
+                      "answers: treat it as sensitive.", file=f)
+                run(todo, backends, args.csv, out=f)
+            # The pointer goes to stderr: it names the file, never a
+            # answer.
+            print(f"results written to {args.out} — the file lists YOUR "
+                  "addresses: treat it as sensitive.", file=sys.stderr)
+    except (RuntimeError, OSError, urllib.error.URLError) as e:
+        sys.exit(f"ERROR: {e}")
+    finally:
+        # Ladders and file descriptors the backends opened. Closing is
+        # optional for a process about to exit, but the backends are
+        # objects other code may hold, so they own a close().
+        for backend in backends.values():
+            closer = getattr(backend, "close", None)
+            if closer is not None:
+                closer()
+
+
+if __name__ == "__main__":
+    main()

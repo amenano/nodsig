@@ -1,0 +1,45 @@
+{
+  "note": "Bitcoin compact-size integers. `value` (decimal) encodes to `hex` and `hex` decodes back to `value`. <253 is one byte; 0xfd/0xfe/0xff prefix a 2/4/8-byte little-endian value.",
+  "vectors": [
+    {
+      "value": 0,
+      "hex": "00"
+    },
+    {
+      "value": 1,
+      "hex": "01"
+    },
+    {
+      "value": 252,
+      "hex": "fc"
+    },
+    {
+      "value": 253,
+      "hex": "fdfd00"
+    },
+    {
+      "value": 255,
+      "hex": "fdff00"
+    },
+    {
+      "value": 65535,
+      "hex": "fdffff"
+    },
+    {
+      "value": 65536,
+      "hex": "fe00000100"
+    },
+    {
+      "value": 4294967295,
+      "hex": "feffffffff"
+    },
+    {
+      "value": 4294967296,
+      "hex": "ff0000000001000000"
+    },
+    {
+      "value": 18446744073709551615,
+      "hex": "ffffffffffffffffff"
+    }
+  ]
+}

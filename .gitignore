@@ -1,0 +1,81 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Local configuration — the real artifact paths live here, NEVER committed.
+.env
+.env.*
+.envrc
+*.local
+*.local.*
+config.local.*
+local/
+
+# Anything that authenticates you to your node. The manual tells you to copy
+# the cookie file across when the node is on another machine, and a copy made
+# inside a clone is a copy git would otherwise offer to commit.
+.cookie
+*.cookie
+*.pem
+*.key
+*.asc
+*.gpg
+id_rsa*
+id_ed25519*
+
+# Assistant and editor configuration. The first is doctrine: the reference is
+# readable code, spec and tests, so no tool's harness belongs in here — and
+# without this rule only the files whose NAME happens to match `*.local.*`
+# would be caught, which is luck, not a rule. The rest carry absolute paths
+# from the machine they were written on, which is the same leak by another
+# route.
+.claude/
+.vscode/
+.idea/
+.DS_Store
+*.swp
+*~
+
+# Heavy data and artifacts — nodsig holds ONLY code plus small, public
+# fixtures. Graph, index and derivatives (hundreds of GB) live OUTSIDE the
+# repository, referenced through local configuration that is not committed.
+data/
+artifacts/
+runs/
+locks_*/
+# (the test fixtures, small and public, stay tracked under tests/fixtures/)
+
+# The address check's output, which lists the addresses SOMEONE ASKED ABOUT
+# and is written next to wherever the command was run — including inside a
+# clone. The tool says it is sensitive; git should not then offer to commit
+# it into a public repository.
+#
+# Both names stay. The default was `verdicts.txt` once, and a clone that
+# still holds one, or a shell history that still writes one, must not stop
+# being covered because the default moved.
+check-results.txt
+verdicts.txt
+
+# `check --csv <path>` writes the same answers under a name YOU choose, so no
+# fixed name can cover it: the whole extension goes instead. Nothing in this
+# repository is a tracked CSV, and the ones the tools write (the reuse curve,
+# the per-block series, the census) are outputs, not sources. A public fixture
+# would need the exception below rather than a silent commit.
+*.csv
+!tests/fixtures/**/*.csv
+
+# A run's log carries the artifact paths it was given and the node URL it
+# talked to, which is the machine's own topology written down line by line.
+*.log
+
+# Local agent instructions: private, never published.
+CLAUDE.md

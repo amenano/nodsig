@@ -1,0 +1,21 @@
+<svg viewBox="0 0 770 272" role="img" xmlns="http://www.w3.org/2000/svg" style="max-width:100%;height:auto;font-family:system-ui,sans-serif">
+<rect width="100%" height="100%" fill="#fdfdfc"/>
+<text x="52" y="30" text-anchor="start" fill="#1a1a1a" font-size="14" font-weight="600">What a repeated nonce point turns out to be</text>
+<text x="52" y="46" text-anchor="start" fill="#666" font-size="11">5,149 points, heights 1 to 957,301</text>
+<text x="180" y="71" text-anchor="end" fill="#1a1a1a" font-size="12">undetermined</text>
+<rect x="190" y="59" width="470" height="16" fill="#2a78d6"/>
+<text x="668" y="71" text-anchor="start" fill="#666" font-size="11">3,259   63.3%</text>
+<text x="180" y="105" text-anchor="end" fill="#1a1a1a" font-size="12">distinct-keys</text>
+<rect x="190" y="93" width="174" height="16" fill="#008300"/>
+<text x="372" y="105" text-anchor="start" fill="#666" font-size="11">1,209   23.5%</text>
+<text x="180" y="139" text-anchor="end" fill="#1a1a1a" font-size="12">exposed</text>
+<rect x="190" y="127" width="68" height="16" fill="#eda100"/>
+<text x="266" y="139" text-anchor="start" fill="#666" font-size="11">471   9.1%</text>
+<text x="180" y="173" text-anchor="end" fill="#1a1a1a" font-size="12">one-signature</text>
+<rect x="190" y="161" width="30" height="16" fill="#e87ba4"/>
+<text x="228" y="173" text-anchor="start" fill="#666" font-size="11">209   4.1%</text>
+<text x="180" y="207" text-anchor="end" fill="#1a1a1a" font-size="12">prefix-collision</text>
+<rect x="190" y="195" width="2" height="16" fill="#8a8a8a"/>
+<text x="200" y="207" text-anchor="start" fill="#666" font-size="11">1   0.0%</text>
+<text x="52" y="256" text-anchor="start" fill="#666" font-size="11">undetermined = the signer is not identifiable from the input; no resolution is guessed</text>
+</svg>
