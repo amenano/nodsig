@@ -30,19 +30,34 @@ What is checked:
   the inventory the artifact declares with `keep` — deleting a
   positional file of the index would cost 34 hours of rebuild;
 - `drop_runs` hands back paths WITHOUT deleting them, so the caller
-  can write the state first.
+  can write the state first;
+- the GALLOP: a fusion that moves whole stretches of the previous
+  generation instead of walking them record by record must produce the
+  same bytes, the same ladder, the same duplicate count and the same
+  duplicate log as one that walks them. It is checked against an
+  independent reference — sort, group, keep — over a randomized matrix
+  of widths, dedup rules, slab sizes and source counts, and the check
+  is only allowed to pass if the bulk path was actually taken: a
+  fixture too small to reach it would otherwise report success for
+  code it never ran.
 
 Usage:
     python3 test_genstore.py        # prints PASS or fails loudly
     (also runs under pytest)
 """
 
+import hashlib
 import json
 import os
+import random
 import sys
 import tempfile
 
-from nodsig.genstore import GenStore, new_state_fields
+from nodsig import genstore
+from nodsig.genstore import (DUP_LOG_CAP, GenStore, _BaseCursor,
+                             merge_to_file, new_state_fields)
+from nodsig.recio import read_fixed
+from nodsig.recsort import write_run
 
 KEY = 3                      # key width, bytes
 REC = KEY + 2                # key | 2 bytes of payload
@@ -287,6 +302,233 @@ def test_truncate_appended(tmp):
 
 
 # ---------------------------------------------------------------------------
+# The gallop: same answer, arrived at in stretches.
+
+def reference(streams, rec, key_len, dedup_len, every, dedup):
+    """What a fusion must produce, worked out the obvious way: put every
+    record in order, group the ones sharing the dedup prefix, keep what
+    the rule says to keep, sample every `every`-th survivor.
+
+    Deliberately NOT the shape of the code under test — no merge, no
+    ladder written while writing, no cursor. A fast path checked against
+    a slow path written the same way would only prove they were edited
+    together."""
+    rows = sorted(r for stream in streams for r in stream)
+    out, dups, log = [], 0, []
+    i, n = 0, len(rows)
+    while i < n:
+        j = i
+        while j + 1 < n and rows[j + 1][:dedup_len] == rows[i][:dedup_len]:
+            j += 1
+        dups += j - i
+        log += [(rows[k], rows[k + 1]) for k in range(i, j)]
+        out += rows[j:j + 1] if dedup == "last" else rows[i:j + 1]
+        i = j + 1
+    ladder = b"".join(r[:key_len] for k, r in enumerate(out)
+                      if k % every == 0)
+    return b"".join(out), ladder, dups, log[:DUP_LOG_CAP]
+
+
+def fuse_one_way(tmp, gallop, base_rows, runs_rows, rec, key_len,
+                 dedup_len, every, dedup, slab, want_log):
+    """One fusion, with the previous generation as a cursor (the gallop)
+    or as one more stream (the plain road). Returns everything the
+    fusion is answerable for."""
+    d = os.path.join(tmp, "gallop")
+    os.makedirs(d, exist_ok=True)
+    files = []
+    for i, rows in enumerate([base_rows] + list(runs_rows)):
+        p = os.path.join(d, f"src{i}.bin")
+        _, sha = write_run(p, list(rows))
+        files.append((p, sha))
+    out = os.path.join(d, "out.bin")
+    lad = os.path.join(d, "out.lad")
+
+    base, todo = None, files
+    if gallop:
+        p, sha = files[0]
+        base = _BaseCursor(p, rec, sha, slab, StoreError)
+        todo = files[1:]
+    sources = [read_fixed(p, rec, sha, slab) for p, sha in todo]
+    log = [] if want_log else None
+    records, sha, lad_sha, dups = merge_to_file(
+        sources, out, rec, key_len, lad, every, dedup, dedup_len,
+        dup_log=log, base=base)
+
+    with open(out, "rb") as f:
+        body = f.read()
+    with open(lad, "rb") as f:
+        ladder = f.read()
+    check(records * rec == len(body), "the record count must match the file")
+    check(sha == hashlib.sha256(body).hexdigest(),
+          "the returned sha must be the sha of the file written")
+    check(lad_sha == hashlib.sha256(ladder).hexdigest(),
+          "the returned ladder sha must be the sha of the ladder written")
+    return body, ladder, dups, log
+
+
+def test_gallop_answers_exactly_as_the_plain_fusion(tmp):
+    """The property is not «faster», it is «the same bytes»: over a
+    matrix of record widths, dedup rules, ladder steps, slab sizes and
+    source counts, the fusion that moves stretches whole must equal the
+    fusion that walks them, and both must equal the reference.
+
+    The slab sizes matter: a stretch is measured inside one slab, so
+    the small ones make stretches END at a boundary and the large ones
+    let them run for hundreds of records. The key alphabets matter for
+    the same reason — a narrow one makes collisions the rule, which is
+    what forbids the bulk form and sends the fusion back to the
+    per-record road."""
+    rng = random.Random(20260807)
+    taken = []
+    real = genstore._adjacent_equal
+
+    def counting(*args):
+        taken.append(1)
+        return real(*args)
+
+    genstore._adjacent_equal = counting
+    try:
+        for case in range(160):
+            rec = rng.choice((4, 6, 12, 33))
+            key_len = rng.randint(1, rec)
+            dedup_len = rng.randint(key_len, rec)
+            every = rng.choice((1, 2, 4, 16, 1024))
+            dedup = rng.choice(("last", None))
+            span = rng.choice((2, 5, 256))     # how often keys collide
+            slab = rng.choice((rec, rec * 3, rec * 17, 8 << 20))
+            want_log = rng.random() < 0.5
+
+            def rows(n):
+                out = []
+                for _ in range(n):
+                    key = bytes(rng.randrange(span) for _ in range(key_len))
+                    tail = bytes(rng.randrange(256)
+                                 for _ in range(rec - key_len))
+                    out.append(key + tail)
+                return sorted(out)
+
+            base_rows = rows(rng.choice((0, 1, 5, 40, 300, 700)))
+            runs_rows = [rows(rng.choice((0, 1, 3, 30)))
+                         for _ in range(rng.randint(0, 3))]
+
+            want = reference([base_rows] + runs_rows, rec, key_len,
+                             dedup_len, every, dedup)
+            for gallop in (False, True):
+                got = fuse_one_way(tmp, gallop, base_rows, runs_rows, rec,
+                                   key_len, dedup_len, every, dedup, slab,
+                                   want_log)
+                names = ("bytes", "ladder", "dups", "dup_log")
+                for name, a, b in zip(names, want, got):
+                    if b is None:              # no log asked for
+                        continue
+                    check(a == b,
+                          f"case {case} ({'gallop' if gallop else 'plain'}, "
+                          f"rec={rec} key={key_len} dedup_len={dedup_len} "
+                          f"every={every} dedup={dedup} span={span} "
+                          f"slab={slab}): {name} differs\n"
+                          f"   want {a!r}\n   got  {b!r}")
+    finally:
+        genstore._adjacent_equal = real
+
+    check(len(taken) > 50,
+          f"the bulk path ran only {len(taken)} times: a matrix that never "
+          "reaches it proves nothing about it")
+    print(f"ok  gallop: 160 randomized fusions match the reference on both "
+          f"roads ({len(taken)} bulk stretches taken)")
+
+
+def test_gallop_refuses_a_stretch_it_cannot_express(tmp):
+    """The one thing a stretch moved whole cannot do is DROP a record.
+    A long clear stretch that happens to contain two records sharing
+    the dedup prefix, under `dedup="last"`, must therefore go back to
+    the per-record road and collapse them — and the fusion must notice
+    it once, not at every record it walks after that.
+
+    Deterministic on purpose: the randomized matrix reaches this branch
+    by chance, and a branch that decides what gets DROPPED should not
+    be covered by chance."""
+    rows = sorted({(k * 7 % 997).to_bytes(KEY, "big") + b"\x00\x01"
+                   for k in range(300)})
+    rows.append(rows[150][:KEY] + b"\x00\x09")     # same key, later row
+    rows.sort()
+    runs = [[(998).to_bytes(KEY, "big") + b"\x00\x02"]]
+
+    seen = []
+    real = genstore._adjacent_equal
+
+    def counting(*args):
+        d = real(*args)
+        seen.append(d)
+        return d
+
+    genstore._adjacent_equal = counting
+    try:
+        want = reference([rows] + runs, REC, KEY, REC - 2, 4, "last")
+        got = fuse_one_way(tmp, True, rows, runs, REC, KEY, REC - 2, 4,
+                           "last", 8 << 20, True)
+    finally:
+        genstore._adjacent_equal = real
+
+    check(any(d > 0 for d in seen),
+          f"the stretch with the collision was never measured: {seen}")
+    for name, a, b in zip(("bytes", "ladder", "dups", "dup_log"), want, got):
+        check(a == b, f"a refused stretch changed the {name}")
+    check(got[2] == 1, f"the collision must be counted once, got {got[2]}")
+    print("ok  gallop: a stretch holding a record to drop goes back to "
+          "the per-record road")
+
+
+def test_gallop_still_verifies_the_base(tmp):
+    """The stretch moved whole is read, hashed and checked exactly like
+    the record walk it replaces: a previous generation that does not
+    match the sha the state sealed stops the fusion, it does not get
+    copied faster."""
+    store = fresh(tmp, "basesha")
+    store.write_run("r0.bin", "cat", [rec(k, k) for k in range(0, 400, 2)])
+    _dups, delete = store.fuse("m", SPEC, "cat", dedup=None)
+    store.commit(delete)
+
+    path = store.path(store.state["files"]["m"]["file"])
+    with open(path, "r+b") as f:
+        f.seek(80)
+        f.write(b"\xff")
+
+    store.write_run("r1.bin", "cat", [rec(1001, 1)])
+    try:
+        store.fuse("m", SPEC, "cat", dedup=None)
+        fail("a base that does not match its sealed sha must stop the "
+             "fusion")
+    except StoreError:
+        pass
+    print("ok  gallop: a previous generation whose sha does not match "
+          "stops the fusion")
+
+
+def test_sift_keeps_the_plain_road(tmp):
+    """A rewind rewrites and drops records as they pass, which is
+    exactly what a stretch moved whole cannot express — so a sift never
+    gets the cursor, and still cuts what it is told to cut."""
+    store = fresh(tmp, "sift")
+    store.write_run("r0.bin", "cat", [rec(k, k) for k in range(200)])
+    _dups, delete = store.fuse("m", SPEC, "cat", dedup=None)
+    store.commit(delete)
+
+    cut = 100
+    _dups, delete = store.fuse(
+        "m", SPEC, "cat", dedup=None,
+        sift=lambda r: r if int.from_bytes(r[:KEY], "big") < cut else None)
+    store.commit(delete)
+    body = merged_bytes(store, "m")
+    keys = [int.from_bytes(body[i:i + KEY], "big")
+            for i in range(0, len(body), REC)]
+    check(keys == list(range(cut)),
+          f"the sift must drop everything at or above the cut, got {keys}")
+    print("ok  sift: a rewind keeps the per-record road and cuts what it "
+          "must")
+
+
+# ---------------------------------------------------------------------------
 
 def test_a_name_that_leaves_the_directory_is_refused(tmp):
     """A state file this process did not write is untrusted input, and
@@ -323,6 +565,10 @@ TESTS = (test_fusion_generations_and_ladder,
          test_orphan_sweep_spares_the_declared_inventory,
          test_drop_runs_defers_deletion,
          test_truncate_appended,
+         test_gallop_answers_exactly_as_the_plain_fusion,
+         test_gallop_refuses_a_stretch_it_cannot_express,
+         test_gallop_still_verifies_the_base,
+         test_sift_keeps_the_plain_road,
          test_a_name_that_leaves_the_directory_is_refused)
 
 

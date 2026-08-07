@@ -198,6 +198,23 @@ Low-cost wins before native: staging on fast local storage, `mmap`, large
 buffers, sequential access; a run+merge algorithm (cheap run appends + rare
 compaction) instead of full re-fusion; per-shard parallelism.
 
+**Step (2), done for the fusion.** An append re-fuses whole files, billions of
+records of which the new blocks touch a handful, so `genstore.merge_to_file`
+takes the previous generation as a CURSOR and, whenever its next stretch is
+entirely below the next pending record of the runs, settles that stretch in one
+piece: the bytes move once, the ladder is sampled by arithmetic, and the
+duplicate count is taken a column at a time rather than a record at a time. The
+boundaries keep the per-record path, and so does a rewind, whose sift may drop
+or rewrite any record. It is the same loop and the same rules either way, which
+is what the suite asserts: same bytes, same ladder, same duplicate count and
+same duplicate log as the plain walk, against a reference written the obvious
+way. Measured on synthetic files with the four real shapes: **3.4×–11× on an
+append's ratio** (runs ≈ 0.3% of the base), 1.5×–4.5× at 5%, and parity when the
+runs are as large as the base: the stretch has to be worth measuring before the
+fusion tries, or the search costs more than the walk it replaces. The plain road
+(a first build, which has no previous generation) pays **2–5% more** for the
+dispatch that chooses between the two.
+
 **Sequence (demand-driven):** kernel/orchestration boundaries first (design) →
 I/O + algorithm wins if needed → native kernels only on the residue, one at a
 time, when a bottleneck actually blocks a use case. The right moment is for the

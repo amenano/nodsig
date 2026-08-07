@@ -41,6 +41,7 @@ import pytest
 
 from nodsig import __version__
 from nodsig import derivatives as dv
+from nodsig import genstore
 from nodsig import outpoint_index as oi
 import test_blockparse as tbw
 import test_outpoint_index as toi
@@ -264,6 +265,58 @@ def test_append_equals_rebuild(tmp):
               f"{name}: append produced different bytes than rebuild")
     print("ok  append: growing 1..4 then 5 equals building 1..5, "
           "stale pairing refused, update rows counted")
+
+
+def test_append_equals_rebuild_through_the_gallop(tmp):
+    """The same append, with the fusion allowed to move the previous
+    generation in STRETCHES rather than record by record.
+
+    The fast path is proved against a reference in the genstore suite;
+    what is proved here is that it lands on the artifact's own bytes
+    with the artifact's own widths — history deduplicates on 25 bytes
+    but is searched by 20, and a stretch moved whole samples its ladder
+    by position, so a confusion between the two would show up as a
+    fingerprint that no longer matches the rebuild.
+
+    The threshold is lowered because a five-block fixture has no
+    stretch long enough to reach the bulk path otherwise, and a test
+    that cannot reach the code it names is not a test of it; the
+    assertion at the end is what keeps that honest."""
+    taken = []
+    real = genstore._adjacent_equal
+    floor = genstore.MIN_BULK
+
+    def counting(*args):
+        taken.append(args[2])
+        return real(*args)
+
+    genstore._adjacent_equal = counting
+    genstore.MIN_BULK = 2
+    try:
+        blocks, _txids = derived_chain()
+        graph, index = build_index(tmp, blocks, name="index_gal", end=4)
+        derived = os.path.join(tmp, "derived_gal")
+        dv.run_build(index, derived)
+        oi.run_build(graph, index)           # index grows to height 5
+        dv.run_build(index, derived)         # append, with the gallop
+        _, got_a = read_derived_files(derived)
+    finally:
+        genstore._adjacent_equal = real
+        genstore.MIN_BULK = floor
+
+    fresh = os.path.join(tmp, "derived_gal_fresh")
+    dv.run_build(index, fresh)
+    _, got_b = read_derived_files(fresh)
+    for name in dv.FP_ORDER:
+        check(got_a[name] == got_b[name],
+              f"{name}: an append that moved stretches whole produced "
+              f"different bytes than a rebuild\n got  {got_a[name].hex()}"
+              f"\n want {got_b[name].hex()}")
+    check(taken, "no stretch was ever moved whole: this test proved "
+                 "nothing about the path it is named after")
+    dv.run_verify(derived)
+    print(f"ok  append: the fusion moving {len(taken)} stretches whole "
+          "lands on the rebuild's bytes")
 
 
 def _same_derived(a, b, what):
@@ -751,6 +804,7 @@ def main():
         test_determinism_tiny(sextet)
         test_append_equals_rebuild(tmp)
         test_append_with_interleaved_spend(tmp)
+        test_append_equals_rebuild_through_the_gallop(tmp)
         test_rewind_equals_rebuild(tmp)
         test_rewind_with_interleaved_spend(tmp)
         test_rewind_survives_a_kill_before_the_truncations(tmp)
