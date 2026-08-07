@@ -115,8 +115,18 @@ typing:
 
 ```console
 $ nodsig check --stdout 1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa
+# exposure: not configured (pluggable: reveal-archive-v2 (--archive))
+# balance: not configured (pluggable: bitcoin-core-rpc scantxoutset (--rpc))
 # history: not configured (pluggable: outpoint-index derivatives (--index + --derived))
 # co-inputs: not configured (pluggable: outpoint-index derivatives (--index + --derived))
+# linkage: not configured (pluggable: outpoint-index derivatives (--index + --derived))
+# nonce-exposure: not configured (pluggable: nonces-witness-v1 (--witness))
+
+overview (each line counts only what the capability naming it actually checked):
+- input: 1 address(es) checked of 1 given (1 p2pkh)
+- not answered: exposure, balance, history, co-inputs, nonce-exposure — the source lines above name what would plug each one in. Not answered is not a negative
+
+links: the co-spend search did not run, and no two of these addresses are the same key
 
 1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa
     p2pkh: UNDETERMINED
@@ -403,6 +413,16 @@ Then the question you presumably came for, with everything plugged in:
 nodsig check --archive <archive-dir> --index <index-dir> --derived <derived-dir> \
              --stdout <address> [<address> …]
 ```
+
+For a whole wallet rather than one address, `--address-book book.json` takes a
+list in named groups, each claimed as `mine` or `watching`, and the report then
+also says which of your addresses the chain already ties together and whether
+the separations you meant to keep are still standing. `--json` writes the
+complete form of the same answer for a tool to read. Both formats are
+documented — [`AddressBook-v1`](docs/formats/AddressBook-v1.md),
+[`CheckReport-v1`](docs/formats/CheckReport-v1.md) — and the page that explains
+how to read a report with two perimeters in it is
+[`docs/exposure-check.md`](docs/exposure-check.md).
 
 ### What you can ask, once they exist
 

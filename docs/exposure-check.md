@@ -224,6 +224,104 @@ If you want it, [`nonce-check.md`](nonce-check.md) is that page: what it needs,
 what the answer means for a single-key lock and why it means less for a multisig
 one, and why an address that has never spent cannot have the problem at all.
 
+## Asking about a whole wallet instead of one address
+
+Everything above is one address at a time. The same command takes a list, and
+with an **address book** it can say two things a list cannot: which addresses
+you *meant* to keep apart, and whether the chain already ties them together.
+
+```console
+$ nodsig check --address-book book.json --archive <archive-dir> \
+      --index <index-dir> --derived <derived-dir> --json check-results.json
+```
+
+The book is JSON, and its shape is in
+[`formats/AddressBook-v1.md`](formats/AddressBook-v1.md):
+
+```json
+{"format": "address-book-v1",
+ "groups": [{"label": "cold", "claim": "mine", "addresses": ["bc1q…", "1…"]},
+            {"label": "counterparty", "claim": "watching",
+             "addresses": ["3…"]}]}
+```
+
+`claim` is required and has no default, which is the one design decision worth
+explaining. "A and B are linked" asks you nothing — the evidence is on the
+chain. "A and B still look separate" says nothing at all unless somebody
+claimed they were meant to be separate: two random addresses are trivially
+unlinked. A default would license the report's strongest sentence on a
+permission nobody gave.
+
+> The labels appear in the report. Naming a group "my mother's account" writes
+> that sentence into a file you might share.
+
+### How to read a report with two perimeters in it
+
+The report gains a summary, and the summary is where an aggregate starts to
+lie if it is not careful. Three rules make it readable:
+
+- **a capability that was not asked has no numbers.** It says `not answered`
+  and names the flag that would answer it. There is no zero anywhere that
+  means "nobody looked" — that zero is the reassuring lie, and it is the one
+  kind of wrong answer nothing downstream can catch;
+- **one perimeter per number, except in one place.** Your archive stops at one
+  height and your node is at another. Exactly one line crosses that gap — how
+  many exposed addresses still hold coins — and it prints the **distance in
+  blocks** and which way it errs. When the archive is behind the node it errs
+  by *reassuring*: a key revealed in those blocks still reads as protected;
+- **coverage is what you gave, not what you have.** The report always says it
+  cannot know how many of your addresses you did not name, and an address that
+  did not decode is subtracted from what was checked.
+
+### The links, and what each one does not claim
+
+Three separate findings, deliberately never merged into one "linked" flag:
+
+- **same key** — two of your addresses are one key under two encodings. A
+  certainty of the codec, not a heuristic: it has no height and it does not
+  expire. Whether an *outsider* can already see the tie is a second, separate
+  fact, and that one has a height and can change with one spend;
+- **common input** — coins of two addresses spent by one transaction. The
+  common-input hint: usually one owner, and CoinJoin breaks it on purpose.
+  With `--linkage-depth 2` the search also goes through **one bridge**, and
+  then every finding carries the bridge's **fanout**, because a bridge shared
+  by three locks is damning and the same bridge shared by 900,000 is an
+  exchange. Depth 1 is the default for a measured reason: the second hop costs
+  about 7 seconds per address instead of fractions of a second, and usually
+  finds a hub;
+- **payment** — one address's coins funded an output of another. Reported, and
+  never counted as a merge: paying somebody is not being them.
+
+When two groups you claimed as `mine` are *not* tied, the report says so and
+then says what bounded the search: the depth, how often the cap bit, how many
+hubs were left unexpanded. That matters because of an asymmetry worth keeping
+in mind: **a merge is permanent, a non-merge is perishable** — one future
+transaction ends it.
+
+### If you have the witness table
+
+`--witness <dir>` adds one more line per address, and it is the cheapest useful
+answer in the whole tool: 1 MB read once, offline, for the whole list. It says
+whether the key behind an address is among those that signed **twice under one
+nonce** — the case where the private key follows by arithmetic anybody can do.
+
+Two things it says with the answer, every time: it works only for single-key
+addresses (a script hash hides its keys, a taproot input carries none beside
+the signature), and **absent does not mean clean** — it means "not among the
+points the census resolved", which is a statement about that set and not about
+the chain. The strong version of the question is
+[`nonce-check.md`](nonce-check.md), and it costs 439 GB and a node.
+
+### Three files, one truth
+
+The text report is for a person, the CSV is a **lossy** projection of one row
+per address, and `--json` is the complete form
+([`formats/CheckReport-v1.md`](formats/CheckReport-v1.md)). All three are
+renderings of one structure — none recomputes anything — and the JSON has no
+timestamp in it, so two runs over the same artifacts produce the same bytes:
+you can diff yesterday's report against today's and see only what moved on the
+chain.
+
 ## If you also want the dates
 
 The yes/no needs the archive alone. Dates need the outpoint index and its

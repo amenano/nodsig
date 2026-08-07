@@ -74,6 +74,13 @@ the contract.
 record layout + ordering rule + canonical fingerprint + ancestry (every
 manifest names its parent).
 
+Two documents in that directory are **not artifacts** and say so in their first
+line: [`AddressBook-v1`](formats/AddressBook-v1.md), the input of `check`, and
+[`CheckReport-v1`](formats/CheckReport-v1.md), its complete output. Nobody
+seals them and no nodsig command reads them back; they sit there because that
+directory is *the formats we promise stability on*, which is what a third-party
+tool needs.
+
 ### L1 — capability contracts (one question = one contract)
 
 The **authoritative** signatures live in `docs/contracts/` — this section is a
@@ -89,6 +96,8 @@ and only *readers* speak the `Result<T>` envelope.
 - [`CoSpendBackend`](contracts/CoSpendBackend.md) — a transaction's co-spent inputs (common-input hint).
 - [`ExposureLookup`](contracts/ExposureLookup.md) — was a key/script revealed on-chain? (reveal archive).
 - [`AddressCodec`](contracts/AddressCodec.md) — address ↔ scriptPubKey ↔ lock, and address → `(digest, category)` for exposure. The most error-prone contract: **one address yields two unrelated digests** (hash160 of the whole scriptPubKey for history, vs the key/script digests for exposure).
+- [`NonceExposureBackend`](contracts/NonceExposureBackend.md) — did the key behind this address sign twice under one nonce? (witness table, 1 MB, offline).
+- [`LinkageBackend`](contracts/LinkageBackend.md) — which of the addresses you gave can an outsider already tie together, in three classes that are three different claims.
 
 **Builders** — write sealed, appendable, fingerprinted artifacts; not readers: [`Artifact`](contracts/Artifact.md) (build / verify / stats) — the shared lifecycle of graph / index / derivatives / archive / nonce census — one fingerprint, one audit, one append-and-fuse store; a new derivative is a thin application of it.
 
@@ -99,9 +108,10 @@ and only *readers* speak the `Result<T>` envelope.
 An alternative indexer backend (Electrs/Fulcrum) is an implementation of **equal
 standing** for the reader contracts.
 
-**Envelope rule (decided, and IMPLEMENTED in `capability.py`).** The four
+**Envelope rule (decided, and IMPLEMENTED in `capability.py`).** The
 capabilities of the address check (`exposure`, `balance`, `history`,
-`co-inputs`) return `Result` today; a report's header lines ARE the
+`co-inputs`, `nonce-exposure`; `linkage` answers about the set rather than one
+address, so it returns its block with a status per class) return `Result` today; a report's header lines ARE the
 sources, which is why they name format tags and fingerprints and never a
 directory. Source + status ride a `Result<T>` at the
 **capability boundary**, *once per operation* — never per streamed record. A

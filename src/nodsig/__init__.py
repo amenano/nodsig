@@ -9,7 +9,7 @@ backends. See ``docs/ARCHITECTURE.md`` for the design.
 # disagree. A major means what the README's stability line says: the
 # formats are the contract, the CLI is convenience, and within a major
 # version the published commands do not change. Spelled the way PEP 440
-# normalizes it; the git tag for the same version reads `v1.0.0`.
+# normalizes it; the git tag for the same version reads `v1.1.0`.
 #
 # THIS NUMBER AND THE FORMATS' NUMBERS ARE TWO DIFFERENT SCALES, and the
 # artifacts prove it rather than merely claiming it: every one of them
@@ -18,12 +18,12 @@ backends. See ``docs/ARCHITECTURE.md`` for the design.
 # this artifact capture*, which is why a reader can tell an absence from a
 # blind spot; a release number answers *what does the command line promise
 # until the next major*. They move for different reasons and there is no
-# arithmetic between them. So `reveal-archive-v2` inside a 1.0.0 tool is
+# arithmetic between them. So `reveal-archive-v2` inside a 1.1.0 tool is
 # not a discrepancy: the reveal archive really is at its second format,
-# and the tool is at its first published release.
+# and the tool is one additive release past its first.
 #
 # Which revision built an artifact is not a matter of release discipline
 # either: every manifest records it under `build.producer`, together with
 # whether the tree carried uncommitted edits. A version number is how a
 # release is referred to, not how an artifact is attributed.
-__version__ = "1.0.0"
+__version__ = "1.1.0"
