@@ -35,6 +35,7 @@ Usage:
 import argparse
 import hashlib
 import io
+import json
 import os
 import stat
 import sys
@@ -42,6 +43,7 @@ import tempfile
 
 import pytest
 
+from nodsig import address_book as ab
 from nodsig import check_addresses as ca
 from nodsig import derivatives as dvm
 from nodsig import reuse_scan as rs
@@ -199,14 +201,16 @@ def test_exposure(archive):
     # A revealed key (PUB1, seen in a scriptSig) dressed as a P2WPKH
     # address — same 'keys' category, its hash160 is in the archive.
     revealed = ca.decode_address(segwit_addr(rs.hash160(trs.PUB1), 0))
-    v, d, _ = ca.answer(revealed, backends)
+    a1 = ca.answer(revealed, backends)
+    v, d = a1.text, a1.detail
     check(v == "EXPOSED (by reuse)", f"revealed key answer: {v}")
     check("scriptSig" in d, f"source lost: {d}")
 
     # An unrevealed key (PUB5) → protected, and the message must carry
     # the watermark height (the perimeter of the claim).
     protected = ca.decode_address(segwit_addr(rs.hash160(trs.PUB5), 0))
-    v, d, _ = ca.answer(protected, backends)
+    a2 = ca.answer(protected, backends)
+    v, d = a2.text, a2.detail
     check(v == "PROTECTED until first spend", f"unrevealed answer: {v}")
     check(str(exp.watermark) in d.replace(",", ""),
           f"watermark missing from the protected answer: {d}")
@@ -218,7 +222,8 @@ def test_exposure(archive):
     # as bits and claim the key itself signed somewhere.
     wscript_digest = hashlib.sha256(trs.WSCRIPT).digest()
     revealed32 = ca.decode_address(segwit_addr(wscript_digest, 0))
-    v, d, _ = ca.answer(revealed32, backends)
+    a3 = ca.answer(revealed32, backends)
+    v, d = a3.text, a3.detail
     check(v == "EXPOSED (by reuse)", f"revealed wscript answer: {v}")
     check("script revealed by a spend" in d and "1 key inside" in d,
           f"the script's answer must count the keys inside: {d}")
@@ -233,7 +238,8 @@ def test_by_construction_skips_archive(archive):
     depend on the archive at all (proven by passing NO exposure
     backend and still getting the exposed answer)."""
     tr = ca.decode_address(segwit_addr(bytes(range(32)), 1))
-    v, d, _ = ca.answer(tr, {})
+    got = ca.answer(tr, {})
+    v, d = got.text, got.detail
     check(v == "EXPOSED (by construction)", f"taproot answer: {v}")
     check("key" in d.lower(), f"taproot detail unclear: {d}")
     print("ok  by-construction: taproot exposed without any archive")
@@ -243,12 +249,13 @@ def test_undetermined_without_backend():
     """A hash-guarded address with no exposure backend must say so, not
     fall through to a false 'protected'."""
     a = ca.decode_address(segwit_addr(bytes(20), 0))
-    v, d, _ = ca.answer(a, {})
+    got = ca.answer(a, {})
+    v, d = got.text, got.detail
     check(v == "UNDETERMINED", f"missing-backend answer: {v}")
     check("archive" in d, f"reason not explained: {d}")
     # NotPlugged stub behaves the same as truly absent.
     stub = {"exposure": ca.NotPlugged("exposure", "x")}
-    v2, _, _ = ca.answer(a, stub)
+    v2 = ca.answer(a, stub).text
     check(v2 == "UNDETERMINED", "NotPlugged exposure should be undetermined")
     print("ok  degradation: no exposure backend → UNDETERMINED, not "
           "a false answer")
@@ -287,7 +294,8 @@ def test_balance_injected():
 
     # 'exposed but empty' composes exposure + balance=0.
     backends = {"exposure": _AllExposed(), "balance": bal}
-    v, _, sats = ca.answer(addrs[1], backends)
+    got = ca.answer(addrs[1], backends)
+    v, sats = got.text, got.balance_sats
     check(sats == 0 and "nothing at stake" in v,
           f"empty exposed address answer: {v}")
     print("ok  balance: injected RPC, one call for the list, empty flagged")
@@ -313,7 +321,8 @@ def test_balance_matches_a_taproot_output_by_its_script():
     bal.scan([tr])
     check(bal.query(tr).value == 25_000_000,
           f"taproot balance lost: {bal.query(tr).value}")
-    v, _d, sats = ca.answer(tr, {"balance": bal})
+    got = ca.answer(tr, {"balance": bal})
+    v, sats = got.text, got.balance_sats
     check(sats == 25_000_000 and "nothing at stake" not in v,
           f"a funded taproot address was called empty: {v}")
     print("ok  balance: a taproot output is matched by its script, not "
@@ -390,6 +399,82 @@ def test_report_file_default(tmp, archive):
           "be created readable by its owner alone, whatever the umask "
           f"says (got {stat.S_IMODE(os.stat(out).st_mode):04o})")
     print("ok  report file: default on disk, warning on top, 0600")
+
+
+def test_unconfigured_capabilities_are_declared(tmp):
+    """Every capability appears in the report, configured or not.
+
+    A capability whose header simply VANISHED when its flag was absent
+    (exposure and balance did, until they got the same NotPlugged stub
+    history and co-inputs already had) reads as "not relevant here"
+    instead of "nobody asked it" — a silence that reassures, which is
+    the one thing this tool must never do. The stub also names the flag
+    that would plug it in, so the gap reads as a roadmap."""
+    out = os.path.join(tmp, "check-results.txt")
+    ca.main(["1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", "--out", out])
+    text = open(out).read()
+    for cap, flag in (("exposure", "--archive"), ("balance", "--rpc"),
+                      ("history", "--index"), ("co-inputs", "--index")):
+        line = [ln for ln in text.splitlines()
+                if ln.startswith(f"# {cap}: ")]
+        check(len(line) == 1, f"no source header for {cap}: {text}")
+        check("not configured" in line[0],
+              f"{cap} was not configured and must say so: {line[0]}")
+        check(flag in line[0],
+              f"{cap} must name the flag that would plug it in: "
+              f"{line[0]}")
+    check("UNDETERMINED" in text,
+          "without an archive the exposure answer must degrade")
+    print("ok  sources: an unconfigured capability declares itself and "
+          "names its flag")
+
+
+def test_address_book_input(tmp):
+    """--address-book feeds the same run: every address in the book is
+    answered, in the order the book wrote them (with a descriptor that
+    order IS the derivation index), and each entry remembers which
+    compartment listed it.
+
+    A book that does not parse stops the run before anything is opened:
+    a report built on half a book is the falsely complete one this
+    whole feature exists to avoid."""
+    path = os.path.join(tmp, "book.json")
+    out = os.path.join(tmp, "check-results.txt")
+    genesis = "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa"
+    other = "bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh"
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump({"format": ab.FORMAT_TAG, "groups": [
+            {"label": "group-a", "claim": "mine", "addresses": [genesis]},
+            {"label": "group-b", "claim": "watching",
+             "addresses": [other]}]}, f)
+
+    ca.main(["--address-book", path, "--out", out])
+    text = open(out).read()
+    check(text.index(genesis) < text.index(other),
+          "the book's order must survive into the report: with a "
+          "descriptor the position IS the derivation index")
+
+    book = ab.load(path)
+    report = ca.build_report(book.addresses, ca.build_backends(
+        argparse.Namespace(archive=None, rpc=None, auth=None,
+                           cookie_file=None, index=None, derived=None)),
+        book)
+    check([e.group for e in report.entries] == ["group-a", "group-b"],
+          "every entry must remember the compartment that listed it")
+    check(report.book is book, "the report must keep the book it read")
+
+    with open(path, "w", encoding="utf-8") as f:
+        f.write('{"format": "address-book-v1", "groups": [{"label": "a", '
+                '"claim": "mine", "adresses": ["1x"]}]}')
+    try:
+        ca.main(["--address-book", path, "--out", out])
+    except SystemExit as e:
+        check("unknown key" in str(e),
+              f"a mistyped key must stop the run and say so: {e}")
+    else:
+        fail("a book with a mistyped key must not produce a report")
+    print("ok  address book: order kept, groups carried, a bad book "
+          "stops the run")
 
 
 # ---------------------------------------------------------------------------
@@ -511,12 +596,125 @@ def test_report_with_index(pipeline, tmp):
     import csv as csv_module
     with open(csv_path, newline="") as f:
         rows = list(csv_module.reader(f))
-    check(rows[0][-2:] == ["history", "co_inputs"],
-          "CSV must carry the two new columns")
-    check(rows[1][-2].startswith("history: received")
-          and rows[2][-1].startswith("co-inputs: spent"),
+    check(rows[0][-3:] == ["history", "co_inputs", "nonce_exposure"],
+          "the CSV carries one column per per-address capability, "
+          f"derived from the same list the text renders: {rows[0]}")
+    check(rows[1][-3].startswith("history: received")
+          and rows[2][-2].startswith("co-inputs: spent"),
           "CSV rows must carry the capability summaries")
+    check(rows[1][-1] == "",
+          "a capability nobody plugged in leaves its cell empty: a "
+          "value there would be an answer nobody gave")
     print("ok  report: plugged capabilities appear in text and CSV")
+
+
+def build_witness(tmp):
+    """A real nonces-witness-v1 over the chain of
+    `test_nonces.address_chain`, whose four repeated points were built
+    to give every resolution a case — including one key that really
+    does sign twice under one nonce."""
+    import test_nonces as tn
+    from nodsig import nonces as nn
+    from nodsig import witness as wt
+
+    blocks, _ = tn.address_chain()
+    census = os.path.join(tmp, "wit_census")
+    server, url = trs.serve(blocks)
+    try:
+        ra.run_scan(url, "user:pass", 5, os.path.join(tmp, "wit_arch"),
+                    batch_size=2, checkpoint_every=2, nonces_dir=census)
+    finally:
+        server.shutdown()
+    nn.run_merge(census)
+
+    server, url = trs.serve(blocks)
+    table = os.path.join(tmp, "wit_table")
+    try:
+        wt.run_resolve(census, table, trs.rs.RpcClient(url, "user:pass"),
+                       out=io.StringIO())
+    finally:
+        server.shutdown()
+    return table
+
+
+@pytest.fixture
+def witness_table(tmp):
+    return build_witness(tmp)
+
+
+def test_nonce_exposure(witness_table):
+    """The cheap question, answered offline from 1 MB: is the key behind
+    this address one of those that signed twice under one nonce?
+
+    The three answers that must stay apart are all here: a key the table
+    exposes, a key it has never heard of (a negative about ITS set, not
+    about the chain), and an address whose kind cannot carry the
+    question at all."""
+    import test_nonces as tn
+    from nodsig import witness as wt
+
+    cap = ca.WitnessNonceExposure(witness_table)
+    exposed = ca.decode_address(segwit_addr(rs.hash160(tn.PUB), 0))
+    got = cap.query(exposed)
+    check(got.status == ca.Status.OK and got.value["exposed"],
+          f"the key that signed twice under one nonce: {got.value}")
+    hit = [p for p in got.value["points"] if p["exposes_this_key"]]
+    check(len(hit) == 1 and hit[0]["resolution"] == wt.EXPOSED,
+          f"the resolution must come from the table: {got.value}")
+    check(any(p["resolution"] == wt.COPIED for p in got.value["points"]),
+          "the same key also appears on points that expose nothing, and "
+          f"those must be reported as such: {got.value}")
+    line = cap.render(got.value, got.status)
+    check("EXPOSED" in line and "private key follows" in line,
+          f"the exposed line must say what it means: {line}")
+    check(got.source.watermark is None,
+          "this table covers the points its census resolved, which is a "
+          "SET: a height here would promise a perimeter it has not got")
+
+    # A key the table has never seen. This is a definite negative about
+    # the table's own set, and the line must refuse to sound like a
+    # clean bill of health.
+    unseen = ca.decode_address(segwit_addr(bytes(range(20, 40)), 0))
+    got = cap.query(unseen)
+    check(got.status == ca.Status.OK and got.value is None,
+          "a key absent from the table is a definite negative")
+    line = cap.render(got.value, got.status)
+    check("NOT 'no reuse'" in line and "census" in line,
+          f"absence must not read as a clean answer: {line}")
+
+    # A script hash and a taproot output: the table names the key beside
+    # a signature, and neither of those gives one.
+    for text in (b58check_encode(0x05, bytes(range(20))),
+                 segwit_addr(bytes(range(32)), 1)):
+        got = cap.query(ca.decode_address(text))
+        check(got.status == ca.Status.UNDETERMINED,
+              f"{text}: this kind cannot carry the question, and an "
+              "UNDETERMINED is not a negative")
+        check("UNDETERMINED" in cap.render(got.value, got.status),
+              "the line must say so too")
+    print("ok  nonce-exposure: exposed key found, absence stays honest, "
+          "unanswerable kinds say so")
+
+
+def test_nonce_exposure_refuses_a_foreign_table(tmp, witness_table):
+    """The v3 package rebuilds this table from public code. If the
+    rebuild changed the tag or the row layout, this capability must stop
+    instead of reading bytes at the wrong offsets — so the refusal has
+    to exist from the first commit, not from the day it is needed."""
+    from nodsig import witness as wt
+
+    path = os.path.join(witness_table, "state.json")
+    state = json.load(open(path))
+    state["format"] = "nonces-witness-v9"
+    with open(path, "w") as f:
+        json.dump(state, f)
+    try:
+        ca.WitnessNonceExposure(witness_table)
+    except wt.WitnessError:
+        print("ok  nonce-exposure: a table of another format is refused, "
+              "not read")
+        return
+    fail("a witness table with a foreign format tag was accepted")
 
 
 def main():
@@ -534,6 +732,11 @@ def main():
         test_balance_ignores_an_unspent_it_did_not_ask_for()
         test_end_to_end(archive)
         test_report_file_default(tmp, archive)
+        test_unconfigured_capabilities_are_declared(tmp)
+        test_address_book_input(tmp)
+        table = build_witness(tmp)
+        test_nonce_exposure(table)
+        test_nonce_exposure_refuses_a_foreign_table(tmp, table)
         pipe = build_pipeline(tmp)
         test_history_backend(pipe)
         test_coinputs_backend(pipe)

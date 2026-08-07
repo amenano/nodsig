@@ -110,9 +110,13 @@ import sys
 import urllib.error
 import urllib.request
 
+from nodsig import address_book as ab
+from nodsig import check_report as cr
 from nodsig import derivatives as dvm
+from nodsig import linkage as lk
 from nodsig import outpoint_index as oi
 from nodsig import reveal_archive as ra
+from nodsig import witness as wit
 from nodsig.capability import Source, Result, Status
 from nodsig.hashing import hash160, sha256d
 from nodsig.reuse_scan import SAT, resolve_auth
@@ -513,7 +517,21 @@ class IndexHistory:
                          self.source())
 
     def report(self, address):
-        s = self.query(address).value
+        """The one-line summary, for a caller with no Result in hand."""
+        return self.render(self.query(address).value)
+
+    def render(self, s, status=Status.OK):
+        """The same line from a value already obtained. The split is
+        not decoration: a caller that wants BOTH the structured value
+        and the line would otherwise ask twice, and each ask is a
+        ladder bucket read.
+
+        The status is taken rather than assumed: this backend answers
+        OK or raises, but the caller renders every capability through
+        the same call, and one that could not decide must not print as
+        a negative."""
+        if status != Status.OK:
+            return f"history: {status} — no summary was produced"
         if s is None:
             return ("history: no confirmed activity up to height "
                     f"{self.watermark:,}")
@@ -585,7 +603,15 @@ class IndexCoInputs:
                          self.source())
 
     def report(self, address):
-        s = self.query(address).value
+        """The one-line summary, for a caller with no Result in hand."""
+        return self.render(self.query(address).value)
+
+    def render(self, s, status=Status.OK):
+        """The same line from a value already obtained (see
+        IndexHistory.render: asking twice costs a second walk over
+        every spend of the lock)."""
+        if status != Status.OK:
+            return f"co-inputs: {status} — no summary was produced"
         if s is None:
             return "co-inputs: never spent — no co-spend surface"
         text = (f"co-inputs: spent in {s['spending_txs']} tx(s), "
@@ -618,6 +644,129 @@ class NotPlugged:
         looked and found nothing" are different answers, and only one
         of them is reassuring."""
         return Result.unsupported(self.source())
+
+
+class WitnessNonceExposure:
+    """Nonce exposure via the witness table: was the key behind this
+    address one of those that signed twice under the same nonce?
+
+    THE QUESTION AND ITS PRICE. Asked the strong way — `nodsig nonces
+    address` — this needs the index, the derivatives and a node that
+    re-reads blocks: about 439 GB and hours. Asked here it is 1.03 MB
+    read once, offline, for the whole address list, because the witness
+    table already holds the resolutions. The two questions are NOT the
+    same, and the report says so: this one only sees the points the
+    census reported as repeated.
+
+    THREE THINGS THAT TRAVEL WITH EVERY ANSWER, not in a footnote:
+
+    1. the search is a LINEAR SCAN. The table is ordered by `r`, not by
+       key, so there is no index to bisect: 11,766 rows are walked once
+       and grouped by key in memory. Calling it a lookup would promise
+       a structure that is not there;
+    2. ABSENT DOES NOT MEAN CLEAN. It means "not among the cases this
+       table resolved", and the census hands the resolver only the
+       points it could decide were repeated. A negative here is a
+       negative about a set, not about the chain;
+    3. it answers for SINGLE-KEY addresses only. A p2sh/p2wsh hides
+       which keys are behind it until it spends, and a taproot input
+       carries no key beside the signature (the rows are flagged
+       key-absent). For those the answer is UNDETERMINED with the
+       reason, never a reassuring negative.
+
+    THE FORMAT TAG IS CHECKED FROM THE FIRST COMMIT, and that is not
+    ceremony: the v3 package rebuilds this table from public code. If
+    the rebuild changed the tag or the row layout, this capability must
+    stop instead of reading bytes at the wrong offsets."""
+
+    def __init__(self, witness_dir):
+        # Both refuse a directory that is not a witness table, and
+        # _load_state refuses one whose format tag is not ours.
+        self.state = wit._load_state(witness_dir)
+        self.manifest = wit._load_manifest(witness_dir)
+        if self.manifest.get("format") != wit.FORMAT_TAG:
+            raise wit.WitnessError(
+                f"witness manifest says {self.manifest.get('format')!r}, "
+                f"this build reads {wit.FORMAT_TAG!r}")
+        self.dir = witness_dir
+        self._by_key = None
+        self._by_point = None
+
+    def _load(self):
+        """One pass over the whole table, for every address at once."""
+        if self._by_key is None:
+            by_key, by_point = {}, {}
+            for rec in wit.iter_records(self.dir):
+                by_point.setdefault(wit.rec_point(rec), []).append(rec)
+                if wit.has_key(rec):
+                    by_key.setdefault(wit.rec_key(rec), []).append(rec)
+            self._by_key, self._by_point = by_key, by_point
+        return self._by_key, self._by_point
+
+    def source(self):
+        # NO WATERMARK, on purpose. A height here would print "confirmed
+        # blocks 1..N" and promise a perimeter this table does not have:
+        # it covers the points its census reported as repeated, which is
+        # a SET and not a range. The perimeter is stated in words, in
+        # every line this capability prints.
+        return Source.artifact(wit.FORMAT_TAG, None,
+                               self.manifest.get("fingerprint"))
+
+    def describe(self):
+        return self.source().describe("nonce-exposure")
+
+    def query(self, address):
+        """→ Result whose value lists the resolved points this key
+        appears in, or a definite negative when it appears in none."""
+        if address.category != "keys":
+            return Result.undetermined(self.source())
+        if address.kind == "p2tr":
+            return Result.undetermined(self.source())
+        by_key, by_point = self._load()
+        rows = by_key.get(address.digest)
+        if not rows:
+            return Result.ok(None, self.source())
+
+        points = []
+        for point in sorted({wit.rec_point(r) for r in rows}):
+            resolution, exposed = wit.resolution_of(by_point[point])
+            heights = [wit.rec_height(r) for r in by_point[point]
+                       if wit.rec_key(r) == address.digest]
+            points.append({"point": point.hex(),
+                           "resolution": resolution,
+                           "exposes_this_key": address.digest in exposed,
+                           "first_height": min(heights)})
+        return Result.ok({"points": points,
+                          "exposed": any(p["exposes_this_key"]
+                                         for p in points)},
+                         self.source())
+
+    def report(self, address):
+        """The one-line summary, for a caller with no Result in hand."""
+        res = self.query(address)
+        return self.render(res.value, res.status)
+
+    def render(self, value, status=Status.OK):
+        if status != Status.OK:
+            return ("nonce-exposure: UNDETERMINED — this table names the "
+                    "public key beside a signature, which a script hash "
+                    "or a taproot input does not give")
+        if value is None:
+            return ("nonce-exposure: not among the repeated-nonce cases "
+                    "this table resolved — which is NOT 'no reuse': the "
+                    "census hands over only the points it could see "
+                    "repeated")
+        if value["exposed"]:
+            hit = next(p for p in value["points"]
+                       if p["exposes_this_key"])
+            return ("nonce-exposure: EXPOSED — two signatures under one "
+                    f"nonce and this key (point {hit['point'][:8]}…, "
+                    f"first seen at height {hit['first_height']:,}): the "
+                    "private key follows by arithmetic anybody can do")
+        kinds = sorted({p["resolution"] for p in value["points"]})
+        return (f"nonce-exposure: present in {len(value['points'])} "
+                f"resolved point(s), none exposing this key "
+                f"({', '.join(kinds)})")
 
 
 def _private_file(path, **kw):
@@ -659,14 +808,26 @@ def build_backends(args, rpc_call=None):
         derived = dvm.Derived(args.derived, index)
         backends["history"] = IndexHistory(index, derived)
         backends["co-inputs"] = IndexCoInputs(index, derived)
-    backends.setdefault(
-        "history", NotPlugged("history",
-                              "outpoint-index derivatives "
-                              "(--index + --derived)"))
-    backends.setdefault(
-        "co-inputs", NotPlugged("co-inputs",
-                                "outpoint-index derivatives "
-                                "(--index + --derived)"))
+        backends["linkage"] = lk.IndexLinkage(index, derived)
+    # Every capability the report speaks about appears, configured or
+    # not. A capability that simply vanished from the report when its
+    # flag was absent read as "not relevant here" instead of "nobody
+    # asked it", and the two are different answers — only one of them
+    # is reassuring. The stub costs nothing and says which flag would
+    # plug it in.
+    if getattr(args, "witness", None):
+        backends["nonce-exposure"] = WitnessNonceExposure(args.witness)
+    for cap, candidates in (
+            ("exposure", "reveal-archive-v2 (--archive)"),
+            ("balance", "bitcoin-core-rpc scantxoutset (--rpc)"),
+            ("history", "outpoint-index derivatives "
+                        "(--index + --derived)"),
+            ("co-inputs", "outpoint-index derivatives "
+                          "(--index + --derived)"),
+            ("linkage", "outpoint-index derivatives "
+                        "(--index + --derived)"),
+            ("nonce-exposure", f"{wit.FORMAT_TAG} (--witness)")):
+        backends.setdefault(cap, NotPlugged(cap, candidates))
     return backends
 
 
@@ -712,32 +873,83 @@ def sighting_story(address, byte):
     return "script revealed by a spend" + inside
 
 
+# The four things the exposure question can resolve to, as KEYS: the
+# printed sentence is for a person and may grow a clause (the balance
+# one does), while a tool needs a token that never moves. The words
+# themselves are the summary's own key names, so the two cannot drift.
+EXPOSED_BY_CONSTRUCTION = "exposed_by_construction"
+EXPOSED_BY_REUSE = "exposed_by_reuse"
+PROTECTED = "protected"
+UNDETERMINED = "undetermined"
+
+# Exposure by construction is a fact of the ENCODING: the bc1p… program
+# IS the key. It comes from no artifact, has no height, and does not
+# perish — so it must not be attributed to the exposure backend, which
+# has all three. Same source name the same-key finding uses.
+ADDRESS_CODEC = "address-codec"
+
+
+class Answer:
+    """What the exposure question resolved to for one address.
+
+    `key` is the token (one of the four above), `text` is the sentence
+    a person reads. They are NOT the same thing on purpose: the
+    sentence merges in "but empty: nothing at stake", which is a
+    statement about exposure AND balance at once. That merge is fine in
+    prose and forbidden in a numeric answer — two perimeters in one
+    value belong in the report's `crossed` block and nowhere else — so
+    the key stays pure exposure and the balance travels beside it."""
+
+    __slots__ = ("key", "text", "detail", "balance_sats", "source_name",
+                 "first_height")
+
+    def __init__(self, key, text, detail, balance_sats, source_name,
+                 first_height=None):
+        self.key = key
+        self.text = text
+        self.detail = detail
+        self.balance_sats = balance_sats
+        self.source_name = source_name
+        # Where the reuse was first seen, when there was one. Kept
+        # structured because the linkage block needs the number and the
+        # printed sentence only has it inside prose.
+        self.first_height = first_height
+
+
 def answer(address, backends):
-    """→ (answer text, detail text, balance sats or None)."""
+    """→ Answer. The single place where an exposure question is
+    resolved, whatever renders it afterwards."""
     balance = None
     bal = backends.get("balance")
     if isinstance(bal, CoreBalance) and bal.scanned:
         balance = bal.query(address).value
 
+    first_seen = None
     if address.by_construction:
+        key, origin = EXPOSED_BY_CONSTRUCTION, ADDRESS_CODEC
         v = "EXPOSED (by construction)"
         d = KINDS[address.kind][1]
     else:
+        origin = "exposure"
         exp = backends.get("exposure")
         # The status decides, not the class: a source that declines the
         # capability and one that answers "nothing" must not collapse
         # into the same answer — only the second is reassuring.
         res = exp.query(address) if exp is not None else None
         if res is None or res.status != Status.OK:
-            return ("UNDETERMINED",
-                    "no exposure backend configured (--archive)", balance)
+            return Answer(UNDETERMINED, "UNDETERMINED",
+                          "no exposure backend configured (--archive)",
+                          balance, None)
         hit = res.value
         if hit is not None:
             byte, first_height = hit
+            first_seen = first_height
+            key = EXPOSED_BY_REUSE
             v = "EXPOSED (by reuse)"
             d = (f"{sighting_story(address, byte)}, "
                  f"first seen at height {first_height:,}")
         else:
+            key = PROTECTED
             v = "PROTECTED until first spend"
             # The height comes off the answer's own source, not off
             # the backend object: that is the whole point of the
@@ -748,20 +960,160 @@ def answer(address, backends):
 
     if v.startswith("EXPOSED") and balance == 0:
         v += " but empty: nothing at stake"
-    return v, d, balance
+    return Answer(key, v, d, balance, origin, first_seen)
 
 
-CAVEATS = """\
-caveats (the perimeter of every answer above):
-- off-chain exposure is invisible here: an xpub shared with a service
-  exposes descendant keys without any on-chain trace;
-- a P2SH/P2WSH address hides its script until it spends: "protected"
-  speaks of the hash, not of who could spend behind it;
-- perimeter is CONFIRMED blocks up to the stated heights: a spend
-  sitting in the mempool has already revealed its keys."""
+# The capabilities a report speaks about, in the order they are
+# printed. One list, so text and CSV cannot drift into disagreeing
+# about which capabilities exist or in which order they appear.
+CAPABILITIES = ("exposure", "balance", "history", "co-inputs",
+                "linkage", "nonce-exposure")
+
+# The ones that add a line of their own under each address.
+PER_ADDRESS_CAPABILITIES = ("history", "co-inputs", "nonce-exposure")
+
+# One column per capability, derived from the list above: a column that
+# had to be added by hand is a column that gets forgotten.
+CSV_COLUMNS = (["address", "kind", "answer", "detail", "balance_sats"]
+               + [c.replace("-", "_") for c in PER_ADDRESS_CAPABILITIES])
 
 
-def run(addresses_text, backends, csv_path=None, out=sys.stdout):
+class SourceLine:
+    """Who answered one capability, and whether it was asked at all.
+
+    Kept as a small object rather than a printed line because the two
+    readers want different things out of it: the text truncates the
+    fingerprint (a person reads it), a tool wants the whole digest, and
+    a capability nobody configured has no fingerprint at all but does
+    have the name of the flag that would plug it in."""
+
+    __slots__ = ("capability", "source", "status", "pluggable")
+
+    def __init__(self, capability, source, status, pluggable=None):
+        self.capability = capability
+        self.source = source
+        self.status = status
+        self.pluggable = pluggable
+
+    def describe(self):
+        return self.source.describe(self.capability)
+
+
+class CapabilityAnswer:
+    """One capability's answer about one address: the envelope it came
+    in, plus the line it renders to. Both are kept because both are
+    asked for — and asking the backend twice would mean reading the
+    same ladder bucket twice."""
+
+    __slots__ = ("capability", "status", "value", "source", "text")
+
+    def __init__(self, capability, result, text):
+        self.capability = capability
+        self.status = result.status
+        self.value = result.value
+        self.source = result.source
+        self.text = text
+
+
+class Entry:
+    """One line of the report: an address that decoded and its answers,
+    or a line that is not an address at all.
+
+    `address` is None for the second case, and that is the only thing
+    that distinguishes them: an invalid line still occupies a row in
+    every rendering, because dropping it would silently shrink what the
+    user asked about."""
+
+    __slots__ = ("address", "text", "kind", "answer", "capabilities",
+                 "group")
+
+    def __init__(self, address, text, kind, answer, capabilities=None,
+                 group=None):
+        self.address = address
+        self.text = text
+        self.kind = kind
+        # An Answer in both cases: a line that is not an address still
+        # got an answer, it came from the codec instead of the chain.
+        self.answer = answer
+        # capability name → CapabilityAnswer, only for the backends
+        # that were actually plugged.
+        self.capabilities = capabilities or {}
+        # The label of the address book group that listed it, None when
+        # it came from the command line: an address with no compartment
+        # can be answered about, but cannot take part in a sentence
+        # about compartments.
+        self.group = group
+
+    @property
+    def valid(self):
+        return self.address is not None
+
+    @property
+    def detail(self):
+        """The second line under the address: the reason for the
+        answer, or the reason the text is not an address."""
+        return self.answer.detail
+
+    @property
+    def balance_sats(self):
+        return self.answer.balance_sats
+
+
+class Report:
+    """The whole answer, in memory, before anybody renders it.
+
+    THE ANTI-DRIFT RULE: text, CSV — and the JSON that comes next —
+    are RENDERINGS of this object. None of them recomputes anything of
+    its own. Two roads that produce the same number always diverge in
+    the end, and here they would diverge in silence, because nobody
+    compares a text report against a JSON one by hand.
+
+    `sources` keeps the `Source` OBJECT, not the line it prints: the
+    text truncates fingerprints because a person reads it, while a tool
+    wants the whole digest, and only the object has both."""
+
+    __slots__ = ("sources", "entries", "book", "linkage")
+
+    def __init__(self, sources, entries, book=None, linkage=None):
+        self.sources = sources          # [SourceLine, …]
+        self.entries = entries          # [Entry, …], input order
+        # The links between those entries, with each class carrying its
+        # own status: `same_key` answers with no artifacts at all.
+        self.linkage = linkage
+        # The address book the addresses came from, when there was one:
+        # it is what the coverage sentence is made of, and it is the
+        # only thing that knows what the user MEANT to keep apart.
+        self.book = book
+
+    def source_of(self, capability):
+        for line in self.sources:
+            if line.capability == capability:
+                return line
+        return None
+
+    def answered(self, capability):
+        """True when the capability was configured and answered — the
+        one question every aggregate has to ask before it prints a
+        number, because a zero from a capability nobody asked reads as
+        'looked, found nothing'."""
+        line = self.source_of(capability)
+        return line is not None and line.status == Status.OK
+
+    def csv_rows(self):
+        """The lossy projection: one flat row per entry, no structure.
+        Kept here rather than in the CSV writer so that every rendering
+        reads its values off the same object."""
+        for e in self.entries:
+            yield ([e.text, e.kind, e.answer.text, e.detail,
+                    "" if e.balance_sats is None else e.balance_sats]
+                   + [e.capabilities[c].text if c in e.capabilities
+                      else "" for c in PER_ADDRESS_CAPABILITIES])
+
+
+def build_report(addresses_text, backends, book=None, depth=1):
+    """Ask every capability about every address → a Report. Prints
+    nothing, opens nothing, and is the single place where an answer is
+    decided."""
     addresses, bad = [], []
     for t in addresses_text:
         try:
@@ -773,46 +1125,117 @@ def run(addresses_text, backends, csv_path=None, out=sys.stdout):
     if isinstance(bal, CoreBalance) and addresses:
         bal.scan(addresses)
 
-    # One source line per capability: who answered, up to what
-    # height, under which fingerprint. No paths — a report must be
-    # portable and must not describe the machine that produced it.
-    for cap in ("exposure", "balance", "history", "co-inputs"):
-        if cap in backends:
-            print(f"# {backends[cap].describe()}", file=out)
-    print(file=out)
+    # Who answered, up to what height, under which fingerprint. No
+    # paths — a report must be portable and must not describe the
+    # machine that produced it. Read AFTER the balance scan, because a
+    # live node's watermark is the tip it scanned and is unknown until
+    # the call has happened.
+    sources = []
+    for cap in CAPABILITIES:
+        b = backends.get(cap)
+        if b is None:
+            continue
+        unplugged = isinstance(b, NotPlugged)
+        sources.append(SourceLine(
+            cap, b.source(),
+            Status.UNSUPPORTED if unplugged else Status.OK,
+            b.candidates if unplugged else None))
 
-    rows = []
+    entries = []
     for a in addresses:
-        v, d, sats = answer(a, backends)
-        line = f"{a.text}\n    {a.kind}: {v}\n    {d}"
-        if sats is not None:
-            line += f"\n    balance: {sats:,} sats"
+        ans = answer(a, backends)
         extra = {}
-        for cap in ("history", "co-inputs"):
+        for cap in PER_ADDRESS_CAPABILITIES:
             b = backends.get(cap)
             if b is not None and not isinstance(b, NotPlugged):
-                extra[cap] = b.report(a)
-                line += f"\n    {extra[cap]}"
-        print(line, file=out)
-        rows.append([a.text, a.kind, v, d,
-                     "" if sats is None else sats,
-                     extra.get("history", ""),
-                     extra.get("co-inputs", "")])
+                res = b.query(a)
+                extra[cap] = CapabilityAnswer(
+                    cap, res, b.render(res.value, res.status))
+        entries.append(Entry(a, a.text, a.kind, ans, extra,
+                             book.group_of(a.text) if book else None))
+    # The invalid lines come last, together: they are the one part of
+    # the report that says nothing about the chain. They keep their
+    # group: an address that did not decode still came from somewhere,
+    # and the coverage sentence counts it as one the book has and the
+    # report could not check.
     for t, why in bad:
-        print(f"{t}\n    NOT AN ADDRESS: {why}", file=out)
-        rows.append([t, "invalid", "NOT AN ADDRESS", why, "", "", ""])
+        entries.append(Entry(None, t, "invalid",
+                             Answer(None, "NOT AN ADDRESS", why, None,
+                                    ADDRESS_CODEC),
+                             group=book.group_of(t) if book else None))
+
+    # The links come last: they are about the SET, and every entry has
+    # to exist before a pair of them can be tied together.
+    backend = backends.get("linkage")
+    if isinstance(backend, NotPlugged):
+        backend = None
+    linkage = lk.build(entries, backend, depth, book)
+
+    return Report(sources, entries, book=book, linkage=linkage)
+
+
+def render_text(report, out=sys.stdout):
+    """The report as a person reads it."""
+    for line in report.sources:
+        print(f"# {line.describe()}", file=out)
+    print(file=out)
+
+    cr.render_overview_text(report, out)
+    if report.linkage is not None:
+        lk.render_text(report.linkage, out)
+        print(file=out)
+
+    for e in report.entries:
+        if not e.valid:
+            print(f"{e.text}\n    NOT AN ADDRESS: {e.detail}", file=out)
+            continue
+        line = f"{e.text}\n    {e.kind}: {e.answer.text}\n    {e.detail}"
+        if e.balance_sats is not None:
+            line += f"\n    balance: {e.balance_sats:,} sats"
+        for cap in PER_ADDRESS_CAPABILITIES:
+            if cap in e.capabilities:
+                line += f"\n    {e.capabilities[cap].text}"
+        print(line, file=out)
 
     print(file=out)
-    print(CAVEATS, file=out)
+    print(cr.caveats_text(report), file=out)
 
+
+def render_csv(report, csv_path):
+    """The report as a spreadsheet reads it: one row per address and
+    nothing else. A LOSSY projection by design — the paths and the
+    structured findings do not fit in a cell, which is why the JSON
+    exists — and 0600 like every other file that lists somebody's
+    addresses."""
+    with _private_file(csv_path, newline="") as f:
+        w = csv.writer(f)
+        w.writerow(CSV_COLUMNS)
+        w.writerows(report.csv_rows())
+
+
+def render_json(report, json_path):
+    """The report as a tool reads it: `check-report-v1`, the complete
+    form. 0600 like every other file that lists somebody's addresses,
+    and byte-identical between two runs over the same artifacts — there
+    is no timestamp in it on purpose."""
+    with _private_file(json_path, encoding="utf-8") as f:
+        f.write(cr.dumps(report))
+
+
+def run(addresses_text, backends, csv_path=None, out=sys.stdout,
+        book=None, json_path=None, depth=1):
+    """Build once, render as many ways as asked."""
+    report = build_report(addresses_text, backends, book, depth)
+    render_text(report, out)
     if csv_path:
-        with _private_file(csv_path, newline="") as f:
-            w = csv.writer(f)
-            w.writerow(["address", "kind", "answer", "detail",
-                        "balance_sats", "history", "co_inputs"])
-            w.writerows(rows)
+        render_csv(report, csv_path)
         print(f"\nCSV written: {csv_path} — it lists YOUR addresses: "
               "treat the file as sensitive.", file=out)
+    if json_path:
+        render_json(report, json_path)
+        print(f"\nJSON written: {json_path} ({cr.FORMAT_TAG}) — it "
+              "lists YOUR addresses: treat the file as sensitive.",
+              file=out)
 
 
 def main(argv=None):
@@ -821,6 +1244,13 @@ def main(argv=None):
     p.add_argument("addresses", nargs="*", help="addresses to check")
     p.add_argument("--file", help="text file, one address per line, "
                                   "# comments allowed")
+    p.add_argument("--address-book",
+                   help=f"{ab.FORMAT_TAG} JSON: addresses in named "
+                        "groups, each group claimed as 'mine' or "
+                        "'watching'. A flat list cannot say which "
+                        "addresses you MEANT to keep apart, and "
+                        "without that claim a sentence about "
+                        "separation would mean nothing")
     p.add_argument("--archive", help="reveal-archive-v2 directory "
                                      "(enables the exposure capability)")
     p.add_argument("--index", help="outpoint-index-v2 directory "
@@ -828,6 +1258,13 @@ def main(argv=None):
                                    "and co-inputs)")
     p.add_argument("--derived", help="outpoint-derived-v2 directory "
                                      "built from that same index")
+    p.add_argument("--witness",
+                   help=f"{wit.FORMAT_TAG} directory (enables "
+                        "nonce-exposure: 1 MB read once, offline, for "
+                        "the whole list. It answers only about the "
+                        "repeated-nonce points its census resolved, "
+                        "which is a different and much cheaper "
+                        "question than `nodsig nonces address`)")
     p.add_argument("--rpc", help="node RPC URL (enables balance; the "
                                  "node is only contacted if given)")
     p.add_argument("--cookie-file", help="path to the node's .cookie file: "
@@ -836,7 +1273,18 @@ def main(argv=None):
                                          "(recommended). Without a cookie: "
                                          "NODSIG_RPC_AUTH=user:password in "
                                          "the environment.")
+    p.add_argument("--linkage-depth", type=int, default=1,
+                   help="how many hops the link search takes (default 1: "
+                        "a direct co-spend). Depth 2 goes through one "
+                        "bridge and costs about 7 s per address against "
+                        "fractions of a second, so it is an option and "
+                        "not a default")
     p.add_argument("--csv", help="also write the answers as CSV")
+    p.add_argument("--json", nargs="?", const="check-results.json",
+                   help=f"also write the whole report as {cr.FORMAT_TAG} "
+                        "JSON (default: check-results.json). The text "
+                        "is for a person and the CSV is a lossy "
+                        "projection; this is the complete form")
     p.add_argument("--out", default="check-results.txt",
                    help="report file (default: check-results.txt). Results "
                         "list YOUR addresses, so they go to a local "
@@ -853,8 +1301,19 @@ def main(argv=None):
                 line = line.split("#", 1)[0].strip()
                 if line:
                     todo.append(line)
+    # The book is read before anything is opened or asked: a malformed
+    # book must cost nothing and must stop the run, because a report
+    # built on half a book is the falsely complete one.
+    book = None
+    if args.address_book:
+        try:
+            book = ab.load(args.address_book)
+        except (ab.BookError, OSError) as e:
+            sys.exit(f"ERROR: {args.address_book}: {e}")
+        todo.extend(book.addresses)
     if not todo:
-        p.error("no addresses given (positional or --file)")
+        p.error("no addresses given (positional, --file or "
+                "--address-book)")
 
     if bool(args.index) != bool(args.derived):
         p.error("--index and --derived go together (the derivatives are "
@@ -869,12 +1328,14 @@ def main(argv=None):
     try:
         backends = build_backends(args)
         if args.stdout:
-            run(todo, backends, args.csv)
+            run(todo, backends, args.csv, book=book,
+                json_path=args.json, depth=args.linkage_depth)
         else:
             with _private_file(args.out, encoding="utf-8") as f:
                 print("# this file lists YOUR addresses and their "
                       "answers: treat it as sensitive.", file=f)
-                run(todo, backends, args.csv, out=f)
+                run(todo, backends, args.csv, out=f, book=book,
+                    json_path=args.json, depth=args.linkage_depth)
             # The pointer goes to stderr: it names the file, never a
             # answer.
             print(f"results written to {args.out} — the file lists YOUR "
