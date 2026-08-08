@@ -78,7 +78,7 @@ def test_no_zero_where_nobody_looked(archive):
     against."""
     revealed, _ = _addresses()
     report = ca.build_report([revealed], ca.build_backends(
-        _args(archive=None)))
+        _sources(archive=None)))
     doc = cr.document(report)
     exposure = doc["summary"]["exposure"]
     check(exposure["values"] is None,
@@ -92,7 +92,7 @@ def test_no_zero_where_nobody_looked(archive):
 
     # And with the archive plugged, the same keys ARE there.
     with_archive = cr.document(ca.build_report(
-        [revealed], ca.build_backends(_args(archive=archive))))
+        [revealed], ca.build_backends(_sources(archive=archive))))
     v = with_archive["summary"]["exposure"]["values"]
     check(v["exposed_by_reuse"] == 1 and v["protected"] == 0,
           f"the counted case must be counted: {v}")
@@ -100,11 +100,16 @@ def test_no_zero_where_nobody_looked(archive):
           "somebody did")
 
 
-def _args(archive=None, index=None, derived=None, rpc=None):
-    import argparse
-    return argparse.Namespace(archive=archive, rpc=rpc, auth=None,
-                              cookie_file=None, index=index,
-                              derived=derived)
+def _sources(archive=None, index=None, derived=None, rpc=None):
+    """What to plug in, as `build_backends` wants it: a plain mapping.
+
+    It used to build an argparse Namespace, which is how the coupling
+    showed itself before anyone named it — a test that has to
+    manufacture a command line to reach a reader is a test reporting
+    that the reader knows about command lines.
+    """
+    return {"archive": archive, "rpc": rpc, "index": index,
+            "derived": derived}
 
 
 def test_crossed_declares_the_gap(archive):
@@ -165,7 +170,7 @@ def test_only_crossed_has_two_sources(archive):
 def test_coverage_counts_what_it_could_not_check(archive):
     revealed, _ = _addresses()
     report = ca.build_report([revealed, "totally-bogus"],
-                             ca.build_backends(_args(archive=archive)))
+                             ca.build_backends(_sources(archive=archive)))
     cov = cr.document(report)["coverage"]
     check(cov["addresses_given"] == 2 and cov["addresses_checked"] == 1
           and cov["addresses_undecodable"] == 1,
@@ -189,7 +194,7 @@ def test_book_groups_are_attributed_not_asserted(tmp, archive):
                             "descriptor_checksum": "8rjyrgz9"}}]}, f)
     book = ab.load(path)
     doc = cr.document(ca.build_report(
-        book.addresses, ca.build_backends(_args(archive=archive)), book))
+        book.addresses, ca.build_backends(_sources(archive=archive)), book))
     g = doc["coverage"]["groups"][0]
     check(g["label"] == "group-a" and g["claim"] == "separate",
           f"the group must reach the report: {g}")
@@ -262,7 +267,7 @@ def test_taproot_is_attributed_to_the_codec(archive):
     would give a height to a fact that has none."""
     tr = tca.segwit_addr(bytes(range(32)), 1)
     doc = cr.document(ca.build_report(
-        [tr], ca.build_backends(_args(archive=archive))))
+        [tr], ca.build_backends(_sources(archive=archive))))
     exposure = doc["addresses"][0]["exposure"]
     check(exposure["source"] == ca.ADDRESS_CODEC,
           f"a fact of the encoding is not an artifact answer: {exposure}")

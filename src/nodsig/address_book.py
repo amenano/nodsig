@@ -79,10 +79,10 @@ GROUP_KEYS = ("label", "claim", "addresses", "origin")
 # "recieve" would be rendered verbatim in the report and read as a fact
 # about how the list was derived.
 #
-# It is `origin` and not `provenance` because in this project that word
-# is reserved: it names the bits recording where a key was seen inside
-# an input, and nothing else (see AGENTS.md). One word for one job is
-# what keeps a format document readable.
+# The name is `origin` because the obvious alternative is a word this
+# project reserves to one job elsewhere. See AGENTS.md, "Words reserved
+# to ONE job": one word for one job is what keeps a format document
+# readable, and `tests/test_layering.py` keeps this honest.
 ORIGIN_KEYS = ("method", "descriptor_checksum", "script_type",
                "chain", "range", "gap_limit", "derived_at_height",
                "derived_by")

@@ -58,7 +58,11 @@ reassuring. A missing backend therefore never fakes an answer: the
 answer degrades honestly ("UNDETERMINED" plus the reason), the same
 rule the archive's lookup applies to absence. Adding an implementation
 = one class with `source()`, `describe()` and `query()`, registered
-in build_backends(); nothing else changes.
+in build_backends(); nothing else changes. That function takes a plain
+mapping of directories and URLs, never the command line's own object:
+the readers below it must work for any interface, and a signature that
+demanded a Namespace would have made the one designed attachment point
+the one place a second interface could not reach.
 
 The source is also why a report names `outpoint-derived-v2` and a
 fingerprint instead of the directory it read: a result must be
@@ -788,24 +792,45 @@ def _private_file(path, **kw):
     return os.fdopen(fd, "w", **kw)
 
 
-def build_backends(args, rpc_call=None):
+def build_backends(sources, rpc_call=None):
     """The single registration point of the interface. Order and
-    content ARE the configuration: our defaults, overridable by flags,
-    explorable by anyone who clones the tools."""
+    content ARE the configuration: our defaults, overridable by what the
+    caller supplies, explorable by anyone who clones the tools.
+
+    `sources` is a plain mapping of what to plug in, and every key is
+    optional:
+
+        archive       a reveal-archive-v2 directory
+        index         an outpoint-index-v2 directory
+        derived       an outpoint-derived-v2 directory (needs `index`)
+        witness       a nonces-witness-v1 directory
+        rpc           a node URL, for the live balance
+        cookie_file   where the node's credential is (never the value)
+
+    A MAPPING AND NOT THE COMMAND LINE'S OBJECT, and the distinction is
+    an invariant of this project rather than a preference: the kernels
+    and the readers know nothing about how a caller was invoked, and the
+    orchestration adapts. This function used to take argparse's
+    `Namespace`, which made the one place designed to be an attachment
+    point the one place that required a command line. `_backends_from_args`
+    below is that adapter, and it is the only thing here that knows what
+    a flag is.
+    """
+    get = sources.get
     backends = {}
-    if args.archive:
-        backends["exposure"] = RevealArchiveExposure(args.archive)
-    if args.rpc:
+    if get("archive"):
+        backends["exposure"] = RevealArchiveExposure(get("archive"))
+    if get("rpc"):
         # One single path for credentials, the same as every other
         # command: the cookie file, or NODSIG_RPC_AUTH. Never the argv.
         # See resolve_auth in reuse_scan.py.
         backends["balance"] = CoreBalance(
-            args.rpc, resolve_auth(args.cookie_file), rpc_call)
-    if getattr(args, "index", None) and getattr(args, "derived", None):
+            get("rpc"), resolve_auth(get("cookie_file")), rpc_call)
+    if get("index") and get("derived"):
         # One Index/Derived pair shared by both capabilities: the
         # resident tables (blocks.bin, ladders) are paid for once.
-        index = oi.Index(args.index)
-        derived = dvm.Derived(args.derived, index)
+        index = oi.Index(get("index"))
+        derived = dvm.Derived(get("derived"), index)
         backends["history"] = IndexHistory(index, derived)
         backends["co-inputs"] = IndexCoInputs(index, derived)
         backends["linkage"] = lk.IndexLinkage(index, derived)
@@ -815,8 +840,8 @@ def build_backends(args, rpc_call=None):
     # asked it", and the two are different answers — only one of them
     # is reassuring. The stub costs nothing and says which flag would
     # plug it in.
-    if getattr(args, "witness", None):
-        backends["nonce-exposure"] = WitnessNonceExposure(args.witness)
+    if get("witness"):
+        backends["nonce-exposure"] = WitnessNonceExposure(get("witness"))
     for cap, candidates in (
             ("exposure", "reveal-archive-v2 (--archive)"),
             ("balance", "bitcoin-core-rpc scantxoutset (--rpc)"),
@@ -829,6 +854,20 @@ def build_backends(args, rpc_call=None):
             ("nonce-exposure", f"{wit.FORMAT_TAG} (--witness)")):
         backends.setdefault(cap, NotPlugged(cap, candidates))
     return backends
+
+
+def _backends_from_args(args, rpc_call=None):
+    """The command line's own object, translated into the mapping above.
+
+    This is where knowledge of flags stops. Everything below it takes
+    directories and URLs, which is what lets a second interface (a
+    service, a notebook, another tool) reach the same readers without
+    manufacturing a Namespace to satisfy a signature.
+    """
+    return build_backends(
+        {k: getattr(args, k, None) for k in
+         ("archive", "index", "derived", "witness", "rpc", "cookie_file")},
+        rpc_call)
 
 
 # ---------------------------------------------------------------------------
@@ -1326,7 +1365,7 @@ def main(argv=None):
     # is the RPC failure, so one clause covers the three.
     backends = {}
     try:
-        backends = build_backends(args)
+        backends = _backends_from_args(args)
         if args.stdout:
             run(todo, backends, args.csv, book=book,
                 json_path=args.json, depth=args.linkage_depth)

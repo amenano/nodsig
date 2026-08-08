@@ -32,7 +32,6 @@ Usage:
     python3 test_check_addresses.py    # prints PASS or fails loudly
 """
 
-import argparse
 import hashlib
 import io
 import json
@@ -455,10 +454,7 @@ def test_address_book_input(tmp):
           "descriptor the position IS the derivation index")
 
     book = ab.load(path)
-    report = ca.build_report(book.addresses, ca.build_backends(
-        argparse.Namespace(archive=None, rpc=None, auth=None,
-                           cookie_file=None, index=None, derived=None)),
-        book)
+    report = ca.build_report(book.addresses, ca.build_backends({}), book)
     check([e.group for e in report.entries] == ["group-a", "group-b"],
           "every entry must remember the compartment that listed it")
     check(report.book is book, "the report must keep the book it read")
@@ -498,9 +494,7 @@ def pipeline(tmp):
 
 def _index_backends(pipeline):
     index_dir, derived_dir = pipeline
-    return ca.build_backends(argparse.Namespace(
-        archive=None, rpc=None, auth=None, cookie_file=None,
-        index=index_dir, derived=derived_dir))
+    return ca.build_backends({"index": index_dir, "derived": derived_dir})
 
 
 def test_script_pubkey():
