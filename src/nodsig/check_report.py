@@ -349,8 +349,8 @@ def document(report):
 
     Key order is the inverted pyramid, because a JSON also gets read
     with `less`. The ORDER IS NOT SEMANTIC: a tool binds to keys, never
-    to position. Inside v1 keys may be ADDED; the meaning of an
-    existing key never changes. Anything else is check-report-v2."""
+    to position. Inside v2 keys may be ADDED; the meaning of an
+    existing key never changes. Anything else is check-report-v3."""
     return {"warning": WARNING,
             "format": FORMAT_TAG,
             "sources": sources(report),
