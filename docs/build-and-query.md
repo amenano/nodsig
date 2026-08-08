@@ -234,6 +234,17 @@ repeat. Scan and cross-check must use the **same perimeter** (rule 3).
 
 ## Growing them, when the chain moves
 
+> **First, if the artifacts predate this version.** Growing and rewinding both
+> promise the bytes a rebuild would have written, so neither works across a
+> format change: an `outpoint-index-v2`, an `outpoint-derived-v2` or a
+> `nonces-v2` **cannot be extended or rewound** by 1.2.0, and the builders
+> refuse by name rather than producing something no rebuild matches. They are
+> still read, verified and queried — see the table in
+> [ARTIFACTS](ARTIFACTS.md#what-this-version-emits-and-what-it-still-reads).
+> Growing past one means building the new artifact from its parent, and for the
+> nonce census that means a fresh scan, because the census is co-emitted by the
+> pass that writes the archive.
+
 There is **no append command**. You re-run the same builders with a higher
 `--end`, and each one reads its own `state.json` to see that it already covers
 part of the range: new blocks extend the append-only files and add runs, and
@@ -315,7 +326,8 @@ nodsig nonces  rewind --nonces <nonces> --to-height <H>
 ```
 
 A rewind takes a sealed artifact back to a height it already covers, into the
-bytes a build that had stopped there would have written. It is not an undo of
+bytes a build that had stopped there would have written — which is why it is
+refused on an artifact sealed under an older format, exactly like growing one. It is not an undo of
 the last command; it is a different, cheaper road to the same artifact, and it
 is what makes growing them a two-way street rather than a one-way one. The
 reveal archive is the exception with a reason: its fusion folds many sightings
