@@ -131,6 +131,16 @@ over HTTP. Default UDS/localhost.
 Performance and reuse live in **pure kernels** with single responsibility; the
 **orchestration** (I/O policy, CLI, resume, source) is glue that calls them.
 
+**This one is pinned by a test, not by good intentions**
+(`tests/test_layering.py`): the kernels listed below never import `argparse`,
+and no function under the seam takes the command line's own object, except an
+adapter named `*_from_args`. The rule was written here and in `AGENTS.md` and
+still drifted for months, in the worst possible spot: the address check's
+registration point, the one place designed for another interface to attach,
+required a `Namespace`. A correctness review, a space review and a security
+audit all passed over it, each correctly, because each was looking for
+something else. An audit finds what it looks for; a test looks every time.
+
 **Extracted — one implementation for every builder:**
 
 1. **`hashing`** — sha256d, ripemd160 (with a pure-Python fallback for

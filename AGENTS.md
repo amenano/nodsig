@@ -46,6 +46,27 @@ service. These are deliberate choices, not gaps.
 - Extend a contract by implementing its interface and passing the **conformance
   vectors**; see the recipes in `docs/`.
 
+### These rules are executable
+
+The three sections below (words this project does not name its output
+after, words reserved to one job, and claims that must not be named after
+ownership) are checked by **`tests/test_layering.py`**, together with the
+kernel/orchestration seam of `ARCHITECTURE` §4.
+
+They are tests because all four had already drifted while written only as
+prose: two of them came back through a rule that lived in a commit
+message, and the seam one survived three audits, each of which was
+looking for something else. An audit finds what it looks for; a test looks
+every time. If a rule genuinely needs to change, change it **here first**
+and in that file second, in the same commit.
+
+One thing that file deliberately does NOT do is collect exceptions. Every
+name added to an allowlist is a place where the next reader greps, finds
+the word in a curated file, and reads precedent where a prohibition was
+meant, which is exactly how `verdict` came back. Documents that help
+somebody migrate from an older format may name the old key, because a
+migration needs it. Code points at the rule instead.
+
 ### Words this project does not use to NAME what it produces
 
 This tool **measures and does not judge**, and the vocabulary has to carry
