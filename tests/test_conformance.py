@@ -101,3 +101,67 @@ def test_addresscodec_vectors():
             raise AssertionError(f"{s!r} should have been rejected")
         except AddressError:
             pass
+
+
+# ---------------------------------------------------------------------------
+# The format matrix in the docs, pinned to the code
+# ---------------------------------------------------------------------------
+#
+# A hand-maintained "which version do we emit / read" table drifts exactly the
+# way scattered fingerprints do, and drifts silently: nothing breaks, a reader
+# is just told something that stopped being true. So the table lives in
+# docs/ARTIFACTS.md and this test rebuilds it from each module's FORMAT_TAG and
+# READ_TAGS. A format that moves without the documentation moving fails here.
+
+FORMAT_MATRIX = [
+    ("nodsig.graphemit", "graph"),
+    ("nodsig.headers", "headers"),
+    ("nodsig.reveal_archive", "revelation archive"),
+    ("nodsig.nonces", "nonce census"),
+    ("nodsig.witness", "nonce witness table"),
+    ("nodsig.outpoint_index", "outpoint index"),
+    ("nodsig.derivatives", "outpoint derivatives"),
+    ("nodsig.block_stats", "block stats"),
+    ("nodsig.address_book", "address book (input)"),
+    ("nodsig.check_report", "check report (output)"),
+]
+
+ARTIFACTS_DOC = os.path.join(os.path.dirname(os.path.dirname(
+    os.path.abspath(__file__))), "docs", "ARTIFACTS.md")
+
+
+def test_the_format_matrix_matches_the_code():
+    import importlib
+    rows = {}
+    for module, label in FORMAT_MATRIX:
+        mod = importlib.import_module(module)
+        tag = mod.FORMAT_TAG
+        also = [t for t in getattr(mod, "READ_TAGS", ()) if t != tag]
+        rows[label] = (tag, also)
+
+    with open(ARTIFACTS_DOC) as f:
+        doc = f.read()
+    for label, (tag, also) in rows.items():
+        want = (f"| {label} | `{tag}` | "
+                + (" ".join(f"`{t}`" for t in also) if also else "—")
+                + " |")
+        assert want in doc, (
+            f"docs/ARTIFACTS.md is missing or has a stale row for {label}.\n"
+            f"  expected: {want}\n"
+            "  The code is the authority: fix the table, not the constant.")
+
+    # And the other direction, which is the one that actually rots: a row in
+    # the table for a format nothing emits any more.
+    import re
+    section = doc.split("## What this version emits, and what it still reads")[1]
+    section = section.split("\n## ")[0]
+    for line in section.splitlines():
+        m = re.match(r"\|\s*([^|]+?)\s*\|\s*`([^`]+)`", line)
+        if m and m.group(1) not in ("artifact", "---"):
+            assert m.group(1) in rows, (
+                f"docs/ARTIFACTS.md lists '{m.group(1)}', which no module in "
+                "FORMAT_MATRIX emits: either the artifact went away or this "
+                "test needs the new module added")
+            assert rows[m.group(1)][0] == m.group(2), (
+                f"'{m.group(1)}' is documented as {m.group(2)} but the code "
+                f"emits {rows[m.group(1)][0]}")

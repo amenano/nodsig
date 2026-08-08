@@ -5,6 +5,15 @@ with the files on a network mount rather than a local disk, so the timings are
 a pessimistic case rather than a flattering one. Nothing here is a mock-up, and
 nothing here contacted a node: these are lookups in files.
 
+> **Which artifacts these are, stated up front.** They were sealed by 1.0.0 and
+> 1.1.0, so they are `outpoint-index-v2`, `outpoint-derived-v2` and
+> `nonces-v2`. Version 1.2.0 **reads all three** — that is what the transcripts
+> below show — but it **emits** `outpoint-index-v3`, `outpoint-derived-v3` and
+> `nonces-v3`, which are different bytes and therefore different fingerprints.
+> A file name in a transcript (`spends_g0002.bin`) is the v2 name for that
+> reason. See [the changelog](../CHANGELOG.md) for what moved and what it
+> costs; this page will be re-shot from v3 artifacts once they exist.
+
 The output is text and CSV. The figures further down are what a plotting
 script makes of those CSVs; nodsig does not draw, it counts. The two on the
 nonce census come with the script that drew them.
@@ -266,8 +275,12 @@ checked rather than believed.
 
 ## Reproducing any of it
 
-The build sequence is in the [README](../README.md). The artifacts these
-numbers come from were sealed with these fingerprints:
+The build sequence is in the [README](../README.md).
+
+The artifacts these numbers come from are the **first published set**: height
+957,301, sealed by 1.0.0 and 1.1.0. Their fingerprints are recorded here once,
+as a historical reference and as a worked example of what a fingerprint looks
+like and what it covers:
 
 - revelation archive: `aacaf02dca2fc5ba8532e54fa75159041fc99051efa68eb63e59bc9537369ced`
 - outpoint index: `338c6c48f6e6c806c6d0a494bb9ca5060adcb83167c0db45328d39b40b14a69d`
@@ -277,9 +290,45 @@ numbers come from were sealed with these fingerprints:
 - nonce census: `8aa19fba72a482958b61ddc6ef315fec40a275237d705f8e85cd15a8df8da8a1`
 - nonce witness table: `7d4823f419306ff4b25757e47e365498cb8f3d165361b8ecc82ed0cf47ab5bf8`
 
-Rebuild to height 957,301 and you should find them again, byte for byte. That
-is the whole claim of this project, and it is checkable rather than
-persuasive.
+Rebuild to height 957,301 **with the version that sealed them** and you should
+find them again, byte for byte. That is the whole claim of this project, and it
+is checkable rather than persuasive.
+
+The qualification is not a softening, and leaving it out would have been the
+dishonest move. Three of those seven — index, derivatives, nonce census —
+belong to formats 1.2.0 no longer emits, so rebuilding with 1.2.0 reproduces
+the other four and produces **new, equally reproducible** fingerprints for the
+three. The promise was always "same input, same version, same bytes"; it never
+was "the bytes never change", which would have meant a format that can never be
+corrected.
+
+### This list is not updated, and that is the policy
+
+**No other document in this repository cites a fingerprint as something to
+check against, and none will.** A fingerprint is a fact about one build, at one
+height, under one set of formats: every rebuild retires it, and a repository
+that quotes it in five places gets five chances to be wrong and no way to
+notice. We had exactly that problem, which is how this paragraph came to be
+written.
+
+What replaces it is not less checkable, it is checkable at the right moment:
+every build **prints** its fingerprint, every artifact **records** it in its own
+`manifest.json`, `verify` **recomputes** it from the bytes on disk, and the
+declared parent lets a consumer confirm the chain graph → index → derivatives.
+None of that goes stale, because none of it is a copy.
+
+What stays here is what a frozen number is actually good for: a worked example,
+and the historical record of the first publication. The other one in this
+repository is the same species — the three v1 digests in
+[RevealArchive-v2](formats/RevealArchive-v2.md), published in July 2026 by a
+build predating the format, which `archive v1-digests` confronts a fresh scan
+with. Both are anchors to a moment. Neither is a promise about the next build.
+
+What the rule rules out is **copies**, not a list. A single document naming
+known artifacts — height, formats, fingerprint — for somebody who wants to
+confront a download against something is the opposite of scattering, and would
+have one honest property this page cannot have: it would say what it covers,
+and admit it can never cover everything. There is no such document yet.
 
 ---
 

@@ -9,6 +9,34 @@ Byte layouts are in [`formats/`](formats/); the interfaces that read them are in
 are in [`build-and-query.md`](build-and-query.md). Directory names below are
 placeholders: every one of them is a path you choose on the command line.
 
+## What this version emits, and what it still reads
+
+<!-- FORMAT-MATRIX: generated from the modules' FORMAT_TAG / READ_TAGS and
+     pinned by tests/test_conformance.py. Edit the code, not this table. -->
+
+| artifact | emits | also reads |
+|---|---|---|
+| graph | `graph-v2` | — |
+| headers | `headers-v2` | — |
+| revelation archive | `reveal-archive-v2` | — |
+| nonce census | `nonces-v3` | `nonces-v2` |
+| nonce witness table | `nonces-witness-v1` | — |
+| outpoint index | `outpoint-index-v3` | `outpoint-index-v2` |
+| outpoint derivatives | `outpoint-derived-v3` | `outpoint-derived-v2` |
+| block stats | `block-stats-v2` | — |
+| address book (input) | `address-book-v2` | — |
+| check report (output) | `check-report-v2` | — |
+
+**Reading widens; emission never does.** Where a previous format is listed, an
+artifact sealed under it still verifies and still answers questions, so what
+you downloaded keeps its value. It cannot be **extended or rewound**: both
+operations promise the bytes a rebuild would have written, and a fusion across
+two layouts matches no rebuild. Each refusal says which format it met and why.
+
+This table is not maintained by hand. It is checked against the modules'
+`FORMAT_TAG` and `READ_TAGS` by the test suite, so a format that moves without
+the documentation moving fails the build rather than misleading a reader.
+
 ## The flow
 
 **One pass over the chain is all you need.** It is the only long step that talks
@@ -196,11 +224,16 @@ file describes the shapes, and shapes do not have fingerprints. `nodsig
 On the 2026 chain through height 957,301, as an order of magnitude for planning.
 Yours will differ with the height and with how much of the chain you cover.
 
+`<index>` and `<derived>` are **projected** for the v3 formats 1.2.0 emits: the
+measured v2 pair was 248 and 191 GB, and the narrower spend side and `u56`
+satoshi fields account for the difference by arithmetic. The v3 pair has not
+been built yet, so provision for the larger numbers.
+
 | Artifact | Size |
 |---|---|
 | `<graph>/` | ~301 GB |
-| `<index>/` | ~248 GB |
-| `<derived>/` | ~191 GB |
+| `<index>/` | ~229 GB |
+| `<derived>/` | ~186 GB |
 | `<archive>/` | ~87 GB |
 | `<nonces>/` | ~55-60 GB |
 | `<locks>/`, `<checkpoint>/`, CSVs | small enough not to plan for |

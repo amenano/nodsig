@@ -240,8 +240,8 @@ wall times from one real run to height 957,301, and sizes for that height:
 | `graph fingerprint` | ~5 h | nothing: it re-reads and prints |
 | `archive derive` | ~5 h 40 | the reuse table, and its `curve.csv` |
 | `archive curve` | ~2 h | `revelations.csv`: first revelations per window |
-| `index build` | ~25 h | `<index>` ~248 GB |
-| `derived build` | ~14 h 30 | `<derived>` ~191 GB |
+| `index build` | ~25 h | `<index>` ~229 GB |
+| `derived build` | ~14 h 30 | `<derived>` ~186 GB |
 
 The audits are cheap next to the builds, and that is the point of them. From
 the same run: `archive verify --deep` ~1 h 40, `index verify --graph` ~1 h,
@@ -253,6 +253,13 @@ the step you skip.
 Every number in that table comes from the slow end of every choice it depends
 on. Read the two paragraphs below before concluding that a use case is out of
 reach.
+
+Two of the sizes are **projections, not measurements**, and saying which is the
+point. The last full run was built by 1.1.0 and measured `<index>` at 248 GB and
+`<derived>` at 191; 1.2.0 narrows the spend side and the satoshi fields, which
+takes 18.9 GB off the first and 5.2 off the second by arithmetic on the record
+widths. Nobody has built the v3 pair yet. If you are provisioning a disk, use
+the older, larger figures and be pleasantly surprised.
 
 The figures above come from one run to height 957,301, and the mount changed
 partway through it, which is worth stating because the mount matters more than
@@ -276,7 +283,7 @@ have built anything, `nodsig report` prints what **yours** cost beside what they
 are: it reads the durations out of the manifests the builders sealed, so the
 figures are the artifacts' own rather than a transcription.
 
-Roughly **five to six days** and **~885 GB** if you build all of it and keep
+Roughly **five to six days** and **~861 GB** if you build all of it and keep
 everything. The section below on what to keep is worth reading before you size
 the disk, because the largest artifact is the one no query reads.
 

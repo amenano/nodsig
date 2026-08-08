@@ -9,7 +9,7 @@ languages unchanged. This file is the single definition; contracts reference it.
 | Type | Meaning |
 |---|---|
 | `u32`, `u64` | unsigned integers, **big-endian** in every format and on the wire |
-| `u24`, `u40` | 24-/40-bit unsigned (on-disk widths); widen to `u32`/`u64` in-memory |
+| `u24`, `u40`, `u56` | 24-/40-/56-bit unsigned (**on-disk widths only**); widen to `u32`/`u64` in-memory. `u56` carries satoshis: the whole supply is 2.1e15 and 2^56 is 7.2e16 |
 | `digest20` | 20 bytes — a `hash160` (RIPEMD160∘SHA256) |
 | `digest32` | 32 bytes — a `sha256` or a txid |
 | `bytes`, `string`, `bool` | as usual; `string` is UTF-8 |

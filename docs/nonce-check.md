@@ -22,7 +22,7 @@ door:
 
 | | exposure | a repeated nonce |
 |---|---|---|
-| artifacts | the archive alone (33.9 GB for single-key addresses) | the outpoint index **and** its derivatives (~439 GB) |
+| artifacts | the archive alone (33.9 GB for single-key addresses) | the outpoint index **and** its derivatives (~415 GB) |
 | a node | no | **yes** |
 | offline | yes | no |
 | optional extra | none | the census (~55-60 GB) for the chain-wide view |

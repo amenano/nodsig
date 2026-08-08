@@ -31,6 +31,24 @@ optimized for analytical reads.
   (UNDETERMINED/UNSUPPORTED), never a silent default or an uncounted drop.
 - **Big-endian integers** in the formats (byte order is numeric order).
 - **One-way contracts**: public code never names private extensions.
+- **Do not scatter fingerprints through the documentation.** A fingerprint is
+  a fact about one build, at one height, under one set of formats, so every
+  copy of it is a place that will silently go stale — and the reader has no
+  way to tell which copy aged. The live answer is printed by the build,
+  recorded in each `manifest.json`, and recomputed from the bytes by `verify`.
+
+  Two frozen sets exist on purpose and are **historical anchors, not values to
+  keep aligned**: the first published artifacts in `docs/gallery.md` and the
+  three v1 digests in `docs/formats/RevealArchive-v2.md`, which
+  `archive v1-digests` confronts a fresh scan with. Do not update either.
+
+  The rule forbids **copies**, not a registry. A single document listing known
+  artifacts (height, formats, fingerprint) for readers who want a cross-check
+  would be its opposite, and is an open idea rather than a prohibition: one
+  place that says what it covers, and admits it can never be exhaustive.
+- **The format matrix in `docs/ARTIFACTS.md` is generated from the code.** If
+  a `FORMAT_TAG` or `READ_TAGS` moves, fix the table; never the reverse.
+  `tests/test_conformance.py` fails if the two disagree, in both directions.
 
 ## Out of scope (do not add it)
 
