@@ -1193,7 +1193,12 @@ def run_verify(derived_dir, index_dir=None):
     manifest = _load_manifest(derived_dir, accept=READ_TAGS)
     coverage = None
     if index_dir is not None:
-        imanifest = oi._load_manifest(index_dir)
+        # The parent is being READ, not built on, so the widened set
+        # applies: a v2 pair must be able to confirm its own ancestry.
+        # This was strict, and the real artifacts found it — the audit
+        # refused at the door with "unknown index manifest format" while
+        # every other v2 path worked.
+        imanifest = oi._load_manifest(index_dir, accept=oi.READ_TAGS)
         # The parent's manifest must first agree with itself: comparing
         # two stored fingerprint strings confirms nothing if the one in
         # the parent was left behind by an edit of its identity block.

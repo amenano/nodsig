@@ -696,7 +696,12 @@ def test_a_v2_pair_is_still_readable(dbuilt):
         d.close()
         idx.close()
     dv.run_verify(v2d)
-    print("ok  a sealed v2 pair still reads and verifies")
+    # And with the parent, which is the line the real artifacts ran and
+    # this test did not: confirming a v2 derived artifact against the v2
+    # index it declares. It was strict, and refused at the door.
+    dv.run_verify(v2d, v2i)
+    print("ok  a sealed v2 pair still reads, verifies, and confirms its "
+          "own ancestry")
 
 
 def test_building_on_v2_derivatives_refuses_loudly(dbuilt):

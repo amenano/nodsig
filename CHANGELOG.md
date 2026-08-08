@@ -18,8 +18,30 @@ Three questions are answered under every release:
 The two clocks of this project stay separate, as
 [the README's *Stability* section](README.md) says: the **formats** are the
 contract, the **CLI** is convenience, and `reveal-archive-v2` inside a tool
-numbered 1.2.0 is not a discrepancy. Artifacts are identified by their
+numbered 1.2.1 is not a discrepancy. Artifacts are identified by their
 fingerprint, never by a tag.
+
+## 1.2.1 — a v2 pair can confirm its own ancestry again
+
+### Fixed
+
+- **`derived verify --index` refused a v2 index.** The parent's manifest was
+  loaded with the strict reader, so confronting `outpoint-derived-v2` with the
+  `outpoint-index-v2` it declares failed instantly with "unknown index manifest
+  format", while every other v2 path worked. Reading a parent to confirm
+  ancestry is a read, and now uses the widened set like the rest of them.
+
+  Found by running the audit against the real published artifacts rather than
+  against fixtures: the suite covered `derived verify` on a v2 pair, but not
+  with `--index`, which is the form that actually confirms anything. The test
+  now passes the parent, and fails without the fix.
+
+### Do your artifacts still work?
+
+**Yes, and one more command works on them than did yesterday.** Nothing about
+what this version *writes* changed — no format, no record width, no
+fingerprint, and an artifact built by 1.2.0 is byte-identical to one built by
+1.2.1. Nothing needs rebuilding for this.
 
 ## 1.2.0 — the spend side, in one slot per output
 
