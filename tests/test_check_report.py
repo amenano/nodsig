@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 test_check_report.py — self-test for check_report.py, the
-`check-report-v1` document.
+`check-report-v2` document.
 
 The per-address answers are already covered by test_check_addresses.py.
 What is tested here is what AGGREGATION can get wrong, and every case
@@ -182,25 +182,25 @@ def test_book_groups_are_attributed_not_asserted(tmp, archive):
     path = os.path.join(tmp, "book.json")
     with open(path, "w", encoding="utf-8") as f:
         json.dump({"format": ab.FORMAT_TAG, "groups": [
-            {"label": "group-a", "claim": "mine",
+            {"label": "group-a", "claim": "separate",
              "addresses": ["1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa",
                            "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa"],
-             "provenance": {"source": "descriptor",
+             "origin": {"method": "descriptor",
                             "descriptor_checksum": "8rjyrgz9"}}]}, f)
     book = ab.load(path)
     doc = cr.document(ca.build_report(
         book.addresses, ca.build_backends(_args(archive=archive)), book))
     g = doc["coverage"]["groups"][0]
-    check(g["label"] == "group-a" and g["claim"] == "mine",
+    check(g["label"] == "group-a" and g["claim"] == "separate",
           f"the group must reach the report: {g}")
     check(g["duplicates_removed"] == 1,
           f"a dropped repeat is declared, not absorbed: {g}")
-    check(g["provenance_attributed_to"] == "input, not verified",
-          "provenance without that field reads as something the tool "
+    check(g["origin_attributed_to"] == "input, not verified",
+          "origin without that field reads as something the tool "
           f"checked: {g}")
     check(cr.CAVEAT_COVERAGE in doc["limits"],
           "a report built from a book must carry the coverage caveat")
-    print("ok  coverage: groups carried, provenance attributed, "
+    print("ok  coverage: groups carried, origin attributed, "
           "duplicates declared")
 
 

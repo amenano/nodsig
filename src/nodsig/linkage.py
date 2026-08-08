@@ -65,7 +65,7 @@ module's output.
 
 from nodsig.capability import Status
 
-# Classes, as they are named in `check-report-v1`.
+# Classes, as they are named in `check-report-v2`.
 SAME_KEY = "same_key"
 COMMON_INPUT = "common_input"
 PAYMENT_ARC = "payment_arc"
@@ -374,7 +374,7 @@ def separations(classes, book, bounded, watermark):
     anything, because nobody claimed it."""
     if book is None:
         return []
-    claimed = [g.label for g in book.groups if g.claimed_mine]
+    claimed = [g.label for g in book.groups if g.claims_separation]
     breaks = {}
     for cls in (SAME_KEY, COMMON_INPUT):
         for f in classes[cls]["findings"]:

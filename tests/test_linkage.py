@@ -276,8 +276,8 @@ def _book(tmp, groups):
 
 def test_a_broken_separation_names_what_broke_it(tmp, backend):
     book = _book(tmp, [
-        {"label": "group-a", "claim": "mine", "addresses": [address(H_A)]},
-        {"label": "group-b", "claim": "mine", "addresses": [address(H_X)]}])
+        {"label": "group-a", "claim": "separate", "addresses": [address(H_A)]},
+        {"label": "group-b", "claim": "separate", "addresses": [address(H_X)]}])
     entries = entries_for(book.addresses, book=book)
     block = lk.build(entries, backend, 1, book)
     sep = block["declared_separations"]
@@ -295,8 +295,8 @@ def test_a_held_separation_declares_what_bounded_the_search(tmp,
     hubs travel with it, and so does the asymmetry — a merge is
     permanent, a non-merge is one transaction away from ending."""
     book = _book(tmp, [
-        {"label": "group-a", "claim": "mine", "addresses": [address(H_A)]},
-        {"label": "group-c", "claim": "mine", "addresses": [address(H_C)]}])
+        {"label": "group-a", "claim": "separate", "addresses": [address(H_A)]},
+        {"label": "group-c", "claim": "separate", "addresses": [address(H_C)]}])
     entries = entries_for(book.addresses, book=book)
     block = lk.build(entries, backend, 1, book)
     sep = block["declared_separations"][0]
@@ -319,7 +319,7 @@ def test_a_held_separation_declares_what_bounded_the_search(tmp,
 
 def test_only_claimed_groups_are_separated(tmp, backend):
     book = _book(tmp, [
-        {"label": "group-a", "claim": "mine", "addresses": [address(H_A)]},
+        {"label": "group-a", "claim": "separate", "addresses": [address(H_A)]},
         {"label": "theirs", "claim": "watching",
          "addresses": [address(H_C)]}])
     entries = entries_for(book.addresses, book=book)
@@ -337,8 +337,8 @@ def test_a_payment_arc_never_breaks_a_separation(tmp, backend):
     """A funded an output of D and they were never spent together. "A
     paid D" must not read as "A and D are one entity"."""
     book = _book(tmp, [
-        {"label": "group-a", "claim": "mine", "addresses": [address(H_A)]},
-        {"label": "group-d", "claim": "mine", "addresses": [address(H_D)]}])
+        {"label": "group-a", "claim": "separate", "addresses": [address(H_A)]},
+        {"label": "group-d", "claim": "separate", "addresses": [address(H_D)]}])
     entries = entries_for(book.addresses, book=book)
     block = lk.build(entries, backend, 1, book)
     check(block["classes"][lk.PAYMENT_ARC]["findings"],

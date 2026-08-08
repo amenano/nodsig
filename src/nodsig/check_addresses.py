@@ -1214,7 +1214,7 @@ def render_csv(report, csv_path):
 
 
 def render_json(report, json_path):
-    """The report as a tool reads it: `check-report-v1`, the complete
+    """The report as a tool reads it: `check-report-v2`, the complete
     form. 0600 like every other file that lists somebody's addresses,
     and byte-identical between two runs over the same artifacts — there
     is no timestamp in it on purpose."""
@@ -1246,7 +1246,7 @@ def main(argv=None):
                                   "# comments allowed")
     p.add_argument("--address-book",
                    help=f"{ab.FORMAT_TAG} JSON: addresses in named "
-                        "groups, each group claimed as 'mine' or "
+                        "groups, each group claimed as 'separate' or "
                         "'watching'. A flat list cannot say which "
                         "addresses you MEANT to keep apart, and "
                         "without that claim a sentence about "

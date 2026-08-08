@@ -236,10 +236,10 @@ $ nodsig check --address-book book.json --archive <archive-dir> \
 ```
 
 The book is JSON, and its shape is in
-[`formats/AddressBook-v1.md`](formats/AddressBook-v1.md):
+[`formats/AddressBook-v2.md`](formats/AddressBook-v2.md):
 
 ```json
-{"format": "address-book-v1",
+{"format": "address-book-v2",
  "groups": [{"label": "cold", "claim": "mine", "addresses": ["bc1q…", "1…"]},
             {"label": "counterparty", "claim": "watching",
              "addresses": ["3…"]}]}
@@ -316,7 +316,7 @@ the chain. The strong version of the question is
 
 The text report is for a person, the CSV is a **lossy** projection of one row
 per address, and `--json` is the complete form
-([`formats/CheckReport-v1.md`](formats/CheckReport-v1.md)). All three are
+([`formats/CheckReport-v2.md`](formats/CheckReport-v2.md)). All three are
 renderings of one structure — none recomputes anything — and the JSON has no
 timestamp in it, so two runs over the same artifacts produce the same bytes:
 you can diff yesterday's report against today's and see only what moved on the

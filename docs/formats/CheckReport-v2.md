@@ -1,4 +1,4 @@
-# CheckReport-v1: format (output)
+# CheckReport-v2: format (output)
 
 > **Not an artifact.** No manifest, no fingerprint, nothing seals it and
 > no nodsig command reads it back. It is here because this directory is
@@ -35,7 +35,7 @@ loss takes, and the two rules that answer them:
 ```json
 {
   "warning": "this file lists YOUR addresses and what is known about them",
-  "format": "check-report-v1",
+  "format": "check-report-v2",
   "sources":  { "…": "one entry per capability" },
   "coverage": { "…": "what was given, what was checked" },
   "summary":  { "…": "sums, per capability, plus `crossed`" },
@@ -72,6 +72,15 @@ instead of "nobody asked it".
 }
 ```
 
+| key | type | value |
+|---|---|---|
+| `status` | string | `OK` \| `UNSUPPORTED` \| `UNDETERMINED`. **These three, everywhere in this document**: `OK` means the source answered and the answer may well be a definite negative; `UNSUPPORTED` means this source has no such capability, usually because nothing was plugged in; `UNDETERMINED` means partial data that cannot decide |
+| `id` | string or null | a format tag (`reveal-archive-v2`), or a role name for a live source (`bitcoin-core-rpc scantxoutset`). **Never a path.** `null` when nothing answered |
+| `watermark` | integer or null | highest confirmed height the source covers |
+| `fingerprint` | string or null | the canonical fingerprint of a **sealed** source. `null` when the source still holds unfused runs, which is queryable but unsealed and must be reported as such rather than dressed up as sealed |
+| `live` | boolean | true when the answer came from a node rather than a sealed artifact, and therefore moves between runs |
+| `pluggable` | string | present only on `UNSUPPORTED`: what would plug this capability in, with its flag |
+
 Fingerprints go in **whole**: the text truncates them because a person
 reads it, a tool wants the digest. `id` is a format tag or a role name,
 **never a path**.
@@ -88,16 +97,30 @@ height there would promise a perimeter the table has not got.
   "addresses_undecodable": 3,
   "groups": [{"label": "cold", "claim": "mine", "addresses": 25,
               "duplicates_removed": 1,
-              "provenance": {"…": "as given"},
-              "provenance_attributed_to": "input, not verified"}],
+              "origin": {"…": "as given"},
+              "origin_attributed_to": "input, not verified"}],
   "wallet_completeness": "unknown to nodsig"
 }
 ```
 
 `wallet_completeness` always says exactly that, and it is not a lazy
 field: nodsig does not know how many addresses you did not name and
-cannot. `provenance_attributed_to` exists because without it, in a JSON,
+cannot. `origin_attributed_to` exists because without it, in a JSON,
 that block reads like something the tool checked.
+
+| key | type | value |
+|---|---|---|
+| `addresses_given` | integer | lines read from the input, decodable or not |
+| `addresses_checked` | integer | those that decoded, so those the capabilities could answer about |
+| `addresses_undecodable` | integer | the difference, kept rather than dropped: a book with three unreadable addresses is a book checked for three fewer |
+| `groups` | list | one entry per group, only when an address book was given |
+| `groups[].label` | string | as written in the book, **verbatim** |
+| `groups[].claim` | string | `separate` \| `watching`, as written |
+| `groups[].addresses` | integer | how many after duplicates inside the group were dropped |
+| `groups[].duplicates_removed` | integer | present only when non-zero |
+| `groups[].origin` | object | the book's `origin` block, **as given** |
+| `groups[].origin_attributed_to` | string | always `"input, not verified"`, present whenever `origin` is |
+| `wallet_completeness` | string | always `"unknown to nodsig"` |
 
 ## `summary`
 
@@ -205,9 +228,23 @@ other two need the index and the derivatives.
   where;
 - **`payment_arc` never breaks a separation.** "A paid B" is not "A and
   B are one entity";
-- **`declared_separations` exists only for groups claimed `mine`**, and
-  `held: true` is never an attestation: it always carries `as_of` and
-  `bounded_by`.
+- **`declared_separations` exists only for groups claimed `separate`**,
+  and `held: true` is never an attestation: it always carries `as_of`
+  and `bounded_by`. The claim is about intended separation and not about
+  ownership: see [AddressBook-v2](AddressBook-v2.md).
+
+The three classes, which are three different statements and not three
+strengths of one:
+
+| class | the fact | what it does NOT mean |
+|---|---|---|
+| `same_key` | two addresses are the same 20-byte digest under two encodings | nothing perishable: this one comes from the codec, has no height and no fingerprint |
+| `common_input` | coins of two addresses were spent by one transaction | not proof of one owner: a coinjoin is exactly this shape, which is why the class carries a `caveat` string |
+| `payment_arc` | one address's coins funded an output of another | **never** that they are one entity, and it never breaks a separation |
+
+Each class carries its own `status` from the same three values as
+`sources`, because `same_key` answers with no artifacts at all while the
+other two need the index and the derivatives.
 
 ## `addresses`
 
@@ -221,6 +258,29 @@ source once:
  "balance":  {"status": "OK", "source": "balance", "sats": 0},
  "history":  {"status": "OK", "source": "history", "values": {"…": "…"}}}
 ```
+
+| key | type | value |
+|---|---|---|
+| `address` | string | as you wrote it, **verbatim** |
+| `kind` | string | `p2pkh` \| `p2sh` \| `p2wpkh` \| `p2wsh` \| `p2tr`. What the address decoded to, not what your `origin.script_type` claimed |
+| `group` | string or absent | the group label, when an address book was given |
+| `error` | string | present **instead of every capability block** when the address did not decode |
+| `exposure.value` | string | `exposed_by_construction` \| `exposed_by_reuse` \| `protected` \| `undetermined` |
+| `balance.sats` | integer | satoshis at the balance source's watermark |
+| `history.values` | object | `received_sats`, `spent_sats`, `unspent_sats`, `outputs`, `first_height`, `last_height` |
+
+The four `exposure.value` keys say what is known about the public key
+behind the address, and they are not degrees of a single scale:
+
+- `exposed_by_construction` — the encoding itself carries the key, so
+  nothing had to be spent for it to be visible. `p2tr` is the case, and
+  it is readable from `input.by_kind` without any archive;
+- `exposed_by_reuse` — the key was revealed by a spend, and the archive
+  holds the sighting. **It implies the address has spent**;
+- `protected` — the archive covers this address's category and has no
+  sighting of it. It speaks of the hash and not of who could spend
+  behind it;
+- `undetermined` — no answer, and none guessed.
 
 `exposure.value` is a **key**, not the printed sentence: the sentence
 merges the balance in ("exposed but empty: nothing at stake"), and a
@@ -244,12 +304,19 @@ not decode carries `error` instead of any capability block.
 
 ## Compatibility
 
-`format` is exactly `check-report-v1`. Inside v1, **keys may be added;
+`format` is exactly `check-report-v2`. Inside v2, **keys may be added;
 the meaning of an existing key never changes.** Anything else is
-`check-report-v2`. A careful reader ignores keys it does not know — the
+`check-report-v3`. A careful reader ignores keys it does not know — the
 only place this project recommends that, and the opposite of
-[AddressBook-v1](AddressBook-v1.md), where an unknown key is refused,
+[AddressBook-v2](AddressBook-v2.md), where an unknown key is refused,
 because there it is you mistyping and here it is us adding.
+
+**What changed from v1**, which shipped in 1.1.0: in `coverage.groups`,
+`provenance` is now `origin` and `provenance_attributed_to` is now
+`origin_attributed_to`; `groups[].claim` carries `separate` where it
+used to carry `mine`. Both follow the input format
+([AddressBook-v2](AddressBook-v2.md)), and both are renames: no value
+changed meaning and no number moved.
 
 Reference implementation: `src/nodsig/check_report.py`, with the
 aggregation rules exercised in `tests/test_check_report.py`.

@@ -95,6 +95,44 @@ of a public API. Two lessons, and this file is the fix for both:
   precedent where a prohibition was meant. An exception is only safe when it
   is written down beside the rule, as the paragraph above does.
 
+### Words reserved to ONE job
+
+A different failure from the one above, and it has already happened twice.
+These words are not forbidden: each names exactly one thing here, and using
+it for a second thing is what makes a format document unreadable, because a
+reader who greps finds two answers and no way to tell which is theirs.
+
+| word | names, and only this | for the other job |
+|---|---|---|
+| `provenance` | the bits recording **where a key was seen inside an input** (`reveal-archive-v2`) | `source` for who answered; `ancestry` for the chain back to the blocks; `origin` for where a list of addresses came from |
+| `source` | **who answered a question**, as `Source { id, watermark, fingerprint }` | `origin`, `method`, or the specific noun |
+| `ancestry` | the chain of artifacts back to the blocks | it has no second job |
+
+**How both breaches happened**, because the pattern is the point. The first
+time, one word was doing three jobs at once and had to be split. The split
+was correct, and it was recorded **in a commit message**: months later a new
+input format called its origin block `provenance`, which was a fourth job,
+and it shipped in a public format before anyone noticed. That is the same
+lesson as the section above, arriving from a different direction: **the rule
+was written, but not where a reader looks.**
+
+The tell is worth learning, because it is cheap: when naming a field, grep
+the tree for the word first. Two unrelated hits mean the name is taken.
+
+### Do not name a claim after ownership
+
+`check` reads an address book whose groups carry a `claim`. That claim used
+to be `"mine"`, and it is now `"separate"`. Not for delicacy: `"mine"`
+described a relationship between the author and the addresses, while the
+only thing the value has ever governed is whether the group takes part in
+the separation sentences.
+
+nodsig cannot know who controls an address; that would take a signature. A
+field, a value or a sentence that implies otherwise teaches every reader
+that the tool established something it never looked at. What the input may
+ask about is **what the author intended** (these were meant to be kept
+apart, this one I am only watching), never who owns what.
+
 ### Naming an output file
 
 Two shapes, and which one applies is decided by **what happens to the file

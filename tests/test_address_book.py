@@ -53,7 +53,7 @@ def check(cond, msg):
 
 def book(**over):
     """A minimal valid book, overridable field by field."""
-    group = {"label": "group-a", "claim": "mine",
+    group = {"label": "group-a", "claim": "separate",
              "addresses": [GENESIS, BIP173]}
     group.update(over)
     return {"format": ab.FORMAT_TAG, "groups": [group]}
@@ -75,10 +75,10 @@ def test_minimal():
     b = ab.loads(json.dumps(book()))
     check(len(b.groups) == 1, "one group expected")
     g = b.groups[0]
-    check(g.label == "group-a" and g.claim == "mine", "group fields lost")
+    check(g.label == "group-a" and g.claim == "separate", "group fields lost")
     check(g.addresses == [GENESIS, BIP173],
           f"the order of the list is meaning, not decoration: {g.addresses}")
-    check(g.claimed_mine, "'mine' must be the claimed case")
+    check(g.claims_separation, "'mine' must be the claimed case")
     check(b.addresses == [GENESIS, BIP173], "flat list wrong")
     check(b.group_of(BIP173) == "group-a", "group_of lost the label")
     check(b.group_of("never-listed") is None,
@@ -86,34 +86,34 @@ def test_minimal():
     print("ok  minimal book: order preserved, claim read, groups mapped")
 
 
-def test_provenance_is_read_and_typed():
-    """Provenance is the author's claim and nothing here verifies it —
+def test_origin_is_read_and_typed():
+    """Origin is the author's claim and nothing here verifies it —
     but the TYPES are checked, because the report renders these values
     verbatim and a mistyped `chain` would be read as a fact about how
     the list was derived."""
-    p = {"source": "descriptor", "descriptor_checksum": "8rjyrgz9",
+    p = {"method": "descriptor", "descriptor_checksum": "8rjyrgz9",
          "script_type": "wpkh", "chain": "both", "range": [0, 999],
          "gap_limit": 20, "derived_at_height": 957301,
          "derived_by": "bitcoin core 27.0, deriveaddresses"}
-    b = ab.loads(json.dumps(book(provenance=p)))
-    check(b.groups[0].provenance == p, "provenance not carried through")
-    check(ab.loads(json.dumps(book())).groups[0].provenance is None,
-          "provenance is optional and absent must stay absent")
+    b = ab.loads(json.dumps(book(origin=p)))
+    check(b.groups[0].origin == p, "origin not carried through")
+    check(ab.loads(json.dumps(book())).groups[0].origin is None,
+          "origin is optional and absent must stay absent")
 
-    refuses(book(provenance={"sauce": "descriptor"}),
-            "unknown provenance key", "unknown key")
-    refuses(book(provenance={"source": "guesswork"}),
-            "source outside the three", "source must be one of")
-    refuses(book(provenance={"chain": "recieve"}),
+    refuses(book(origin={"sauce": "descriptor"}),
+            "unknown origin key", "unknown key")
+    refuses(book(origin={"method": "guesswork"}),
+            "method outside the three", "method must be one of")
+    refuses(book(origin={"chain": "recieve"}),
             "misspelled chain", "chain must be one of")
-    refuses(book(provenance={"range": [0]}), "range of one", "two integers")
-    refuses(book(provenance={"range": ["0", "999"]}),
+    refuses(book(origin={"range": [0]}), "range of one", "two integers")
+    refuses(book(origin={"range": ["0", "999"]}),
             "range of strings", "two integers")
-    refuses(book(provenance={"gap_limit": "20"}),
+    refuses(book(origin={"gap_limit": "20"}),
             "gap limit as a string", "must be an integer")
-    refuses(book(provenance={"derived_at_height": True}),
+    refuses(book(origin={"derived_at_height": True}),
             "a bool is not a height", "must be an integer")
-    print("ok  provenance: carried as given, refused when mistyped")
+    print("ok  origin: carried as given, refused when mistyped")
 
 
 def test_unknown_keys_refused_at_every_level():
@@ -128,7 +128,7 @@ def test_unknown_keys_refused_at_every_level():
 
 def test_format_and_shape():
     refuses({"groups": []}, "no format", "format must be")
-    refuses({"format": "address-book-v2", "groups": []},
+    refuses({"format": "address-book-v3", "groups": []},
             "a format from the future", "format must be")
     refuses({"format": ab.FORMAT_TAG}, "no groups", "non-empty list")
     refuses({"format": ab.FORMAT_TAG, "groups": []}, "empty groups",
@@ -156,15 +156,15 @@ def test_claim_is_required_and_exact():
     refuses(book(claim=True), "claim as a boolean",
             "claim must be exactly one of")
     watched = ab.loads(json.dumps(book(claim="watching")))
-    check(not watched.groups[0].claimed_mine,
+    check(not watched.groups[0].claims_separation,
           "'watching' must not count as claimed")
     print("ok  refusal: claim required, exact, never defaulted")
 
 
 def test_labels_and_addresses():
     two = {"format": ab.FORMAT_TAG, "groups": [
-        {"label": "group-a", "claim": "mine", "addresses": [GENESIS]},
-        {"label": "group-a", "claim": "mine", "addresses": [BIP173]}]}
+        {"label": "group-a", "claim": "separate", "addresses": [GENESIS]},
+        {"label": "group-a", "claim": "separate", "addresses": [BIP173]}]}
     refuses(two, "repeated label", "duplicate label")
     refuses(book(label=""), "empty label", "non-empty string")
     refuses(book(label="   "), "whitespace label", "non-empty string")
@@ -178,8 +178,8 @@ def test_labels_and_addresses():
 
 def test_same_address_in_two_groups_is_a_contradiction():
     raw = {"format": ab.FORMAT_TAG, "groups": [
-        {"label": "group-a", "claim": "mine", "addresses": [GENESIS]},
-        {"label": "group-b", "claim": "mine",
+        {"label": "group-a", "claim": "separate", "addresses": [GENESIS]},
+        {"label": "group-b", "claim": "separate",
          "addresses": [BIP173, GENESIS]}]}
     refuses(raw, "one address in two compartments",
             "separate from itself")
@@ -203,8 +203,8 @@ def test_two_encodings_of_one_key_are_kept():
     and stay two entries: refusing them would erase the sharpest finding
     the report can produce (same key across two compartments)."""
     raw = {"format": ab.FORMAT_TAG, "groups": [
-        {"label": "group-a", "claim": "mine", "addresses": [GENESIS]},
-        {"label": "group-b", "claim": "mine", "addresses": [BIP173]}]}
+        {"label": "group-a", "claim": "separate", "addresses": [GENESIS]},
+        {"label": "group-b", "claim": "separate", "addresses": [BIP173]}]}
     b = ab.loads(json.dumps(raw))
     check(len(b.addresses) == 2, "both encodings must survive the reader")
     print("ok  kept: two encodings of one key are a finding, not a "
@@ -223,7 +223,7 @@ def test_load_from_disk(tmp):
 
 def main():
     test_minimal()
-    test_provenance_is_read_and_typed()
+    test_origin_is_read_and_typed()
     test_unknown_keys_refused_at_every_level()
     test_format_and_shape()
     test_claim_is_required_and_exact()

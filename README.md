@@ -419,8 +419,8 @@ list in named groups, each claimed as `mine` or `watching`, and the report then
 also says which of your addresses the chain already ties together and whether
 the separations you meant to keep are still standing. `--json` writes the
 complete form of the same answer for a tool to read. Both formats are
-documented — [`AddressBook-v1`](docs/formats/AddressBook-v1.md),
-[`CheckReport-v1`](docs/formats/CheckReport-v1.md) — and the page that explains
+documented — [`AddressBook-v2`](docs/formats/AddressBook-v2.md),
+[`CheckReport-v2`](docs/formats/CheckReport-v2.md) — and the page that explains
 how to read a report with two perimeters in it is
 [`docs/exposure-check.md`](docs/exposure-check.md).
 

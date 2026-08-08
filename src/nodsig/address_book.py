@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-address_book.py — the reader for `address-book-v1`, the input format of
+address_book.py — the reader for `address-book-v2`, the input format of
 the address check: a list of addresses plus the two things a bare list
 cannot say.
 
@@ -15,20 +15,27 @@ need more than a list:
                    comparison: intended separation against observed
                    separation. A flat list has no compartments, so the
                    comparison cannot even be stated;
-    a claim        who the compartment belongs to. "A and B are linked"
-                   asks the author nothing — the evidence is on the
-                   chain. "A and B still look separate" says nothing at
-                   all unless somebody claimed they were meant to be:
-                   two random addresses are trivially unlinked.
+    a claim        whether the compartment was MEANT to stay apart from
+                   the others. "A and B are linked" asks the author
+                   nothing — the evidence is on the chain. "A and B
+                   still look separate" says nothing at all unless
+                   somebody claimed they were meant to be: two random
+                   addresses are trivially unlinked.
 
 Hence `claim`, and hence it is REQUIRED. A default would license the
 report's strongest sentence on a permission nobody gave. It is a string
-and not a boolean for two reasons: `mine: true` reads as "this group is
-mine" in the empty sense that the file's author wrote it, and a third
-case ("I used to control these") arrives as a new value instead of a new
-type.
+and not a boolean because a third case arrives as a new value instead of
+a new type.
 
-`provenance` is the third thing, and it is what lets the report say a
+WHAT THE CLAIM IS NOT: a statement of OWNERSHIP. It says these addresses
+were meant to be kept apart from the other groups claimed the same way,
+and nothing more. nodsig cannot know who controls an address — that
+would take a signature — and a format that asked would be collecting an
+answer it can neither use nor check. `separate` and `watching` therefore
+name what the author INTENDED about the addresses, never a relationship
+between the author and them.
+
+`origin` is the third thing, and it is what lets the report say a
 coverage sentence instead of admitting it knows nothing. Every field in
 it is REPORTED AS THE AUTHOR'S CLAIM and verified by nothing here: the
 report renders it attributed, never asserted.
@@ -61,21 +68,26 @@ share.
 
 import json
 
-FORMAT_TAG = "address-book-v1"
+FORMAT_TAG = "address-book-v2"
 
-CLAIMS = ("mine", "watching")
+CLAIMS = ("separate", "watching")
 
-GROUP_KEYS = ("label", "claim", "addresses", "provenance")
+GROUP_KEYS = ("label", "claim", "addresses", "origin")
 
-# Provenance: every field optional, every field a claim. The types are
+# Origin: every field optional, every field a claim. The types are
 # checked even though the content is not verified — a `chain` of
 # "recieve" would be rendered verbatim in the report and read as a fact
 # about how the list was derived.
-PROVENANCE_KEYS = ("source", "descriptor_checksum", "script_type",
-                   "chain", "range", "gap_limit", "derived_at_height",
-                   "derived_by")
-PROVENANCE_SOURCES = ("descriptor", "wallet-export", "manual")
-PROVENANCE_CHAINS = ("receive", "change", "both")
+#
+# It is `origin` and not `provenance` because in this project that word
+# is reserved: it names the bits recording where a key was seen inside
+# an input, and nothing else (see AGENTS.md). One word for one job is
+# what keeps a format document readable.
+ORIGIN_KEYS = ("method", "descriptor_checksum", "script_type",
+               "chain", "range", "gap_limit", "derived_at_height",
+               "derived_by")
+ORIGIN_METHODS = ("descriptor", "wallet-export", "manual")
+ORIGIN_CHAINS = ("receive", "change", "both")
 
 
 class BookError(ValueError):
@@ -106,23 +118,29 @@ class Group:
     say "the 17th receive address" without the format carrying one more
     field."""
 
-    __slots__ = ("label", "claim", "addresses", "provenance",
+    __slots__ = ("label", "claim", "addresses", "origin",
                  "duplicates_removed")
 
-    def __init__(self, label, claim, addresses, provenance=None,
+    def __init__(self, label, claim, addresses, origin=None,
                  duplicates_removed=0):
         self.label = label
         self.claim = claim
         self.addresses = addresses
-        self.provenance = provenance
+        self.origin = origin
         self.duplicates_removed = duplicates_removed
 
     @property
-    def claimed_mine(self):
-        """Only a claimed group takes part in the separation sentences
-        (§the claim, above). A `watching` group is not second class:
-        links TOWARDS it are searched and reported like any other."""
-        return self.claim == "mine"
+    def claims_separation(self):
+        """Only a group claimed `separate` takes part in the separation
+        sentences (§the claim, above). A `watching` group is not second
+        class: links TOWARDS it are searched and reported like any other.
+
+        The claim says nothing about OWNERSHIP, and the name is careful
+        about it: nodsig has no way to know who controls an address and
+        does not ask. What is claimed is that these addresses were meant
+        to be kept apart from the other groups claimed the same way, and
+        that intent is the only thing the separation sentences need."""
+        return self.claim == "separate"
 
 
 class AddressBook:
@@ -153,16 +171,16 @@ class AddressBook:
         return None
 
 
-def _provenance(raw, label):
-    where = f"group {label!r}: provenance"
-    _keys(raw, PROVENANCE_KEYS, where)
+def _origin(raw, label):
+    where = f"group {label!r}: origin"
+    _keys(raw, ORIGIN_KEYS, where)
     p = dict(raw)
-    if "source" in p and p["source"] not in PROVENANCE_SOURCES:
-        raise BookError(f"{where}: source must be one of "
-                        f"{', '.join(PROVENANCE_SOURCES)}")
-    if "chain" in p and p["chain"] not in PROVENANCE_CHAINS:
+    if "method" in p and p["method"] not in ORIGIN_METHODS:
+        raise BookError(f"{where}: method must be one of "
+                        f"{', '.join(ORIGIN_METHODS)}")
+    if "chain" in p and p["chain"] not in ORIGIN_CHAINS:
         raise BookError(f"{where}: chain must be one of "
-                        f"{', '.join(PROVENANCE_CHAINS)}")
+                        f"{', '.join(ORIGIN_CHAINS)}")
     rng = p.get("range")
     if rng is not None and not (isinstance(rng, list) and len(rng) == 2
                                 and all(isinstance(v, int)
@@ -224,11 +242,11 @@ def _group(raw, index, seen_labels, seen_addresses):
         seen_addresses[a] = label
         addresses.append(a)
 
-    provenance = raw.get("provenance")
-    if provenance is not None:
-        provenance = _provenance(provenance, label)
+    origin = raw.get("origin")
+    if origin is not None:
+        origin = _origin(origin, label)
 
-    return Group(label, claim, addresses, provenance, dropped)
+    return Group(label, claim, addresses, origin, dropped)
 
 
 def loads(text):

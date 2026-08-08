@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-check_report.py — `check-report-v1`, the output format of the address
+check_report.py — `check-report-v2`, the output format of the address
 check, and the aggregation every rendering of it reads.
 
 THE QUESTION THAT GOVERNS THE WHOLE DOCUMENT
@@ -59,7 +59,7 @@ import textwrap
 from nodsig.capability import Status
 from nodsig.reuse_scan import SAT
 
-FORMAT_TAG = "check-report-v1"
+FORMAT_TAG = "check-report-v2"
 
 # The first key of the document, and the only redundant one. The text
 # report carries the same warning as a comment on its first line; JSON
@@ -143,11 +143,11 @@ def coverage(report):
                      "addresses": len(g.addresses)}
             if g.duplicates_removed:
                 entry["duplicates_removed"] = g.duplicates_removed
-            if g.provenance is not None:
-                entry["provenance"] = g.provenance
+            if g.origin is not None:
+                entry["origin"] = g.origin
                 # Without this field the block reads, in a JSON, like
                 # something the tool verified. It verified nothing.
-                entry["provenance_attributed_to"] = "input, not verified"
+                entry["origin_attributed_to"] = "input, not verified"
             cov["groups"].append(entry)
     return cov
 
@@ -345,7 +345,7 @@ def addresses(report):
 
 
 def document(report):
-    """The whole `check-report-v1`, as a plain dict.
+    """The whole `check-report-v2`, as a plain dict.
 
     Key order is the inverted pyramid, because a JSON also gets read
     with `less`. The ORDER IS NOT SEMANTIC: a tool binds to keys, never
@@ -420,8 +420,8 @@ def render_overview_text(report, out):
             if "duplicates_removed" in g:
                 line += (f", {g['duplicates_removed']} repeat(s) "
                          "dropped")
-            if "provenance" in g:
-                p = g["provenance"]
+            if "origin" in g:
+                p = g["origin"]
                 said = ", ".join(f"{k} {v}" for k, v in sorted(p.items()))
                 line += f"; you state: {said} (not verified here)"
             print(line, file=out)

@@ -75,8 +75,8 @@ record layout + ordering rule + canonical fingerprint + ancestry (every
 manifest names its parent).
 
 Two documents in that directory are **not artifacts** and say so in their first
-line: [`AddressBook-v1`](formats/AddressBook-v1.md), the input of `check`, and
-[`CheckReport-v1`](formats/CheckReport-v1.md), its complete output. Nobody
+line: [`AddressBook-v2`](formats/AddressBook-v2.md), the input of `check`, and
+[`CheckReport-v2`](formats/CheckReport-v2.md), its complete output. Nobody
 seals them and no nodsig command reads them back; they sit there because that
 directory is *the formats we promise stability on*, which is what a third-party
 tool needs.

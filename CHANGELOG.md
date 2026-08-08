@@ -21,6 +21,55 @@ contract, the **CLI** is convenience, and `reveal-archive-v2` inside a tool
 numbered 1.1.0 is not a discrepancy. Artifacts are identified by their
 fingerprint, never by a tag.
 
+## Unreleased
+
+### Formats
+
+- **`address-book-v1` → `address-book-v2`** (input, not an artifact). Three
+  renames, no value changed meaning:
+
+  | v1 | v2 | why |
+  |---|---|---|
+  | group key `provenance` | `origin` | `provenance` already names the bits recording where a key was seen inside an input. One word, one job |
+  | inner key `source` | `method` | `source` already names who answered a question, in the report's `sources` block |
+  | claim `"mine"` | `"separate"` | the value never described ownership, only whether the group takes part in the separation sentences. nodsig cannot know who controls an address, and a value name should not imply it did |
+
+- **`check-report-v1` → `check-report-v2`** (output, not an artifact). Follows
+  the input: in `coverage.groups`, `provenance` → `origin` and
+  `provenance_attributed_to` → `origin_attributed_to`, and `claim` carries
+  `separate` where it carried `mine`.
+- **`nonces-v2` → `nonces-v3`.** The census refuses two values ECDSA cannot
+  produce, `r == 0` and `r >= n`, so what is collected changes. Reading is
+  widened rather than moved: `groups`, `lookup`, `verify`, `resolve` and
+  `check` all work on a v2 census, so a census downloaded under 1.0.0 or 1.1.0
+  keeps its value. **A v2 census cannot be grown or rewound**, and the tool
+  says so: extending it would fuse records the current rules refuse, producing
+  a file no rebuild reproduces.
+- **unchanged:** `reveal-archive-v2`, `outpoint-index-v2`,
+  `outpoint-derived-v2`, `nonces-witness-v1`, `graph-v2`, `headers-v2`.
+
+### Do your artifacts still work?
+
+**Every artifact still verifies, and only the nonce census needs rebuilding
+to gain anything.** The census you hold is read, audited and resolved by this
+version exactly as before; what it cannot do is grow. Rebuilding it means a
+full chain scan, because the census is co-emitted by the pass that builds the
+reveal archive: on the last measured run that pass took **58 h 47**, and it
+re-emits the archive and the headers with it.
+
+What the rebuild buys is small and worth stating plainly: measured on the
+sealed census, the two rules remove **at most 79 records out of
+3,727,721,550**. They are worth having for correctness, not for space. A
+reader who only queries has no reason to hurry.
+
+### Under the hood
+
+- **`blockparse` is 1.46× faster**, measured on 200 real blocks from five eras
+  of the chain (7.73 → 5.29 microseconds per input), with the parsed
+  structures compared field by field and identical. It changes no format and
+  no fingerprint; it makes every scan shorter. Roughly 3.6 hours of the 58 h
+  47 above.
+
 ## 1.1.0 — the check reads a whole wallet
 
 ### Command line

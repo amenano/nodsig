@@ -444,7 +444,7 @@ def test_address_book_input(tmp):
     other = "bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh"
     with open(path, "w", encoding="utf-8") as f:
         json.dump({"format": ab.FORMAT_TAG, "groups": [
-            {"label": "group-a", "claim": "mine", "addresses": [genesis]},
+            {"label": "group-a", "claim": "separate", "addresses": [genesis]},
             {"label": "group-b", "claim": "watching",
              "addresses": [other]}]}, f)
 
@@ -464,8 +464,8 @@ def test_address_book_input(tmp):
     check(report.book is book, "the report must keep the book it read")
 
     with open(path, "w", encoding="utf-8") as f:
-        f.write('{"format": "address-book-v1", "groups": [{"label": "a", '
-                '"claim": "mine", "adresses": ["1x"]}]}')
+        f.write('{"format": "address-book-v2", "groups": [{"label": "a", '
+                '"claim": "separate", "adresses": ["1x"]}]}')
     try:
         ca.main(["--address-book", path, "--out", out])
     except SystemExit as e:
