@@ -67,7 +67,18 @@ carry several keys with different outcomes:
 | `one-signature` | same key, exactly one canonical `s` | one signature published more than once (copied, or as `s` and `n-s`): it signs one message and exposes nothing |
 | `distinct-keys` | one point, several keys | neither key follows; the point was not drawn at random, and whether that was a fault or a choice is not said |
 | `prefix-collision` | two different `r` under one 12-byte point | not a repeated nonce at all |
+| `not-a-signature` | every row's `r` is `0` or `>= n` | ECDSA requires `0 < r < n`, so these bytes had a signature's shape without being one: no nonce, no key, nothing to resolve |
 | `undetermined` | the key is absent or the input is ambiguous | no resolution, and none is guessed |
+
+`not-a-signature` is said before the prefix test when both would apply,
+because it is the stronger statement: "these are not signatures" explains why
+the scalars under one prefix differ, where "they differ" only reports it.
+
+It is also the one resolution a fresh census can no longer produce.
+[`Nonces-v3`](Nonces-v3.md) refuses those values at extraction, so a v3 parent
+brings none of them through; the resolution stays because this table also
+resolves the `nonces-v2` censuses the tool still reads, and because a stranger
+auditing an older table has to be able to read what it says.
 
 All three conditions of `exposed` are load-bearing, and each was a defect
 once. The **full `r`**: two scalars can share the census's 12-byte prefix,

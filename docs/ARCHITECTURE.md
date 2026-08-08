@@ -225,6 +225,34 @@ fusion tries, or the search costs more than the walk it replaces. The plain road
 (a first build, which has no previous generation) pays **2–5% more** for the
 dispatch that chooses between the two.
 
+**Step (2), done for the parser, and step (1) is why it looks like this.**
+`blockparse` runs over every input ever confirmed, so a microsecond an input
+is an hour of wall clock, and it had never been profiled: "it is only a
+parser" reads like something already as fast as it gets. The profile says the
+cost was not the work but the SHAPE of the code. Over thirty real blocks:
+1,754,242 calls to `_take` and 1,037,092 to `read_compactsize`, whose bodies
+are an addition, a comparison and a slice, plus 3,109,441 calls to `len`. So
+the bounds checks stay inline and the helper is reached only to raise, `len`
+is read once per transaction instead of once per field, and the one-byte
+compactsize form is read inline while the long forms stay in the function.
+Every error message is unchanged, which was the constraint and not a
+by-product: with gigabytes streaming past, an error that says only "bad data"
+is useless. Separately, a `TxIn` used to be built without its witness (which
+is serialized after the outputs) and then rebuilt by `_replace`, at about
+1.7× the constructor, once per input of every SegWit transaction; the fields
+now wait in a plain tuple and the record is built once. Measured on 200 real
+blocks drawn from five eras of the chain: **1.46×**, 7.73 to 5.29 microseconds
+an input, with the parsed structures compared field by field and identical.
+
+That measurement is also the clearest argument for this section's own
+sequence, because it refuted the intuition that sent us looking. Inside the
+old parser, hashing (already native, via OpenSSL) was 19.7% of the time,
+walking the bytes 8.3%, and **building the Python objects 69.9%**. A native
+kernel that parsed the same bytes and returned the same structures would
+therefore have a ceiling near 1.12×: it removes the walk and pays the
+allocation regardless. The residue worth attacking natively is never obvious
+before (1), and here it was not the pass that looked slowest.
+
 **Sequence (demand-driven):** kernel/orchestration boundaries first (design) →
 I/O + algorithm wins if needed → native kernels only on the residue, one at a
 time, when a bottleneck actually blocks a use case. The right moment is for the
