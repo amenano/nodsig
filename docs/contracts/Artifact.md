@@ -8,7 +8,7 @@ no `Result<T>` envelope.
 - **Layer:** orchestration over L0. See [ARCHITECTURE](../ARCHITECTURE.md).
 - **Instances:** [Headers-v2](../formats/Headers-v2.md),
   [Graph-v2](../formats/Graph-v2.md),
-  [OutpointIndex-v2](../formats/OutpointIndex-v2.md),
+  [OutpointIndex-v3](../formats/OutpointIndex-v3.md),
   [OutpointDerived-v2](../formats/OutpointDerived-v2.md),
   [RevealArchive-v2](../formats/RevealArchive-v2.md),
   [Nonces-v3](../formats/Nonces-v3.md),

@@ -597,13 +597,13 @@ occupies. That is the price of the guarantee: a machine killed mid-fusion
 leaves the previous generation whole, and the artifact is never in a state that
 has to be believed.
 
-**An append re-reads `spends.bin` once, whole.** The spend file is re-sorted by
-spent ordinal at every index fusion, so a byte offset into one generation names
-nothing in the next; a resuming scan cannot seek, it partitions. Each append
-cycle therefore makes one sequential pass over the whole file and keeps the
-edges whose spender belongs to it. The cost is per append **run**, not per
-block: appending a day of blocks in one run costs one pass, appending them one
-at a time costs one pass each. Batch them.
+**An append re-reads the spend side once, whole.** A new block can spend an
+output written years earlier, so the record for that output changes below
+wherever a previous run stopped: a resuming scan cannot seek, it partitions.
+Each append cycle therefore makes one sequential pass over `spender_of.bin` and
+keeps the edges whose spender belongs to it. The cost is per append **run**, not
+per block: appending a day of blocks in one run costs one pass, appending them
+one at a time costs one pass each. Batch them.
 
 **Going back is cheaper than rebuilding.** `index rewind` and `derived rewind`
 take a sealed artifact to a height it already covered, into the same bytes, and

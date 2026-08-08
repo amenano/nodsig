@@ -57,7 +57,7 @@ instead of restating them.
    group longer than its sampling step.
 
 10. **A commit is additive: write beside, name it, only then delete.** Every
-    artifact that grows by generations — `outpoint-index-v2`,
+    artifact that grows by generations — `outpoint-index-v3`,
     `outpoint-derived-v2` and `nonces-v3` through `genstore`,
     `reveal-archive-v2` by hand —
     MUST write the next generation of a file **beside** the current one, then

@@ -4,7 +4,7 @@ derivatives.py — the three spend-side DERIVATIVES of the outpoint
 index: the payment history of a lock (Q3), the fee of every
 transaction, and the co-spend reading (the common-input hint of Q2).
 One build, one directory, one fingerprint — everything derived from
-`outpoint-index-v2` alone, no node and no graph needed.
+`outpoint-index-v3` alone, no node and no graph needed.
 
 Why these three together: the design promise of the outpoint index
 was that ONE expensive derivative unlocks three questions at once.
@@ -37,7 +37,7 @@ numeric order, so sorting and searching never decode a field):
                    transaction's inputs, adjacent. This is the
                    co-spend reader — outputs consumed together by one
                    transaction, the common-input hint — and the
-                   inverse of the index's spends.bin.
+                   inverse of the index's spender_of.bin.
     fees.bin        8 B per transaction, POSITIONAL by tx ordinal:
                        fee u64 (satoshis)
                    fee = sum of input values − sum of output values;
@@ -80,8 +80,9 @@ HONEST BOUNDARIES, stated once
 
 BUILD = one sequential pass over the index + one sort per side
 ==============================================================
-    scan           outputs.bin, spends.bin and tx_first_out.bin are
-                   all ordinal-ordered, so ONE aligned pass zips them:
+    scan           outputs.bin, spender_of.bin and tx_first_out.bin
+                   are all ordinal-ordered, so ONE aligned pass zips
+                   them (spender_of even shares the output's index):
                    each output meets its (at most one) spend in
                    lockstep, emits a history row and, if spent, a
                    spender-side record (spender | out | value, 18 B);
@@ -94,16 +95,19 @@ BUILD = one sequential pass over the index + one sort per side
                    is the format's, not an accident. Outputs and
                    transactions are append-only in the index — an
                    ordinal is theirs forever — so their cursors mean
-                   the same thing across generations. spends.bin is
-                   re-sorted by SPENT ordinal at every index fusion,
-                   so a block that spends anything older than the
-                   highest already-spent output inserts edges in the
-                   MIDDLE, and a record offset into the old generation
-                   names nothing in the new one. Each cycle therefore
-                   re-reads spends.bin whole and keeps the edges whose
+                   the same thing across generations. spender_of.bin
+                   is positional too and its slots never move — and
+                   that is exactly the trap, because the obvious
+                   conclusion ("so the cursor can be kept") is wrong:
+                   a new block spending an OLD output mutates a slot
+                   BELOW the cursor. Each cycle therefore re-reads
+                   spender_of.bin whole and keeps the edges whose
                    SPENDER is one of its own transactions: an exact
                    partition (an old transaction cannot gain inputs),
                    at the cost of one sequential pass per append.
+                   Under v2 the reason was different (the file was
+                   re-sorted at every fusion); the reason changed, the
+                   rule did not.
     merge-history  fuse history runs → history.bin (+ ladder), the
                    same generation-committed fusion the index uses.
     merge-inputs   fuse spender runs: the stream arrives grouped by
@@ -298,7 +302,7 @@ class _ForwardOutputs:
 
     The append path asks for the (value, lock) of every OLD output its
     new blocks spend, in the order the spend walk yields them — which is
-    ascending, because spends.bin is sorted by output ordinal. One
+    ascending, because spender_of.bin is indexed by it. One
     positioned read per ordinal pays a network round-trip for 28 bytes,
     up to hundreds of millions of times per append; a window slid only
     forward turns a dense update stream into one sequential pass over
@@ -338,7 +342,7 @@ def _phase_scan(index, store, flush_records, checkpoint_every):
     n_sp_t = man["spends"]
     out_pos, spend_pos = state["out_pos"], state["spend_pos"]
     tx_pos = state["tx_pos"]
-    if out_pos > n_out_t or spend_pos > n_sp_t or tx_pos > n_tx_t:
+    if out_pos > n_out_t or spend_pos > n_out_t or tx_pos > n_tx_t:
         raise OutpointError("state cursors are past the index: this "
                             "is not the index the build started on")
     # Whether the index has grown is read on the APPEND-ONLY files: an
@@ -352,13 +356,13 @@ def _phase_scan(index, store, flush_records, checkpoint_every):
     if state["out_sums_base"] is None:
         # A NEW CYCLE OPENS. outputs.bin and tx_first_out.bin only ever
         # grow at the tail, so their cursors survive an index append
-        # untouched. spends.bin does NOT: it is re-fused and re-sorted
-        # by SPENT ordinal at every index fusion, and a new block
-        # almost always spends outputs older than the highest one
-        # already spent — so the new edges land in the MIDDLE of the
-        # file and a record offset into the old generation names
-        # nothing in the new one. The cycle therefore re-reads
-        # spends.bin from the start and keeps the edges whose SPENDER
+        # untouched. The SLOT CURSOR does not, and the reason is not
+        # the one v2 had. spender_of.bin is positional and its slots
+        # never move, so it is tempting to keep the cursor across an
+        # append — and wrong: a new block almost always spends outputs
+        # older than the newest one, and each such spend MUTATES A SLOT
+        # BELOW THE CURSOR. The cycle therefore re-reads
+        # spender_of.bin from the start and keeps the edges whose SPENDER
         # is one of its own transactions. That is an exact partition of
         # the file: every edge belongs to the cycle that scanned its
         # spender, an old transaction can never gain an input, and a
@@ -367,7 +371,7 @@ def _phase_scan(index, store, flush_records, checkpoint_every):
         spend_pos = state["spend_pos"] = 0
 
     outs = _index_stream(index, "outputs", oi.OUT_REC, out_pos)
-    spends = _index_stream(index, "spends", oi.SPEND_REC, spend_pos)
+    slots = _index_stream(index, "spender_of", oi.SPENDER_REC, spend_pos)
     tfo = _index_stream(index, "tx_first_out", oi.TFO_REC, tx_pos)
     cycle_base5 = state["out_sums_base"].to_bytes(ORD, "big")
 
@@ -388,19 +392,36 @@ def _phase_scan(index, store, flush_records, checkpoint_every):
     checkpoint_due = False
 
     def next_spend():
-        """The next edge THIS cycle owns, from the cursor on.
+        """The next edge THIS cycle owns, as (output | spender), from
+        the slot cursor on.
 
-        Edges whose spender belongs to an earlier cycle were consumed
-        there: they are stepped over, and the cursor counts them,
-        because the cursor is a position in this generation of
-        spends.bin, not a count of edges kept. The record it names is
-        always the one buffered next and never one already digested, so
-        a checkpoint resumes exactly here."""
+        The cursor is now simply an OUTPUT ORDINAL: spender_of.bin has
+        one slot per output, in output order, so the position and the
+        key are the same number and the old bookkeeping (a cursor that
+        counted stepped-over records because it was a position in a
+        file that got re-sorted) is gone with the file it described.
+        Slots owned by an earlier cycle are still stepped over, and the
+        record returned is the one buffered next and never one already
+        digested, so a checkpoint resumes exactly here.
+
+        The marker is refused, not represented: an output with more
+        than one spender is an anomaly the INDEX records and counts,
+        and derivatives are built on publication-grade sources only
+        (INVARIANTS). This is the same refusal the v2 code made when it
+        saw two rows with one key — the same rule, at the same layer,
+        reading a different shape."""
         nonlocal spend_pos
-        for rec in spends:
-            if rec[ORD:2 * ORD] >= cycle_base5:
-                return rec
-            spend_pos += 1              # an earlier cycle's: stepped over
+        for slot in slots:
+            if slot == oi.SLOT_MANY:
+                raise OutpointError(
+                    f"output ordinal {spend_pos} has MORE THAN ONE "
+                    "spender: this index records a duplicate_spends "
+                    "anomaly, and derivatives computed over one would "
+                    "be numbers that look true. Fix the source, do not "
+                    "derive from it")
+            if slot != UNSPENT and slot >= cycle_base5:
+                return spend_pos.to_bytes(ORD, "big") + slot
+            spend_pos += 1              # unspent, or an earlier cycle's
         return None
 
     def flush_run(cat, records):
@@ -472,11 +493,11 @@ def _phase_scan(index, store, flush_records, checkpoint_every):
             emit_update(spend_rec)
             spend_rec = next_spend()
         spender = UNSPENT
-        while spend_rec is not None and spend_rec[:ORD] == out5:
-            if spender != UNSPENT:
-                raise OutpointError(
-                    f"output ordinal {out_pos} spent twice — corrupt "
-                    "index (its duplicate_spends should have said so)")
+        # One slot per output, so at most one edge can name this
+        # ordinal: the "spent twice" case cannot reach here any more,
+        # because the shape cannot express it. It is caught upstream by
+        # next_spend, on the marker, which is where the index put it.
+        if spend_rec is not None and spend_rec[:ORD] == out5:
             spender = spend_rec[ORD:2 * ORD]
             spend_pos += 1
             spend_rec = next_spend()
@@ -493,11 +514,11 @@ def _phase_scan(index, store, flush_records, checkpoint_every):
 
     # Trailing spends can only be updates of old outputs (an append
     # whose new blocks spend more than they create cannot happen —
-    # every block has a coinbase — but the drain is still written).
+    # every block has a coinbase — but the drain is still written). A
+    # slot past the watermark is no longer possible to express: the
+    # file has exactly n_out slots, and the length check below is what
+    # says so.
     while spend_rec is not None:
-        if spend_rec[:ORD] >= n_out_t.to_bytes(ORD, "big"):
-            raise OutpointError("a spend references an output past the "
-                                "index watermark — corrupt index")
         emit_update(spend_rec)
         spend_rec = next_spend()
 
@@ -506,13 +527,15 @@ def _phase_scan(index, store, flush_records, checkpoint_every):
     if tx_pos != n_tx_t or next(tfo, None) is not None:
         raise OutpointError("transaction walk did not end on the "
                             "index totals — corrupt index")
-    # The cycle walked spends.bin to its last record: the cursor is a
+    # The cycle walked spender_of.bin to its last SLOT: the cursor is a
     # file position, so this closes the partition — every edge was
-    # either kept by this cycle or recognised as an earlier one's.
-    if spend_pos != n_sp_t:
+    # either kept by this cycle or recognised as an earlier one's. The
+    # total is now the output count, because the file holds one slot
+    # per output and not one record per edge.
+    if spend_pos != n_out_t:
         raise OutpointError(
-            f"the spend walk stopped at {spend_pos} of {n_sp_t} "
-            "records — corrupt index")
+            f"the spend walk stopped at slot {spend_pos} of "
+            f"{n_out_t} — corrupt index")
     old_outputs.close()
     checkpoint()
     return True
@@ -725,7 +748,7 @@ def _phase_seal(store, index):
             "files": files,
             "caches": state["caches"],
             "reconstruction": (
-                "zip outputs.bin+spends.bin+tx_first_out.bin of the source "
+                "zip outputs.bin+spender_of.bin+tx_first_out.bin of the source "
                 "index in ordinal order; one history row per output "
                 "(spender 0 = unspent, appends re-emit spent rows and "
                 "keep-last wins); spender-side records fused by (spender, "
@@ -761,6 +784,20 @@ def run_build(index_dir, derived_dir, flush_records=8_000_000,
     (appends): same code path, same bytes as a rebuild."""
     index = oi.Index(index_dir)
     try:
+        # The reader accepts a v2 index, on purpose: the published
+        # artifacts must stay readable. A BUILD is a different promise.
+        # This walk needs the spend side laid out per output, which a v2
+        # index does not have, and there is no honest way to fake it —
+        # so the refusal is stated here, where the source is named,
+        # rather than as a KeyError three frames down on a file that
+        # simply is not there.
+        if index.format != oi.FORMAT_TAG:
+            raise OutpointError(
+                f"that index is {index.format} and this tool builds "
+                f"derivatives from {oi.FORMAT_TAG}: its spend side is a "
+                "sorted (output, spender) file, not one slot per "
+                "output. Rebuild the index with this version, or read "
+                "the old pair with the version that wrote it")
         if index.build["totals"]["unresolved_spends"]:
             raise OutpointError(
                 "the source index tolerates unresolved spends: fees "
@@ -1350,7 +1387,7 @@ def main(argv=None):
                                       "derivatives from a sealed "
                                       "strict index")
     pb.add_argument("--index", required=True,
-                    help="a sealed outpoint-index-v2 directory")
+                    help="a sealed outpoint-index-v3 directory")
     pb.add_argument("--out", required=True,
                     help="the derivatives directory to create or grow")
     pb.add_argument("--flush-records", type=int, default=8_000_000,

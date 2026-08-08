@@ -45,22 +45,66 @@ fingerprint, never by a tag.
   keeps its value. **A v2 census cannot be grown or rewound**, and the tool
   says so: extending it would fuse records the current rules refuse, producing
   a file no rebuild reproduces.
-- **unchanged:** `reveal-archive-v2`, `outpoint-index-v2`,
-  `outpoint-derived-v2`, `nonces-witness-v1`, `graph-v2`, `headers-v2`.
+- **`outpoint-index-v2` → `outpoint-index-v3`.** The spend side changes shape.
+  `spends.bin` (10 B per edge, sorted by spent output) becomes
+  `spender_of.bin`, one **5-byte slot per output** holding the transaction
+  that spent it, plus `spend_extra.bin`, which is **empty on a
+  consensus-valid chain**. The index loses **15.1 GB** (34.2 → 19.1 for that
+  side, ~240 → ~225 GB in total) and one ladder, `spenders()` becomes a
+  5-byte positional read instead of a ~40 KB bucket scan, and an append's
+  spend fusion moves about **44% less I/O**.
+
+  A slot has **three** states, and the third is the point: `0` unspent,
+  `2^40-1` **more than one spender** (the answer is in `spend_extra.bin`),
+  anything else the spender's ordinal. A dense array cannot hold two spenders
+  in one slot, and refusing to build would have been the easy way out — but
+  INVARIANTS names duplicate spends among the anomalies that are *counted and
+  reported, never hidden*, and a format that cannot represent an anomaly does
+  not declare an assumption, it enforces one. The marker also means the array
+  never silently answers wrong: what a reader meets is not an ordinal.
+
+  Reading is widened rather than moved: `lookup`, `verify`, `stats` and the
+  whole reader surface work on a **v2 index**, so one downloaded under 1.0.0
+  or 1.1.0 keeps its value — there is a test that builds a genuine v2
+  artifact and reads it. **A v2 index cannot be extended, rewound, or used to
+  build derivatives**, and each of the three refuses by name: mixing the two
+  layouts would produce bytes no rebuild reproduces.
+- **unchanged:** `reveal-archive-v2`, `outpoint-derived-v2`,
+  `nonces-witness-v1`, `graph-v2`, `headers-v2`.
 
 ### Do your artifacts still work?
 
-**Every artifact still verifies, and only the nonce census needs rebuilding
-to gain anything.** The census you hold is read, audited and resolved by this
-version exactly as before; what it cannot do is grow. Rebuilding it means a
-full chain scan, because the census is co-emitted by the pass that builds the
-reveal archive: on the last measured run that pass took **58 h 47**, and it
-re-emits the archive and the headers with it.
+**Every artifact still verifies and still answers questions. What none of the
+touched ones can do any more is GROW.** That is the whole shape of this
+release: reading was widened everywhere, writing was not, and the two are
+different promises.
 
-What the rebuild buys is small and worth stating plainly: measured on the
-sealed census, the two rules remove **at most 79 records out of
-3,727,721,550**. They are worth having for correctness, not for space. A
-reader who only queries has no reason to hurry.
+| you hold | still reads & verifies | can be extended / rewound |
+|---|---|---|
+| a `nonces-v2` census | yes | **no** — needs a fresh scan |
+| an `outpoint-index-v2` | yes | **no** — needs a rebuild |
+| derivatives built on a v2 index | yes, with that index | **no** — the build refuses a v2 index |
+| archive, headers, graph | yes | yes, untouched |
+
+Rebuilding the census means a full chain scan, because it is co-emitted by the
+pass that builds the reveal archive: on the last measured run that pass took
+**58 h 47**, and it re-emits the archive and the headers with it. The index
+then rebuilds from the graph in **24 h 51**, and the derivatives from the
+index in **14 h 30**. These are sequential; the honest total for going all the
+way to v3 is around **98 hours**, not the sum of the parts you were hoping to
+skip.
+
+What the rebuild buys, stated plainly so nobody hurries for the wrong reason:
+the nonce rules remove **at most 79 records out of 3,727,721,550** — worth
+having for correctness, not for space. The index change is worth **15.1 GB**
+and a faster spend lookup. Neither is a reason to rebuild by itself. **The
+reason to rebuild is that you want the chain re-scanned anyway**; if you only
+query what you already have, this release costs you nothing and you can stay
+where you are.
+
+One consequence that is not a byte count: rebuilding **retires the published
+fingerprints**. Anyone who cited the current index and derived fingerprints
+will need to cite the new ones.
 
 ### Under the hood
 

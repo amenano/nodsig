@@ -40,7 +40,7 @@ efficiency paid once, repaid every time a new question grafts on.
 The genesis block is excluded, like in graph-v2 (its coinbase is
 unspendable by consensus): ordinals start counting at block height 1.
 
-FROZEN FORMAT — outpoint-index-v2
+FROZEN FORMAT — outpoint-index-v3
 =================================
 An index is a directory of fixed-width record files. ALL integers are
 big-endian — the opposite of graph-v2, and on purpose: graph-v2 echoes
@@ -84,10 +84,14 @@ Sorted files (searchable by key, deduplicated where stated):
                       stored: it is recoverable by binary-searching
                       tx_first_out.bin for first_out (stored once,
                       not repeated — the positional twin answers it).
-    spends.bin        10 B: spent_out u40 | spender_tx u40, sorted —
-                      the whole spend side of the graph in 10 bytes
-                      per edge. Spend height = the spender's block
-                      (blocks.bin); spender txid = txids.bin[spender].
+    spender_of.bin    5 B, POSITIONAL by output ordinal: the tx that
+                      spent it, with 0 = unspent and 2^40-1 = MORE
+                      THAN ONE (see below). Spend height = the
+                      spender's block (blocks.bin); spender txid =
+                      txids.bin[spender].
+    spend_extra.bin   10 B: spent_out u40 | spender_tx u40, sorted —
+                      EVERY spender of each marked output. Empty on
+                      any consensus-valid chain, and read resident.
 
 Sidecar caches (deterministic, rebuilt with their file, NOT part of
 the canonical fingerprint): for each searchable file a LADDER `.lad` —
@@ -99,9 +103,18 @@ tx_first_out.bin gets the same treatment at seal time. This is the
 whole cache story: small resident summaries, one targeted read,
 sequential consumers use large shared-budget slabs (recio's).
 
-Size, measured against the 2026 chain: blocks 13 MB + txids 42 GB +
-tx_first_out 6.5 GB + txid_index 52 GB + outputs 104 GB + spends
-35 GB ≈ 240 GB — half the naive keyed layout, with faster reads.
+Size, measured against the 2026 chain (1.39e9 tx, 3.82e9 outputs,
+3.42e9 spends): blocks 13 MB + txids 42 GB + tx_first_out 6.5 GB +
+txid_index 52 GB + outputs 104 GB + spender_of 19.1 GB ≈ 225 GB —
+half the naive keyed layout, with faster reads.
+
+The spend side is 15.1 GB smaller than the v2 sorted pair file it
+replaces (34.2 GB), and the ratio is not a constant: a dense array of
+n_out slots beats a sorted file of n_spends pairs exactly while more
+than HALF of all outputs have been spent. On the 2026 chain that
+fraction is 89.49%, so the margin is wide — but it is an assumption
+about the real data, and it belongs in the format text rather than in
+somebody's head.
 
 DUPLICATE TXIDS (BIP30) — the one dedup decision
 ================================================
@@ -114,8 +127,15 @@ instance (highest first_out — exactly the record that sorts last, so
 positional files keep BOTH instances honestly: they existed. The
 dropped-duplicate count is recorded and its expected value on the full
 chain is exactly 2 — a built-in historical cross-check. Equal keys in
-spends.bin (one output spent twice) cannot happen under consensus;
-they are counted, kept, and expected to be 0.
+the spend side (one output spent twice) cannot happen under
+consensus; they are counted, kept, and expected to be 0. The dense
+array cannot hold two spenders in one slot, so it carries a third
+state instead of refusing: the marker says "the answer is not here"
+and spend_extra.bin holds them all. A format that cannot REPRESENT an
+anomaly does not declare an assumption, it enforces one — and
+invariant 3 names duplicate spends among the things that are counted
+and reported, never hidden. The marker also means no tie-break: with
+no spender kept in the slot, nobody has to pick which one wins.
 
 BUILD = ONE GRAPH PASS + TWO SORTS, in five resumable phases
 ============================================================
@@ -133,7 +153,12 @@ BUILD = ONE GRAPH PASS + TWO SORTS, in five resumable phases
                   streaming MERGE-JOIN — "sort in pieces, then fuse"
                   applied to the join, linear, no random access.
                   Rewrites each edge to 10 bytes; sorted 10-B runs out.
-    merge-spends  fuse them (and any previous spends.bin) → spends.bin.
+    merge-spends  one streaming pass over the output ordinals: the
+                  previous generation of both spend files plus the
+                  sorted runs → spender_of.bin + spend_extra.bin.
+                  Not genstore.fuse: one source has an IMPLICIT key
+                  and the gaps must be INVENTED, which a sift cannot
+                  do.
     seal          stream every file once more: sha256 each, check the
                   arithmetic invariants, write manifest.json with the
                   canonical fingerprint. Doubles as the integrity
@@ -203,7 +228,17 @@ from nodsig.recio import (IO_CHUNK, atomic_json, budgeted_slab, read_fixed,
 from nodsig.recsort import SortedFile, bisect_blob
 from nodsig.reuse_scan import SAT
 
-FORMAT_TAG = "outpoint-index-v2"
+FORMAT_TAG = "outpoint-index-v3"
+
+# Sealed indexes this code can READ. The BUILDERS stay strict on
+# FORMAT_TAG: appending v3 files onto a v2 base, or rewinding one, would
+# write bytes no rebuild reproduces, and `append ≡ rebuild` is
+# contractual. Only the read paths widen, and the reason is the promise
+# this project makes to a stranger — the published v2 artifacts must stay
+# readable with a newer tool. `_load_state` is therefore strict unless a
+# caller asks otherwise, and only readers ask.
+READ_TAGS = (FORMAT_TAG, "outpoint-index-v2")
+
 STATE_NAME = "state.json"
 MANIFEST_NAME = "manifest.json"
 RUNS_DIR = "runs"
@@ -216,7 +251,25 @@ TFO_REC = ORD                        # tx_first_out.bin
 OUT_REC = 8 + 20                     # outputs.bin
 RESOLVER_REC = 32 + ORD + 3          # txid_index.bin (and its runs)
 RAWSPEND_REC = 32 + 4 + ORD          # scan-phase spend runs
-SPEND_REC = ORD + ORD                # spends.bin (and its sorted runs)
+SPEND_REC = ORD + ORD                # the sorted spend runs (v2: spends.bin)
+SPENDER_REC = ORD                    # spender_of.bin: one slot per OUTPUT
+EXTRA_REC = ORD + ORD                # spend_extra.bin: spent_out | spender_tx
+
+# The three states of a spender_of slot. The sentinel 0 is free without
+# a convention: transaction ordinal 0 is the genesis coinbase, and a
+# coinbase spends nothing, so no real spender ever carries it. The
+# MANY marker is a single RESERVED VALUE and not a threshold — a value
+# is compared and verified, a threshold invites interpretation — and it
+# sits 789x above the highest real ordinal (2^40-1 against 1.39e9
+# transactions), with outputs exhausting 2^40 long before transactions.
+SLOT_UNSPENT = bytes(ORD)
+SLOT_MANY = b"\xff" * ORD
+
+# spend_extra.bin is read RESIDENT, so an untrusted artifact must not be
+# able to blow the reader's memory: above this it is refused loudly. The
+# cap is deliberately low — past a handful of records that index is to
+# be thrown away, not read.
+EXTRA_MAX_RECORDS = 1024
 
 # Positional files: logical name → record width. Their bytes are
 # defined by chain order alone, so they are append-only and never
@@ -228,8 +281,25 @@ POSITIONAL = {"blocks": BLOCK_REC, "txids": TXID_REC,
 # ladder sampling step). Key width is the sorted prefix a search
 # compares; the step is chosen so one bucket is ~40 KB — one network
 # round-trip on a NAS-mounted index.
-MERGED = {"txid_index": (RESOLVER_REC, 32, 1024),
-          "spends": (SPEND_REC, ORD, 4096)}
+MERGED = {"txid_index": (RESOLVER_REC, 32, 1024)}
+
+# v2's spend side, which this code no longer WRITES but must still
+# READ: a sealed v2 index keeps spends.bin, a sorted (out, spender)
+# file with a ladder, and the published artifacts stay readable.
+LEGACY_MERGED = {"spends": (SPEND_REC, ORD, 4096)}
+
+# The THIRD category, which the two above cannot express. These are
+# generation-committed like a merged file (written whole at every fusion
+# and rewind, named in the state, old generation deleted only after the
+# commit) but carry no ladder, because one is addressed positionally and
+# the other is resident.
+#
+# spender_of is why the category has to exist: it is positional in its
+# ADDRESSING but MUTATED IN THE MIDDLE — an old output gains a spender
+# when a new block spends it. POSITIONAL's healing rule is "truncate the
+# tail", which on a file mutated in the middle is a silent corruption,
+# so it must live in state["files"] and never in state["sizes"].
+GENERATED = {"spender_of": SPENDER_REC, "spend_extra": EXTRA_REC}
 
 # tx_first_out is positional but ALSO binary-searched by value (output
 # ordinal → its tx), so it gets a ladder too, sampled at seal. Its
@@ -243,8 +313,23 @@ LADDERS = dict(MERGED, tx_first_out=(TFO_REC, TFO_REC, TFO_LADDER_EVERY))
 
 # The canonical fingerprint covers the logical data files in this
 # fixed order. Ladders are caches: rebuilt with their file, excluded.
+#
+# spender_of and spend_extra take the place "spends" held, IN ITS
+# POSITION: the order is part of the identity recipe, so substituting in
+# place leaves every other file's contribution where it was. Both are
+# covered, and the second is not optional — without it two indexes that
+# differ only in a recorded anomaly would share a fingerprint, a hole in
+# "an artifact is named by what it holds".
 FP_ORDER = ("blocks", "txids", "tx_first_out", "txid_index",
-            "outputs", "spends")
+            "outputs", "spender_of", "spend_extra")
+
+# What a sealed v2 index is made of, kept so `verify` can audit one.
+# It needs its OWN pair: `verify_sealed` takes the file list once, so a
+# format that replaced a file cannot be folded into a tag sequence.
+LEGACY_FP_ORDER = ("blocks", "txids", "tx_first_out", "txid_index",
+                   "outputs", "spends")
+LEGACY_LADDERS = dict(MERGED, **LEGACY_MERGED,
+                      tx_first_out=(TFO_REC, TFO_REC, TFO_LADDER_EVERY))
 
 PHASES = ("scan", "merge-txids", "resolve", "merge-spends", "seal",
           "sealed")
@@ -300,7 +385,12 @@ def _store(index_dir, state, clock=None):
                     state_name=STATE_NAME, clock=clock)
 
 
-def _load_state(index_dir, required=True):
+def _load_state(index_dir, required=True, accept=(FORMAT_TAG,)):
+    """The state file, refused unless its format is one of `accept`.
+
+    The default is the strict one, so a builder that forgets to think
+    about it gets the safe rule; read-only commands pass `READ_TAGS`
+    and say so at the call site. The comment on READ_TAGS says why."""
     path = os.path.join(index_dir, STATE_NAME)
     if not os.path.exists(path):
         if required:
@@ -309,7 +399,15 @@ def _load_state(index_dir, required=True):
         return None
     with open(path) as f:
         state = json.load(f)
-    if state.get("format") != FORMAT_TAG:
+    found = state.get("format")
+    if found not in accept:
+        if found in READ_TAGS:
+            raise OutpointError(
+                f"this index is {found} and this build emits "
+                f"{FORMAT_TAG}: the two lay their spend side out "
+                "differently, so extending or rewinding one as the other "
+                "would write bytes no rebuild reproduces. Read it, or "
+                "build a fresh index directory")
         raise OutpointError("unknown index state format")
     return state
 
@@ -550,6 +648,189 @@ def _phase_resolve(store, flush_records, tolerate_unresolved):
 
 
 # ---------------------------------------------------------------------------
+# Phase 4: merge-spends — the dense spender array and its overflow
+# ---------------------------------------------------------------------------
+
+def _count_slots(path, n_out, chunk_records=8 << 20):
+    """(single-spender slots, marked slots), counted from the bytes.
+
+    The seal needs this independently of whatever wrote the file, so it
+    cannot reuse the fusion's tally: that would be one road walked
+    twice. A per-record loop over billions of slots is minutes of pure
+    Python, so the count runs on COLUMNS instead, and stays stdlib:
+
+      slab[k::5] for k in 0..4 are the five byte columns of the slab;
+      the OR of the five, as one big integer, has a 0x00 byte exactly
+      where all five were zero (an unspent slot), and their AND has a
+      0xFF byte exactly where all five were 0xFF (a marked one).
+
+    Measured on 3.82e9 slots: 80 s for both, against 7.3 min for the
+    obvious loop. `seal` already re-reads hundreds of GB, so this is
+    not a reason to skip the check."""
+    real = marked = 0
+    with open(path, "rb") as f:
+        seen = 0
+        while True:
+            slab = f.read(chunk_records * SPENDER_REC)
+            if not slab:
+                break
+            n = len(slab) // SPENDER_REC
+            if n * SPENDER_REC != len(slab):
+                raise OutpointError(f"{path}: not a whole number of "
+                                    "slots — truncated file")
+            acc_or, acc_and = 0, (1 << (8 * n)) - 1
+            for k in range(SPENDER_REC):
+                col = int.from_bytes(slab[k::SPENDER_REC], "big")
+                acc_or |= col
+                acc_and &= col
+            zero = acc_or.to_bytes(n, "big").count(0)
+            many = acc_and.to_bytes(n, "big").count(255)
+            real += n - zero - many
+            marked += many
+            seen += n
+    if seen != n_out:
+        raise OutpointError(f"{path} holds {seen} slots but the index "
+                            f"has {n_out} outputs")
+    return real, marked
+
+
+def _read_extra(store, entry):
+    """The whole of a spend_extra generation, as {out_ord: [spender…]}.
+
+    Resident by design (it is expected empty), so an untrusted artifact
+    gets the cap: past EXTRA_MAX_RECORDS this index is to be thrown
+    away, not read into memory."""
+    if entry is None:
+        return {}
+    if entry["records"] > EXTRA_MAX_RECORDS:
+        raise OutpointError(
+            f"{entry['file']} holds {entry['records']:,} duplicate-spend "
+            f"records, over the {EXTRA_MAX_RECORDS:,} this reader will "
+            "hold resident. An index with that many is corrupt, not "
+            "merely anomalous: rebuild it")
+    out = {}
+    for rec in store.read(store.path(entry["file"]), EXTRA_REC,
+                          entry["sha256"]):
+        out.setdefault(rec[:ORD], []).append(rec[ORD:])
+    return out
+
+
+def _fuse_spender_of(store, n_out, cut_tx=None):
+    """Generation N+1 of spender_of.bin and spend_extra.bin, in ONE
+    streaming pass over the output ordinals.
+
+    `genstore.fuse` cannot do this and must not be bent into it: it
+    merges homogeneous streams of records sorted by key, while here one
+    source has an IMPLICIT key (the slot's position) and the gaps —
+    outputs nobody spent — have to be INVENTED. A `sift` cannot invent a
+    record; its contract says so.
+
+    The sources are the previous generation of both files (read in
+    ordinal order, so the pass stays one) plus this category's sorted
+    runs, which `resolve` already emitted ordered by SPENT OUTPUT: the
+    same order this walk needs, so nothing is sorted again.
+
+    `cut_tx` makes it a REWIND: the runs are not consumed (the current
+    generation is its own only source) and every spender at or above the
+    cut is dropped. See the marker trap in the rewind, below.
+
+    append ≡ rebuild holds by construction — a rebuild has no previous
+    generation, every edge arrives in the runs, the gaps fill with zero,
+    and `noti` is SORTED before it is written, so both roads emit the
+    overflow in one order. That last detail is load-bearing and is why
+    the sort is not an accident of style."""
+    state = store.state
+    old_slots = state["files"].get("spender_of")
+    old_extra = state["files"].get("spend_extra")
+
+    todo = [] if cut_tx is not None else store.run_sources("spends")
+    slab = budgeted_slab(len(todo) + 1)
+    edges = heapq.merge(*[store.read(p, SPEND_REC, sha, slab)
+                          for p, sha in todo])
+
+    n_old = old_slots["records"] if old_slots is not None else 0
+    slots = (store.read(store.path(old_slots["file"]), SPENDER_REC,
+                        old_slots["sha256"], slab)
+             if old_slots is not None else iter(()))
+    extra = _read_extra(store, old_extra)
+
+    gen = state["generation"] + 1
+    slot_name = f"spender_of_g{gen:04d}.bin"
+    extra_name = f"spend_extra_g{gen:04d}.bin"
+    cut5 = None if cut_tx is None else cut_tx.to_bytes(ORD, "big")
+
+    head = next(edges, None)
+    marked = n_extra = 0
+    slot_sha, extra_sha = hashlib.sha256(), hashlib.sha256()
+    with open(store.path(slot_name), "wb") as sf, \
+            open(store.path(extra_name), "wb") as ef:
+        sbuf, ebuf = bytearray(), bytearray()
+        for o in range(n_out):
+            o5 = o.to_bytes(ORD, "big")
+            known = []
+            if o < n_old:
+                v = next(slots)
+                if v == SLOT_MANY:
+                    known = list(extra.get(o5, ()))
+                elif v != SLOT_UNSPENT:
+                    known = [v]
+            while head is not None and head[:ORD] == o5:
+                known.append(head[ORD:])
+                head = next(edges, None)
+            if cut5 is not None:
+                known = [s for s in known if s < cut5]
+
+            known.sort()
+            if not known:
+                sbuf += SLOT_UNSPENT
+            elif len(known) == 1:
+                sbuf += known[0]
+            else:
+                sbuf += SLOT_MANY
+                marked += 1
+                for s in known:
+                    ebuf += o5 + s
+                    n_extra += 1
+            if len(sbuf) >= IO_CHUNK:
+                slot_sha.update(sbuf)
+                sf.write(sbuf)
+                sbuf.clear()
+        slot_sha.update(sbuf)
+        sf.write(sbuf)
+        extra_sha.update(ebuf)
+        ef.write(ebuf)
+
+    # An edge naming an output the index does not have is corruption,
+    # not an anomaly to record: it would be a spend of something that
+    # was never created.
+    if head is not None:
+        raise OutpointError(
+            f"a spend names output ordinal "
+            f"{int.from_bytes(head[:ORD], 'big'):,}, past the "
+            f"{n_out:,} this index holds — corrupt runs")
+
+    delete = []
+    for logical, name in (("spender_of", slot_name),
+                          ("spend_extra", extra_name)):
+        old = state["files"].get(logical)
+        if old is not None:
+            delete.append(store.path(old["file"]))
+    delete += [] if cut_tx is not None else store.run_paths("spends")
+
+    state["files"]["spender_of"] = {
+        "file": slot_name, "records": n_out,
+        "sha256": slot_sha.hexdigest()}
+    state["files"]["spend_extra"] = {
+        "file": extra_name, "records": n_extra,
+        "sha256": extra_sha.hexdigest()}
+    if cut_tx is None:
+        state["runs"] = [r for r in state["runs"]
+                         if r["category"] != "spends"]
+    state["generation"] = gen
+    return marked, delete
+
+
+# ---------------------------------------------------------------------------
 # Phase 5: seal — audit, invariants, manifest
 # ---------------------------------------------------------------------------
 
@@ -595,20 +876,43 @@ def _phase_seal(index_dir, state, graph_dir, clock):
         "file": "tx_first_out.lad", "every": TFO_LADDER_EVERY,
         "sha256": hashlib.sha256(ladder).hexdigest()}
 
-    # Merged files: re-read against their recorded sha (the audit),
-    # and the spend count must match what the join produced.
-    for name in MERGED:
+    # Merged and generated files: re-read against their recorded sha
+    # (the audit).
+    for name in list(MERGED) + list(GENERATED):
         entry = state["files"][name]
         path = os.path.join(index_dir, entry["file"])
         if sha_file(path) != entry["sha256"]:
             raise OutpointError(f"{entry['file']}: sha256 changed "
                                 "since its fusion")
         files[name] = entry
+
+    # The spend arithmetic, and it needs saying why it is shaped like
+    # this. In v2 the check was "spends.bin holds as many records as the
+    # join resolved": two roads to one number. With a DENSE array
+    # "records" is the number of SLOTS, which is n_out — already known,
+    # so comparing it would confirm nothing at all, the tautology this
+    # format has to avoid. The count is therefore recomputed here from
+    # the bytes on disk, independently of whatever the fusion counted.
+    real, marked = _count_slots(os.path.join(
+        index_dir, files["spender_of"]["file"]), n_out)
     resolved = state["n_spends"] - state["totals"]["unresolved_spends"]
-    if files["spends"]["records"] != resolved:
+    if real + files["spend_extra"]["records"] != resolved:
         raise OutpointError(
-            f"spends.bin holds {files['spends']['records']} records "
+            f"spender_of.bin holds {real} single-spender slots and "
+            f"spend_extra.bin {files['spend_extra']['records']} records, "
             f"but the scan emitted {resolved} resolvable inputs")
+    # And the two files must agree with each other: a marker with no
+    # records behind it, or records with no marker, is a half-broken
+    # split representation and would otherwise be invisible.
+    distinct = len({rec[:ORD] for rec in _read_fixed(
+        os.path.join(index_dir, files["spend_extra"]["file"]),
+        EXTRA_REC, files["spend_extra"]["sha256"])})
+    if distinct != marked:
+        raise OutpointError(
+            f"spender_of.bin marks {marked} output(s) as having more "
+            f"than one spender but spend_extra.bin names {distinct}: "
+            "the two halves of the spend side disagree")
+    state["totals"]["duplicate_spends"] = marked
 
     source_fp = None
     gpath = os.path.join(graph_dir, ge.MANIFEST_NAME)
@@ -647,7 +951,11 @@ def _phase_seal(index_dir, state, graph_dir, clock):
             "last_block_hash": state["last_block_hash"],
             "transactions": n_tx,
             "outputs": n_out,
-            "spends": files["spends"]["records"],
+            # Still the number of EDGES, not of slots: the name keeps
+            # its meaning across the format change, and `stats` keeps
+            # printing the number a reader expects. Slots are n_out and
+            # are already published as "outputs".
+            "spends": real + files["spend_extra"]["records"],
             "totals": state["totals"],
             "files": files,
             "caches": state["caches"],
@@ -748,11 +1056,19 @@ def run_build(graph_dir, index_dir, end_height=None,
             state["phase"] = "merge-spends"
             store.commit(delete)
         elif phase == "merge-spends":
-            dups, delete = store.fuse("spends", MERGED["spends"],
-                                      "spends", dedup=None)
-            state["totals"]["duplicate_spends"] += dups
+            # The count is ASSIGNED, not accumulated: this pass rewrites
+            # the whole spend side from the previous generation plus the
+            # new runs, so the marked slots it counts are the artifact's
+            # total. Adding to the old value would double-count every
+            # anomaly that survived an append.
+            marked, delete = _fuse_spender_of(store, state["n_out"])
+            state["totals"]["duplicate_spends"] = marked
             state["phase"] = "seal"
             store.commit(delete)
+            if marked:
+                print(f"spender_of: {marked:,} output(s) with MORE THAN "
+                      "ONE spender — recorded in spend_extra.bin and "
+                      "counted; consensus expects 0", file=sys.stderr)
         elif phase == "seal":
             manifest = _phase_seal(index_dir, state, graph_dir, clock)
             state["phase"] = "sealed"
@@ -829,12 +1145,28 @@ def run_rewind(index_dir, graph_dir, to_height):
         store.commit(delete)
 
     if "spends" not in plan["done"]:
-        cut5 = n_tx_cut.to_bytes(ORD, "big")
-        dups, delete = store.fuse(
-            "spends", MERGED["spends"], "spends", dedup=None,
-            sift=lambda r: r if r[ORD:2 * ORD] < cut5 else None)
-        state["totals"]["duplicate_spends"] = dups
-        state["n_spends"] = state["files"]["spends"]["records"]
+        # The cut is `spender >= n_tx_cut`, NOT `>`: the surviving
+        # transaction ordinals are 0..n_tx_cut-1, so n_tx_cut is already
+        # past the cut. A `>` would leave a spender that does not exist
+        # standing, and nothing downstream would see it — the ordinal is
+        # valid in shape, merely false.
+        #
+        # THE MARKER TRAP, and it is why this is not a one-line sift.
+        # SLOT_MANY is 2^40-1, so it satisfies `>= n_tx_cut` ALWAYS. The
+        # rule applied literally would zero every marked slot, and a
+        # duplicate spend would vanish in SILENCE during a rewind —
+        # exactly the thing this layout exists to prevent, and silently,
+        # because 0 is a legitimate value. `_fuse_spender_of` therefore
+        # re-derives each marked slot from the survivors in the overflow
+        # file: none left → 0, one left → that spender, two or more →
+        # still marked.
+        marked, delete = _fuse_spender_of(store, n_out_cut,
+                                          cut_tx=n_tx_cut)
+        state["totals"]["duplicate_spends"] = marked
+        state["n_spends"] = (
+            _count_slots(store.path(state["files"]["spender_of"]["file"]),
+                         n_out_cut)[0]
+            + state["files"]["spend_extra"]["records"])
         plan["done"].append("spends")
         store.commit(delete)
 
@@ -999,14 +1331,14 @@ def _rewind_plan(index_dir, graph_dir, state, store, to_height):
           f"{state['n_out'] - n_out_cut:,} outputs go", file=sys.stderr)
 
 
-def _load_manifest(index_dir):
+def _load_manifest(index_dir, accept=(FORMAT_TAG,)):
     path = os.path.join(index_dir, MANIFEST_NAME)
     if not os.path.exists(path):
         raise OutpointError(f"no {MANIFEST_NAME} in {index_dir}: the "
                             "index is not sealed — run `build`")
     with open(path) as f:
         manifest = json.load(f)
-    if manifest.get("format") != FORMAT_TAG:
+    if manifest.get("format") not in accept:
         raise OutpointError("unknown index manifest format")
     return manifest
 
@@ -1048,11 +1380,13 @@ class Index:
 
     def __init__(self, index_dir):
         self.dir = index_dir
-        self.manifest = _load_manifest(index_dir)
+        self.manifest = _load_manifest(index_dir, accept=READ_TAGS)
+        self.format = self.manifest["format"]
         self.build = self.manifest["build"]
         self._fd = {}
         self._ladders = {}
         self._sorted = {}
+        self._extra_map = None
         # blocks.bin resident: three parallel u64 arrays, ~24 bytes per
         # thousand blocks — the price of answering every "which height
         # / what time" question without touching the disk.
@@ -1106,7 +1440,8 @@ class Index:
         """The SortedFile for one of the searchable artifacts, opened
         lazily with its ladder verified and resident."""
         if logical not in self._sorted:
-            rec, key_len, _ = MERGED[logical]
+            rec, key_len, _ = (MERGED.get(logical)
+                               or LEGACY_MERGED[logical])
             entry = self.build["files"][logical]
             blob, every = self._ladder(logical)
             self._sorted[logical] = SortedFile(
@@ -1135,10 +1470,55 @@ class Index:
     def spenders(self, out_ord):
         """tx ordinals that spent this output: [] if unspent, one
         entry under consensus (more would echo a duplicate_spends
-        anomaly, reported as found)."""
+        anomaly, reported as found).
+
+        v3 reads one 5-byte slot positionally. The third state is the
+        point: a slot that says MANY carries no spender at all, so a
+        reader cannot answer from the array alone and cannot silently
+        answer wrongly either — it is sent to the overflow file, which
+        is resident and, on any real chain, empty.
+
+        v2 indexes are still read here, through the sorted file they
+        were built with: the published artifacts stay readable."""
         key = out_ord.to_bytes(ORD, "big")
-        return [int.from_bytes(r[ORD:2 * ORD], "big")
-                for r in self.sorted_file("spends").find(key)]
+        if self.format != FORMAT_TAG:
+            return [int.from_bytes(r[ORD:2 * ORD], "big")
+                    for r in self.sorted_file("spends").find(key)]
+        if not 0 <= out_ord < self.n_out:
+            raise OutpointError(f"output ordinal {out_ord} is outside "
+                                f"the {self.n_out:,} this index holds")
+        slot = self._pread(self.build["files"]["spender_of"]["file"],
+                           out_ord * SPENDER_REC, SPENDER_REC)
+        if slot == SLOT_UNSPENT:
+            return []
+        if slot != SLOT_MANY:
+            return [int.from_bytes(slot, "big")]
+        found = self._extra().get(key)
+        if not found:
+            raise OutpointError(
+                f"output ordinal {out_ord} is marked as having more "
+                "than one spender but spend_extra.bin names none: this "
+                "index's spend side is half-broken (run `verify`)")
+        return [int.from_bytes(s, "big") for s in found]
+
+    def _extra(self):
+        """spend_extra.bin, resident, verified, loaded once. Expected
+        empty, hence the cap: an untrusted artifact must not be able to
+        make a reader hold an arbitrary file in memory."""
+        if self._extra_map is None:
+            entry = self.build["files"]["spend_extra"]
+            if entry["records"] > EXTRA_MAX_RECORDS:
+                raise OutpointError(
+                    f"{entry['file']} holds {entry['records']:,} "
+                    f"duplicate-spend records, over the "
+                    f"{EXTRA_MAX_RECORDS:,} this reader will hold "
+                    "resident: that index is corrupt, not merely "
+                    "anomalous")
+            self._extra_map = {}
+            for rec in _read_fixed(os.path.join(self.dir, entry["file"]),
+                                   EXTRA_REC, entry["sha256"]):
+                self._extra_map.setdefault(rec[:ORD], []).append(rec[ORD:])
+        return self._extra_map
 
     def txid_of(self, tx_ord):
         return self._pread("txids.bin", tx_ord * TXID_REC, TXID_REC)
@@ -1187,7 +1567,7 @@ class Index:
 # ---------------------------------------------------------------------------
 
 def run_stats(index_dir, out=sys.stdout):
-    state = _load_state(index_dir)
+    state = _load_state(index_dir, accept=READ_TAGS)
     print(f"phase: {state['phase']}   heights 1..{state['last_height']:,}",
           file=out)
     print(f"  transactions {state['n_tx']:>16,}", file=out)
@@ -1203,7 +1583,8 @@ def run_stats(index_dir, out=sys.stdout):
           f"spends: {t['duplicate_spends']}, unresolved: "
           f"{t['unresolved_spends']}", file=out)
     if state["phase"] == "sealed":
-        print(f"fingerprint: {_load_manifest(index_dir)['fingerprint']}",
+        print("fingerprint: "
+              f"{_load_manifest(index_dir, accept=READ_TAGS)['fingerprint']}",
               file=out)
 
 
@@ -1218,7 +1599,7 @@ def run_verify(index_dir, graph_dir=None):
     handed over to confront it with. The coverage needs no help here
     (blocks.bin states it), and it is legitimate for it to stop below
     the graph's: `--end` builds a comparable prefix on purpose."""
-    manifest = _load_manifest(index_dir)
+    manifest = _load_manifest(index_dir, accept=READ_TAGS)
     parent_confirmed = None
     if graph_dir is not None:
         gpath = os.path.join(graph_dir, ge.MANIFEST_NAME)
@@ -1249,14 +1630,22 @@ def run_verify(index_dir, graph_dir=None):
                 "that graph is not this index's parent (fingerprints "
                 "differ)")
         parent_confirmed = True
+    # One call per format, not one call with both tags. `verify_sealed`
+    # says why in its own docstring: a tag sequence is legitimate only
+    # while every tag in it is made of the SAME files in the same order,
+    # because `fp_order` is passed once — and v3 replaced one file with
+    # two. Widening the sequence here would audit a v2 index against a
+    # file list it does not have.
+    v2 = manifest["format"] != FORMAT_TAG
     verify_sealed(
-        index_dir, manifest, FORMAT_TAG, OutpointError,
-        fp_order=FP_ORDER,
+        index_dir, manifest,
+        "outpoint-index-v2" if v2 else FORMAT_TAG, OutpointError,
+        fp_order=LEGACY_FP_ORDER if v2 else FP_ORDER,
         coverage_from_data=lambda: (
             "exact",
             os.path.getsize(_positional_path(index_dir, "blocks")) // BLOCK_REC),
         ladder_hint=" (rebuildable: re-run build after deleting it)",
-        ladders=LADDERS,
+        ladders=LEGACY_LADDERS if v2 else LADDERS,
         trust_hint="--graph",
         parent_confirmed=parent_confirmed)
 

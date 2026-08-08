@@ -129,13 +129,13 @@ height when you want to reproduce the number that was published with it.
 
 Two qualifications, because "incremental" is not the same as "free":
 
-- **An append cycle re-reads `spends.bin` once, whole.** The spend file is
-  re-sorted at every index fusion, so a byte offset into one generation names
-  nothing in the next, and a resuming scan partitions instead of seeking. The
-  cost is per append **run**, not per block: a day of blocks appended in one run
-  costs one pass, the same blocks appended one at a time cost one pass each.
-  Batch them. `<graph>` also has to be kept, since it is what the index extends
-  from.
+- **An append cycle re-reads the spend side once, whole.** A new block can spend
+  an output written years earlier, so the record for that output changes below
+  wherever the previous run stopped, and a resuming scan partitions instead of
+  seeking. The cost is per append **run**, not per block: a day of blocks
+  appended in one run costs one pass, the same blocks appended one at a time
+  cost one pass each. Batch them. `<graph>` also has to be kept, since it is
+  what the index extends from.
 - **This path has run on synthetic chains and on small real files, not yet at
   chain scale.** How a scan resumes the spend side across an append is one of
   the things the README's *Status* section lists as covered by tests rather than

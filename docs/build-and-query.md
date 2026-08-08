@@ -263,9 +263,10 @@ Note what this costs beyond the new blocks. **`--graph` replaces
 `--graph-digest` here**: growing the chain means writing graph records, not
 checking them, and re-sealing the graph gives it a new fingerprint, which every
 artifact built from it will then declare as its parent. And every derivatives
-append pays **one sequential pass over `spends.bin`**, because that file is
-re-ordered by every fusion and a position inside it does not survive: the cost
-is proportional to the whole file, not to the new blocks.
+append pays **one sequential pass over `spender_of.bin`**, because a new block
+can spend an output written years earlier and so change a record below wherever
+the previous run stopped: the cost is proportional to the whole file, not to the
+new blocks.
 
 ### What decides that it is an append
 

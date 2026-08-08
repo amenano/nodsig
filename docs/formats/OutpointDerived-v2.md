@@ -2,14 +2,14 @@
 
 The three spend-side derivatives of the outpoint index: a lock's payment
 **history**, every transaction's **fee**, and the **co-spend** reading. Everything
-is derived from [OutpointIndex-v2](./OutpointIndex-v2.md) alone — no node, no
+is derived from [OutpointIndex-v3](./OutpointIndex-v3.md) alone — no node, no
 graph. Read by [HistoryBackend](../contracts/HistoryBackend.md),
 [BalanceBackend](../contracts/BalanceBackend.md),
 [FeeBackend](../contracts/FeeBackend.md),
 [CoSpendBackend](../contracts/CoSpendBackend.md).
 
 - **Directory** of three record files + ladders + `state.json` + `manifest.json`.
-- **Defined over:** an OutpointIndex-v2. The one it was actually built from is
+- **Defined over:** an OutpointIndex-v3. The one it was actually built from is
   **declared** in `build.parent`, outside the fingerprint.
 - **Captures:** per lock, its history rows; per transaction, its fee; per input,
   its co-spend grouping. **Does not capture:** heights, which a reader gets from
@@ -36,7 +36,7 @@ graph. Read by [HistoryBackend](../contracts/HistoryBackend.md),
   as two (see [HistoryBackend](../contracts/HistoryBackend.md)).
 - **`tx_inputs.bin`** — the spend side re-sorted by the **spender**: every
   transaction's inputs, adjacent (the co-spend reader; the inverse of the index's
-  `spends.bin`).
+  `spender_of.bin`, which is keyed by the output).
 - **`fees.bin`** — `fee = Σ inputs − Σ outputs`; **0** for a coinbase (the only
   no-input case under consensus). O(1) positional read.
 
@@ -56,19 +56,33 @@ alike:
 - `outputs.bin` and `tx_first_out.bin` are **append-only** — an ordinal is
   theirs forever — so a record offset means the same thing across index
   generations and is kept as is;
-- `spends.bin` is **re-sorted by spent ordinal at every index fusion**. A block
-  that spends anything older than the highest already-spent output inserts its
-  edges in the *middle*, so an offset into the old generation names a different
-  record in the new one.
+- `spender_of.bin` is positional too, and its slots never move — slot `i` is
+  output `i` forever. **That does not make its cursor reusable across cycles**,
+  and this is the one thing to get right here, because the obvious reading of
+  the sentence above is wrong.
 
-A cycle therefore re-reads `spends.bin` from record 0 and keeps the edges whose
+  Under `outpoint-index-v2` the spend side was `spends.bin`, re-sorted at every
+  index fusion, so an offset into the old generation named a different record in
+  the new one. That was the stated reason for re-reading from zero, and with
+  `spender_of.bin` **that reason is gone**. The conclusion is not: a new block
+  spending an old output **mutates a slot BELOW the cursor**, so the walk still
+  has to start at slot 0. The reason changed, the rule did not. Anyone who reads
+  only the old justification will remove the re-read and be confident about it.
+
+A cycle therefore walks `spender_of.bin` from slot 0 and keeps the edges whose
 **spender** is one of its own transactions (spender ≥ the cycle's first tx
-ordinal). That is an exact partition of the file — every edge belongs to the
-cycle that scanned its spender, an old transaction can never gain an input, and
-a transaction's inputs never change — and it costs one sequential pass per
-append. Within a cycle the offset is valid again (`spends.bin` does not move),
-so a crash still resumes mid-file; the cursor is reset only when a cycle opens,
-the one moment the generation can have changed underneath it.
+ordinal). That is an exact partition — every edge belongs to the cycle that
+scanned its spender, an old transaction can never gain an input, and a
+transaction's inputs never change — and it costs one sequential pass per append,
+now over 5 bytes per output instead of 10 bytes per edge. Within a cycle the
+cursor is valid again (nothing moves under it), so a crash still resumes
+mid-file; it is reset only when a cycle opens, the one moment the generation can
+have changed underneath it.
+
+A slot carrying the **more-than-one-spender marker** stops the build: the index
+records that anomaly and counts it, and derivatives are built on
+publication-grade sources only. Same refusal as before, at the same layer,
+reading a different shape.
 
 ## Rewinding: the same asymmetry, read backwards
 
@@ -103,7 +117,7 @@ A lock's story is **one contiguous run of records**, not one bucket: a reused
 lock can own millions of rows and therefore hundreds of buckets and many equal
 ladder samples. The reader enters at the rightmost sample **strictly below** the
 lock and keeps reading forward until the key changes — see the normative entry
-rule in [OutpointIndex-v2](OutpointIndex-v2.md) and invariant 9 in
+rule in [OutpointIndex-v3](OutpointIndex-v3.md) and invariant 9 in
 [INVARIANTS](../INVARIANTS.md). Same for `tx_inputs`, whose group is one row per
 input of a transaction and can exceed the step on large consolidations.
 

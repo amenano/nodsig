@@ -128,10 +128,10 @@ published with this project were produced: run once, agreed, reported.
 | `<witness>/` | `nonces-witness-v1` | The evidence that resolves each repeated point: per (nonce point, public key), the signatures that decide whether a key follows. Optional, built after the census (~36 min over the whole chain, a few MB) | `nonces resolve` (needs the node) | `nonces witness-verify` |
 | `<graph>/` | `graph-v2` | The raw transaction graph. Off by default, enabled with `--graph` | `archive scan --graph` | `graph`, `blockstats`, `index build` |
 | block-stats CSV | `block-stats-v2` | Per-block series (transactions, inputs, outputs, size, time) derived from the graph | `blockstats build` | `blockstats summary`, a human |
-| `<index>/` | `outpoint-index-v2` | The chain numbered once: a record per output, its spend already resolved | `index build` | `index lookup`, `derived build`, `check` |
-| ├ `outputs.bin`, `spends_gNNNN.bin` | records | Outputs in ordinal coordinates; spends fused on the same key | `index build` | as above |
+| `<index>/` | `outpoint-index-v3` | The chain numbered once: a record per output, its spend already resolved | `index build` | `index lookup`, `derived build`, `check` |
+| ├ `outputs.bin`, `spender_of_gNNNN.bin`, `spend_extra_gNNNN.bin` | records | Outputs in ordinal coordinates; one slot per output naming its spender, with an overflow file for the duplicate-spend anomaly (empty on a consensus-valid chain) | `index build` | as above |
 | ├ `txids.bin`, `txid_index_gNNNN.bin`, `tx_first_out.bin`, `blocks.bin` | records | The dictionaries turning txids and heights into ordinals, and back | `index build` | as above |
-| └ `manifest.json` | `outpoint-index-v2` | Fingerprint and coverage; the parent graph is **declared** in `build` | `index build` | verification, `derived build` |
+| └ `manifest.json` | `outpoint-index-v3` | Fingerprint and coverage; the parent graph is **declared** in `build` | `index build` | verification, `derived build` |
 | `<derived>/` | `outpoint-derived-v2` | The same facts reordered by lock, by transaction, by co-spend | `derived build` | `derived history/fee/cospends`, `check` |
 | ├ `history_gNNNN.bin` | records | One row per output carrying both events, receipt and spend | `derived build` | `derived history`, `check` |
 | ├ `tx_inputs.bin`, `fees.bin` | records | Inputs per transaction, and each transaction's fee | `derived build` | `derived fee/cospends`, `check` |

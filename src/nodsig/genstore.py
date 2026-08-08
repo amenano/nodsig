@@ -5,7 +5,7 @@ grows by generations: sorted runs pile up, a fusion folds them into the
 next generation of a merged file, and the state file is the only truth
 about what exists on disk.
 
-Two artifacts are built this way (outpoint-index-v2 and
+Two artifacts are built this way (outpoint-index-v3 and
 outpoint-derived-v2) and a third one, reveal-archive-v2, is the same
 idea written earlier by hand. What they share is not a data format —
 their records differ in width, key and meaning — but a WAY OF GROWING,
@@ -251,7 +251,7 @@ def merge_to_file(sources, out_path, rec, key_len, ladder_path,
     greatest payload: for the resolver that is the highest first_out,
     i.e. the BIP30 rule "the later duplicate overwrote the earlier".
     dedup=None: nothing is dropped, but equal keys are still counted
-    (spends.bin expects that count to be 0 under consensus).
+    (the index's spend side expects that count to be 0 under consensus).
 
     `dedup_len` is the prefix equality is judged on (default: the
     ladder's key_len). The derivatives need them distinct: history

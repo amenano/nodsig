@@ -41,7 +41,7 @@ signs:
 
 history and co-inputs were NOT PLUGGED stubs until 2026-07-21, with
 "Electrs or a graph-v2 derivative" on the label: the derivative
-arrived (outpoint-index-v2 + outpoint-derived-v2), so the interface
+arrived (outpoint-index-v3 + outpoint-derived-v2), so the interface
 absorbed it exactly as designed — two new classes, zero changes
 elsewhere, and no third-party indexer was ever needed. Both answer
 from local sorted files (one ~40 KB bucket read per question) and
@@ -801,7 +801,7 @@ def build_backends(sources, rpc_call=None):
     optional:
 
         archive       a reveal-archive-v2 directory
-        index         an outpoint-index-v2 directory
+        index         an outpoint-index-v3 directory
         derived       an outpoint-derived-v2 directory (needs `index`)
         witness       a nonces-witness-v1 directory
         rpc           a node URL, for the live balance
@@ -1292,7 +1292,7 @@ def main(argv=None):
                         "separation would mean nothing")
     p.add_argument("--archive", help="reveal-archive-v2 directory "
                                      "(enables the exposure capability)")
-    p.add_argument("--index", help="outpoint-index-v2 directory "
+    p.add_argument("--index", help="outpoint-index-v3 directory "
                                    "(with --derived enables history "
                                    "and co-inputs)")
     p.add_argument("--derived", help="outpoint-derived-v2 directory "

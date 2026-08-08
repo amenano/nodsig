@@ -7,7 +7,7 @@ spender and the spend height.
 
 - **Layer:** L1 (in-process). See [ARCHITECTURE](../ARCHITECTURE.md).
 - **Reads format:** [OutpointDerived-v2](../formats/OutpointDerived-v2.md)
-  (`history.bin`) **plus** the bound [OutpointIndex-v2](../formats/OutpointIndex-v2.md)
+  (`history.bin`) **plus** the bound [OutpointIndex-v3](../formats/OutpointIndex-v3.md)
   (heights are read from the index, not stored in `history.bin`).
 - **Reference impl:** `Derived.rows` + the `history` command composition.
 - **Depends on:** [IndexReader](./IndexReader.md) (for heights).

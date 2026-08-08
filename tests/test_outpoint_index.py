@@ -40,13 +40,17 @@ import hashlib
 import io
 import json
 import os
+import shutil
 import sys
 import tempfile
 
 import pytest
 
+from nodsig import derivatives as dv
 from nodsig import outpoint_index as oi
 from nodsig import reveal_archive as ra
+from nodsig.artifact import (make_identity, seal_manifest,
+                             sha_and_ladder)
 import test_blockparse as tbw
 import test_reuse_scan as trs
 from nodsig.hashing import hash160
@@ -186,13 +190,29 @@ def expected_files(txids):
 
     # Spends: t1 spends cbB:0 (out 1, spender 2); t2 spends t1:1
     # (out 3, spender 4); t3 spends t1:0 (out 2, spender 6).
-    spends = b"".join(
+    edges = [(1, 2), (3, 4), (2, 6)]
+
+    # The spend side, restated the way v3 lays it out: ONE slot per
+    # output, in output order, holding the spender or the unspent
+    # sentinel. Written as a dict first so the model reads like the
+    # format's own sentence — "which transaction spent output k" — and
+    # not like a copy of the merge loop.
+    by_out = {}
+    for so, sp in edges:
+        by_out.setdefault(so, []).append(sp)
+    spender_of = b"".join(
+        oi.SLOT_MANY if len(by_out.get(o, ())) > 1
+        else (sorted(by_out[o])[0].to_bytes(5, "big") if o in by_out
+              else oi.SLOT_UNSPENT)
+        for o in range(len(outputs) // 28))
+    spend_extra = b"".join(
         so.to_bytes(5, "big") + sp.to_bytes(5, "big")
-        for so, sp in sorted([(1, 2), (3, 4), (2, 6)]))
+        for so in sorted(by_out) if len(by_out[so]) > 1
+        for sp in sorted(by_out[so]))
 
     return {"blocks": blocks, "txids": txids_bin, "tx_first_out": tfo,
             "outputs": outputs, "txid_index": resolver,
-            "spends": spends}
+            "spender_of": spender_of, "spend_extra": spend_extra}
 
 
 def plant_wrong_ladder(directory, manifest_name, logical, spec):
@@ -589,18 +609,274 @@ def test_index_object(built):
           "all answer correctly")
 
 
-# The frozen outpoint-index-v2 fingerprint of the synthetic chain — an
+# ---------------------------------------------------------------------------
+# The double spend: the one branch real data never walks
+# ---------------------------------------------------------------------------
+#
+# A chain from a validated node cannot contain this — Core applied
+# consensus before we ever saw the bytes, and INVARIANTS states that we
+# do not re-validate it. So the marked slot exists for OUR faults: a
+# resolve that maps two outpoints onto one ordinal, a fusion that
+# writes the wrong edge. That makes the branch untestable by any real
+# artifact, which is exactly why the design made this fixture binding
+# rather than advisable: a detector no data exercises is not a
+# sentinel, it is code that rots.
+
+def double_spend_chain():
+    """The suite's chain plus a fifth block whose t4 spends t1:0 AGAIN,
+    after t3 already spent it at height 4. Transaction ordinals run
+    cbA 0, cbB 1, t1 2, cbC 3, t2 4, cbA' 5, t3 6, cbD 7, t4 8, so
+    output ordinal 2 ends up with two spenders: 6 and 8."""
+    blocks = {}
+    prev = bytes(32)
+    ids = {}
+
+    def add(height, raw_txs, txids):
+        nonlocal prev
+        raw, block_hash = tbw.w_block(4, prev, 1_700_000_000 + height,
+                                      0x1700_0000, height, raw_txs, txids)
+        prev = block_hash
+        blocks[height] = (block_hash[::-1].hex(), raw.hex())
+
+    cbA, cbA_id, _ = _coinbase(b"\x01A", [tbw.w_output(50 * SAT, SPK_A)])
+    add(1, [cbA], [cbA_id])
+    cbB, cbB_id, _ = _coinbase(b"\x01B", [tbw.w_output(50 * SAT, SPK_A)])
+    t1, t1_id, _ = tbw.w_tx(
+        1, [tbw.w_input(cbB_id, 0, b"\x00", 0xFFFFFFFF)],
+        [tbw.w_output(7, SPK_B), tbw.w_output(3, SPK_C)], 0)
+    add(2, [cbB, t1], [cbB_id, t1_id])
+    cbC, cbC_id, _ = _coinbase(b"\x01C", [tbw.w_output(50 * SAT, SPK_A)])
+    t2, t2_id, _ = tbw.w_tx(
+        1, [tbw.w_input(t1_id, 1, b"\x00", 0xFFFFFFFF)],
+        [tbw.w_output(2, SPK_A)], 0)
+    add(3, [cbC, t2], [cbC_id, t2_id])
+    t3, t3_id, _ = tbw.w_tx(
+        1, [tbw.w_input(t1_id, 0, b"\x00", 0xFFFFFFFF)],
+        [tbw.w_output(6, SPK_B)], 0)
+    add(4, [cbA, t3], [cbA_id, t3_id])
+    # The impossible block: t4 spends an output t3 already consumed.
+    cbD, cbD_id, _ = _coinbase(b"\x01D", [tbw.w_output(50 * SAT, SPK_A)])
+    t4, t4_id, _ = tbw.w_tx(
+        1, [tbw.w_input(t1_id, 0, b"\x01", 0xFFFFFFFF)],
+        [tbw.w_output(5, SPK_C)], 0)
+    add(5, [cbD, t4], [cbD_id, t4_id])
+    ids.update(t1=t1_id, t3=t3_id, t4=t4_id)
+    return blocks, ids
+
+
+@pytest.fixture
+def doubled(tmp):
+    blocks, ids = double_spend_chain()
+    graph = emit_graph(tmp, blocks, name="dbl_graph")
+    index = os.path.join(tmp, "dbl_index")
+    oi.run_build(graph, index)
+    return tmp, graph, index, ids
+
+
+def test_double_spend_is_recorded_not_refused(doubled):
+    """The anomaly is REPRESENTED, counted and readable — invariant 3
+    names duplicate spends among the things that are counted and
+    reported, never hidden."""
+    _tmp, _graph, index, _ids = doubled
+    manifest = json.load(open(os.path.join(index, oi.MANIFEST_NAME)))
+    build = manifest["build"]
+
+    check(build["totals"]["duplicate_spends"] == 1,
+          "the manifest must SEAL the anomaly count, so a stranger "
+          f"reading the artifact sees it: got {build['totals']}")
+    check(build["spends"] == 4,
+          f"four edges were resolved, manifest says {build['spends']}")
+    check(build["files"]["spend_extra"]["records"] == 2,
+          "both spenders of the doubled output belong in the overflow")
+
+    with open(os.path.join(index, build["files"]["spender_of"]["file"]),
+              "rb") as f:
+        slots = f.read()
+    check(slots[2 * 5:3 * 5] == oi.SLOT_MANY,
+          "output 2 must carry the MANY marker, not one of its two "
+          "spenders: a slot that picked a winner would be a tie-break "
+          "nobody authorised")
+
+    idx = oi.Index(index)
+    try:
+        check(idx.spenders(2) == [6, 8],
+              f"both spenders must be returned, got {idx.spenders(2)}")
+        check(idx.spenders(3) == [4], "the ordinary slot still answers")
+        check(idx.spenders(0) == [], "an unspent slot still answers")
+    finally:
+        idx.close()
+    print("ok  double spend: represented, counted, sealed and readable")
+
+
+def test_double_spend_survives_a_rewind(doubled):
+    """The marker trap: SLOT_MANY is 2^40-1, so it satisfies
+    `spender >= n_tx_cut` for every cut. A rewind that applied the rule
+    literally would zero the slot and the anomaly would vanish in
+    silence — 0 being a perfectly legitimate value."""
+    _tmp, graph, index, _ids = doubled
+
+    # Cut to height 4: t4 (the second spender) goes, t3 stays. The
+    # output is spent ONCE again, so the slot must hold t3's ordinal —
+    # not the marker, and above all not zero.
+    oi.run_rewind(index, graph, 4)
+    manifest = json.load(open(os.path.join(index, oi.MANIFEST_NAME)))
+    build = manifest["build"]
+    with open(os.path.join(index, build["files"]["spender_of"]["file"]),
+              "rb") as f:
+        slots = f.read()
+    check(slots[2 * 5:3 * 5] == (6).to_bytes(5, "big"),
+          "after the cut the output has exactly one spender left, so "
+          f"the slot must name it: got {slots[2 * 5:3 * 5].hex()}")
+    check(build["totals"]["duplicate_spends"] == 0,
+          "the anomaly is gone with the block that caused it, and the "
+          "count must say so")
+    check(build["files"]["spend_extra"]["records"] == 0,
+          "the overflow must be empty again")
+    check(build["spends"] == 3, "three edges survive the cut")
+
+    # And the cut index must equal one built to that height from zero:
+    # the rewind promise, on the shape that carries the anomaly.
+    rebuilt = os.path.join(_tmp, "dbl_rebuilt")
+    oi.run_build(graph, rebuilt, end_height=4)
+    _same_index(index, rebuilt, "rewind past a double spend")
+    print("ok  double spend: the rewind resolves the marker instead of "
+          "erasing it, and equals a rebuild")
+
+
+# ---------------------------------------------------------------------------
+# The readable predecessor: a sealed v2 index must stay readable
+# ---------------------------------------------------------------------------
+
+def make_v2_index(src, dst):
+    """A genuine outpoint-index-v2 artifact, projected from a v3 one.
+
+    v3 replaced spends.bin with spender_of.bin + spend_extra.bin, so
+    this walks the projection BACKWARDS: it rebuilds the sorted
+    (output, spender) file and its ladder, seals the v2 file list, and
+    recomputes the fingerprint from it. It is deliberately written
+    against the v2 format text rather than by calling any code that
+    still exists — the point of the test is that the reader meets an
+    artifact it did not produce."""
+    shutil.copytree(src, dst)
+    manifest = json.load(open(os.path.join(dst, oi.MANIFEST_NAME)))
+    build = manifest["build"]
+
+    edges = []
+    with open(os.path.join(dst, build["files"]["spender_of"]["file"]),
+              "rb") as f:
+        slots = f.read()
+    extra = {}
+    with open(os.path.join(dst, build["files"]["spend_extra"]["file"]),
+              "rb") as f:
+        blob = f.read()
+    for i in range(0, len(blob), 10):
+        extra.setdefault(blob[i:i + 5], []).append(blob[i + 5:i + 10])
+    for o in range(len(slots) // 5):
+        slot = slots[o * 5:(o + 1) * 5]
+        key = o.to_bytes(5, "big")
+        if slot == oi.SLOT_MANY:
+            edges += [key + s for s in extra[key]]
+        elif slot != oi.SLOT_UNSPENT:
+            edges.append(key + slot)
+    edges.sort()
+
+    spends_path = os.path.join(dst, "spends.bin")
+    with open(spends_path, "wb") as f:
+        f.write(b"".join(edges))
+    sha, ladder = sha_and_ladder(spends_path, oi.SPEND_REC, oi.ORD, 4096,
+                                 oi.OutpointError)
+    with open(os.path.join(dst, "spends.lad"), "wb") as f:
+        f.write(ladder)
+
+    for gone in ("spender_of", "spend_extra"):
+        os.remove(os.path.join(dst, build["files"][gone]["file"]))
+        del build["files"][gone]
+    build["files"]["spends"] = {"file": "spends.bin",
+                                "records": len(edges), "sha256": sha}
+    build["caches"]["spends"] = {
+        "file": "spends.lad", "every": 4096,
+        "sha256": hashlib.sha256(ladder).hexdigest()}
+
+    identity = make_identity(
+        "outpoint-index-v2", 1, manifest["identity"]["coverage"]["to"],
+        ((n, build["files"][n]["sha256"]) for n in oi.LEGACY_FP_ORDER))
+    with open(os.path.join(dst, oi.MANIFEST_NAME), "w") as f:
+        json.dump(seal_manifest("outpoint-index-v2", identity, build), f)
+
+    # The state too, or the artifact would be half-projected: a real v2
+    # directory carries a v2 state.json, and `stats` reads that one.
+    spath = os.path.join(dst, oi.STATE_NAME)
+    state = json.load(open(spath))
+    state["format"] = "outpoint-index-v2"
+    state["files"] = dict(build["files"])
+    state["caches"] = dict(build["caches"])
+    with open(spath, "w") as f:
+        json.dump(state, f)
+    return dst
+
+
+def test_a_v2_index_is_still_readable(built):
+    """The promise the READ_TAGS widening exists for: a stranger who
+    downloaded the published v2 artifacts can still read them with this
+    version. Emission is never widened — only reading."""
+    tmp, _graph, index, txids = built
+    v2 = make_v2_index(index, os.path.join(tmp, "as_v2"))
+
+    idx = oi.Index(v2)
+    try:
+        check(idx.format == "outpoint-index-v2",
+              "the reader must see the artifact for what it is")
+        check(idx.spenders(3) == [4],
+              f"a v2 spend lookup must still answer: {idx.spenders(3)}")
+        check(idx.spenders(6) == [], "and so must an unspent one")
+        check(idx.resolve(txids["t1"]) == (2, 2),
+              "the rest of the reader is untouched by the change")
+    finally:
+        idx.close()
+
+    buf = io.StringIO()
+    oi.run_verify(v2)                       # its own file list, its own tag
+    oi.run_stats(v2, out=buf)
+    check("spends.bin" in buf.getvalue(),
+          f"stats must describe the v2 artifact it was given: {buf.getvalue()}")
+    print("ok  a sealed v2 index still reads, verifies and reports")
+
+
+def test_building_on_a_v2_index_refuses_loudly(built):
+    """Reading widens, BUILDING does not. The refusal has to name the
+    reason, because the failure it replaces was a KeyError on a file
+    that simply is not there."""
+    tmp, _graph, index, _txids = built
+    v2 = make_v2_index(index, os.path.join(tmp, "as_v2_build"))
+    try:
+        dv.run_build(v2, os.path.join(tmp, "derived_from_v2"))
+    except oi.OutpointError as e:
+        check("outpoint-index-v2" in str(e) and "Rebuild" in str(e),
+              f"the refusal must say what and why: {e}")
+        print("ok  derivatives refuse a v2 index, and say why")
+        return
+    fail("building derivatives on a v2 index must refuse")
+
+
+# The frozen outpoint-index-v3 fingerprint of the synthetic chain — an
 # absolute anchor beyond run-to-run determinism. Update deliberately if the
 # format or the fixture chain changes.
+#
+# Moved once, on purpose: v3 replaced spends.bin with spender_of.bin plus
+# spend_extra.bin, so FP_ORDER changed and every fingerprint with it. The
+# v2 value was
+# 9040d59c747256a7a9c012f5c4499f850aaf25de7e56ff5728c8f00931cab42d;
+# it is written down here rather than deleted, because "the golden value
+# moved" is only a safe sentence when the old one is still readable.
 GOLDEN_INDEX_FINGERPRINT = \
-    "9040d59c747256a7a9c012f5c4499f850aaf25de7e56ff5728c8f00931cab42d"
+    "7f1cb2e86d596fc1abb882ca7169907bdcb84722d2d3c0b9fd4dd67568270484"
 
 
 def test_golden_fingerprint(built):
     _tmp, _graph, index, _txids = built
     manifest = json.load(open(os.path.join(index, oi.MANIFEST_NAME)))
     check(manifest["fingerprint"] == GOLDEN_INDEX_FINGERPRINT,
-          "outpoint-index-v2 fingerprint drifted from the frozen value: "
+          "outpoint-index-v3 fingerprint drifted from the frozen value: "
           f"{manifest['fingerprint']}")
     print("ok  golden: the synthetic index fingerprint is unchanged")
 

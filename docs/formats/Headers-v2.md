@@ -54,7 +54,7 @@ concatenated; `coinbase_off.bin` holds one `u40` per height, the offset where
 that height's script starts. The length of height *h* is the offset of *h+1*
 minus its own, and the last one runs to the end of the file. It is the
 positional idiom `tx_first_out.bin` already uses in
-[OutpointIndex-v2](./OutpointIndex-v2.md), valid here for the same reason: every
+[OutpointIndex-v3](./OutpointIndex-v3.md), valid here for the same reason: every
 coinbase scriptSig is at least two bytes by consensus, so the offsets **strictly
 increase**.
 

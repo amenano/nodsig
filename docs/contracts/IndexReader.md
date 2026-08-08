@@ -1,11 +1,11 @@
 # IndexReader — contract
 
 **Capability.** Resolve an outpoint `(txid, vout)` to an output ordinal, and read
-the primitive output / transaction / height facts from a sealed **OutpointIndex-v2**.
+the primitive output / transaction / height facts from a sealed **OutpointIndex-v3**.
 This is the read side that every heavier capability builds on.
 
 - **Layer:** L1 (in-process). See [ARCHITECTURE](../ARCHITECTURE.md).
-- **Reads format:** [OutpointIndex-v2](../formats/OutpointIndex-v2.md) (L0).
+- **Reads format:** [OutpointIndex-v3](../formats/OutpointIndex-v3.md) (L0).
 - **Reference impl:** `Index` (readable Python).
 - **Backs:** `HistoryBackend`, `CoSpendBackend`, `FeeBackend`, the `lookup` CLI;
   `ExposureLookup` is *not* built on this (it reads the reveal archive).
@@ -90,7 +90,12 @@ Composed convenience (the didactic "one outpoint, its whole story"):
 1. **Determinism:** same index bytes → identical results; the index's canonical
    fingerprint identifies the source in every `Source`.
 2. **Loud refusal, never silent:** `OUT_OF_RANGE` / `INVALID_OUTPOINT` raise;
-   anomalies (`duplicate_spends`) are reported, not swallowed.
+   anomalies (`duplicate_spends`) are reported, not swallowed. Concretely for
+   `spenders` on `outpoint-index-v3`: a slot of `spender_of.bin` holding the
+   reserved marker means *more than one spender*, and the answer is in
+   `spend_extra.bin`. An implementation MUST NOT return the marker as an
+   ordinal and MUST NOT read it as "unspent". Not carrying the overflow file
+   is allowed; failing loudly on the marker is then mandatory.
 3. **Watermark honesty:** every answer is "as of `watermark`"; a negative is a
    negative *at that height*, and says so via `Source`.
 4. **BIP30 last-wins** on duplicated txids in `resolve`.
