@@ -228,6 +228,39 @@ when a release is cut. Do not align them.
 
 The order matters, because each step is what makes the next one honest:
 
+0. **sweep the public documentation**, if any format tag moved. This step
+   exists because it was learned the expensive way: after the 1.2.0 formats
+   landed, the gallery still told readers to rebuild and find the same bytes,
+   four documents still quoted the previous sizes as measurements, and the
+   page a reader with older artifacts would actually open said nothing about
+   the refusal they were about to hit. None of it was caught by the tests,
+   because none of it was wrong code — it was prose that had quietly stopped
+   being true.
+
+   Two of the mechanical checks are now automatic, and fail the suite: the
+   format matrix in `docs/ARTIFACTS.md` is rebuilt from the modules'
+   `FORMAT_TAG`/`READ_TAGS`, and no document may name a format tag that no
+   module emits, reads, or has a stated reason for. What is left is the part a
+   machine cannot judge, so read for it:
+
+   - **claims that a rebuild reproduces something.** A format change makes
+     every one of them false. `git grep -n "byte for byte"`;
+   - **sizes and durations.** They were measured on the previous formats. Either
+     re-measure or label them projections and keep the measured figure beside
+     them — a provisioning number that is quietly optimistic is worse than one
+     that is openly conservative;
+   - **record widths and file names** in the format documents and in the module
+     docstrings, which are format documentation too;
+   - **what happens to artifacts somebody already has.** `build-and-query.md`
+     under "Growing them", and the changelog's "Do your artifacts still work?"
+     Say which operations refuse, and say it where a reader looks *before*
+     hitting the refusal;
+   - **fingerprints**: do not update them, do not add them (see the invariant
+     above).
+
+   `git grep -n "<old-tag>"` finds the names. Nothing finds the sentences: they
+   have to be read.
+
 1. **bump** `__version__`, and the tag name in the comment beside it;
 2. **commit** as `release: <version>, <what it is>`, with a body that says what
    changed *for the reader* rather than listing the commits, which the log

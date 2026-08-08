@@ -165,3 +165,78 @@ def test_the_format_matrix_matches_the_code():
             assert rows[m.group(1)][0] == m.group(2), (
                 f"'{m.group(1)}' is documented as {m.group(2)} but the code "
                 f"emits {rows[m.group(1)][0]}")
+
+
+# ---------------------------------------------------------------------------
+# Release gates: what a machine can hold about the public documentation
+# ---------------------------------------------------------------------------
+#
+# These two catch the mechanical half of a release sweep. They do NOT catch the
+# half that actually bit us — a sentence that quietly became false, like a
+# gallery telling readers to rebuild and find the same bytes after a format
+# change. Nothing cheap detects that, which is why AGENTS.md carries a
+# documentation sweep as a written step and names what to look for.
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def test_the_changelog_documents_the_current_version():
+    """A release whose notes were never written is a release nobody can
+    decide whether to take."""
+    from nodsig import __version__
+    with open(os.path.join(ROOT, "CHANGELOG.md")) as f:
+        text = f.read()
+    heading = f"\n## {__version__} "
+    assert heading in text, (
+        f"CHANGELOG.md has no section for {__version__}. Either the version "
+        "was bumped without notes, or the notes are still under "
+        "'## Unreleased' and the heading needs closing.")
+    section = text.split(heading, 1)[1].split("\n## ", 1)[0]
+    assert "Do your artifacts still work?" in section, (
+        f"the {__version__} section does not answer 'do your artifacts still "
+        "work?'. It is the question a reader holding 596 GB actually has, and "
+        "the changelog promises it under every release.")
+
+
+# Tags that appear in the documentation without being emitted or read by a
+# module, each for a stated reason. Anything NOT on this list and not in the
+# format matrix is a name the documentation invented or forgot to retire.
+DOCUMENTED_ELSEWHERE = {
+    "locks-v1": "reuse_scan writes it into the locks manifest (a literal)",
+    "reuse-scan-v1": "reuse_scan writes it into the checkpoint state",
+    "nodsig-identity-v3": "artifact.IDENTITY_TAG, the fingerprint recipe",
+    "nodsig-statement-v1": "artifact.STATEMENT_TAG",
+    "graph-v1": "historical: the earlier seal, which still decodes",
+    "address-book-v1": "historical: superseded by v2, named in the changelog",
+    "check-report-v1": "historical: superseded by v2",
+    "address-book-v3": "forward reference: what a breaking change would be called",
+    "check-report-v3": "forward reference: same",
+}
+
+
+def test_docs_name_no_format_that_does_not_exist():
+    import importlib
+    import re
+    import subprocess
+    known = set(DOCUMENTED_ELSEWHERE)
+    for module, _label in FORMAT_MATRIX:
+        mod = importlib.import_module(module)
+        known.add(mod.FORMAT_TAG)
+        known.update(getattr(mod, "READ_TAGS", ()))
+
+    files = subprocess.run(["git", "ls-files", "*.md"], cwd=ROOT,
+                           capture_output=True, text=True).stdout.split()
+    pattern = re.compile(r"(?<![\w-])([a-z][a-z0-9]*(?:-[a-z0-9]+)*-v\d+)(?![\w-])")
+    seen = {}
+    for rel in files:
+        with open(os.path.join(ROOT, rel)) as f:
+            for n, line in enumerate(f, 1):
+                for tag in pattern.findall(line):
+                    seen.setdefault(tag, f"{rel}:{n}")
+    unknown = {t: where for t, where in seen.items() if t not in known}
+    assert not unknown, (
+        "the documentation names formats no module emits, reads, or has an "
+        "entry for in DOCUMENTED_ELSEWHERE:\n  "
+        + "\n  ".join(f"{t}  ({where})" for t, where in sorted(unknown.items()))
+        + "\nEither the tag is stale, or it is deliberate and belongs on the "
+          "list with the reason it is there.")
