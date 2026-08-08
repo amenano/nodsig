@@ -31,6 +31,7 @@ Usage:
 """
 
 import contextlib
+import hashlib
 import io
 import json
 import os
@@ -147,10 +148,11 @@ def expected_files():
     for name in sorted(locks, key=lambda n: locks[n]):
         for out, sp, val in HIST_ROWS[name]:
             history += (locks[name] + out.to_bytes(5, "big")
-                        + sp.to_bytes(5, "big") + val.to_bytes(8, "big"))
+                        + sp.to_bytes(5, "big")
+                        + val.to_bytes(dv.VAL, "big"))
     txin = b"".join(sp.to_bytes(5, "big") + out.to_bytes(5, "big")
                     for sp, out in TXIN_ROWS)
-    fees = b"".join(f.to_bytes(8, "big") for f in FEES)
+    fees = b"".join(f.to_bytes(dv.VAL, "big") for f in FEES)
     return {"history": history, "tx_inputs": txin, "fees": fees}, locks
 
 
@@ -600,18 +602,139 @@ def test_crash_resume(tmp):
           "cursors and lands on the same bytes")
 
 
-# The frozen outpoint-derived-v2 fingerprint of the synthetic chain — an
+
+# ---------------------------------------------------------------------------
+# The readable predecessor: sealed v2 derivatives must stay readable
+# ---------------------------------------------------------------------------
+
+def make_v2_derived(src, dst, index_fp):
+    """A genuine outpoint-derived-v2 artifact, projected from a v3 one:
+    satoshi fields widened back from u56 to u64 in `history` and
+    `fees`, ladders resampled, the v2 tag resealed. `tx_inputs` holds
+    no value and is copied as is.
+
+    Written against the v2 format text, not by calling code that still
+    exists — the point is that the reader meets an artifact it did not
+    produce."""
+    import shutil
+    from nodsig.artifact import (make_identity, seal_manifest,
+                                 sha_and_ladder)
+    shutil.copytree(src, dst)
+    manifest = json.load(open(os.path.join(dst, dv.MANIFEST_NAME)))
+    build = manifest["build"]
+
+    def widen(blob, rec, val_at):
+        out = bytearray()
+        for i in range(0, len(blob), rec):
+            r = blob[i:i + rec]
+            out += r[:val_at] + int.from_bytes(r[val_at:], "big").to_bytes(8, "big")
+        return bytes(out)
+
+    for logical, rec, val_at, spec in (
+            ("history", dv.HIST_REC, dv.HIST_VAL,
+             (20 + 5 + 5 + 8, dv.HIST_KEY, dv.HIST_EVERY)),
+            ("fees", dv.FEE_REC, 0, None)):
+        entry = build["files"][logical]
+        path = os.path.join(dst, entry["file"])
+        with open(path, "rb") as f:
+            blob = f.read()
+        wide = widen(blob, rec, val_at)
+        with open(path, "wb") as f:
+            f.write(wide)
+        if spec is None:                       # fees: positional, no ladder
+            entry["sha256"] = hashlib.sha256(wide).hexdigest()
+            continue
+        sha, ladder = sha_and_ladder(path, *spec, dv.OutpointError)
+        entry["sha256"] = sha
+        cache = build["caches"][logical]
+        with open(os.path.join(dst, cache["file"]), "wb") as f:
+            f.write(ladder)
+        cache["sha256"] = hashlib.sha256(ladder).hexdigest()
+
+    build["parent"] = dict(build["parent"], fingerprint=index_fp)
+    identity = make_identity(
+        "outpoint-derived-v2", 1, manifest["identity"]["coverage"]["to"],
+        ((n, build["files"][n]["sha256"]) for n in dv.FP_ORDER))
+    with open(os.path.join(dst, dv.MANIFEST_NAME), "w") as f:
+        json.dump(seal_manifest("outpoint-derived-v2", identity, build), f)
+
+    spath = os.path.join(dst, dv.STATE_NAME)
+    state = json.load(open(spath))
+    state["format"] = "outpoint-derived-v2"
+    state["files"] = dict(build["files"])
+    state["caches"] = dict(build["caches"])
+    with open(spath, "w") as f:
+        json.dump(state, f)
+    return dst
+
+
+def test_a_v2_pair_is_still_readable(dbuilt):
+    """A v2 index and the v2 derivatives built on it: the pair a
+    stranger downloaded under 1.0.0 or 1.1.0. It must still answer."""
+    tmp, _graph, index, derived, _txids, locks = dbuilt
+    v2i = toi.make_v2_index(index, os.path.join(tmp, "v2_index"))
+    ifp = json.load(open(os.path.join(v2i, oi.MANIFEST_NAME)))["fingerprint"]
+    v2d = make_v2_derived(derived, os.path.join(tmp, "v2_derived"), ifp)
+
+    idx = oi.Index(v2i)
+    d = dv.Derived(v2d, idx)
+    try:
+        check(d.format == "outpoint-derived-v2",
+              "the reader must see the artifact for what it is")
+        check(d.val == 8, "v2 satoshis are u64, and the reader must know")
+        want = {lock: [(o, sp, v) for o, sp, v in HIST_ROWS[name]]
+                for name, lock in locks.items()}
+        for name, lock in locks.items():
+            got = [(o, sp or 0, v) for o, sp, v in d.rows(lock)]
+            check(got == want[lock],
+                  f"{name}: v2 history rows must read identically: "
+                  f"{got} vs {want[lock]}")
+        for t, f in enumerate(FEES):
+            check(d.fee(t) == f,
+                  f"v2 fee of tx {t} must read as {f}, got {d.fee(t)}")
+    finally:
+        d.close()
+        idx.close()
+    dv.run_verify(v2d)
+    print("ok  a sealed v2 pair still reads and verifies")
+
+
+def test_building_on_v2_derivatives_refuses_loudly(dbuilt):
+    """Reading widens, building does not: extending a v2 directory
+    would fuse 38-byte rows into a 37-byte file."""
+    tmp, _graph, index, derived, _txids, _locks = dbuilt
+    v2i = toi.make_v2_index(index, os.path.join(tmp, "v2_index_b"))
+    ifp = json.load(open(os.path.join(v2i, oi.MANIFEST_NAME)))["fingerprint"]
+    v2d = make_v2_derived(derived, os.path.join(tmp, "v2_derived_b"), ifp)
+    try:
+        dv.run_build(index, v2d)
+    except dv.OutpointError as e:
+        check("outpoint-derived-v2" in str(e) or "one byte narrower" in str(e),
+              f"the refusal must name what and why: {e}")
+        print("ok  a build refuses v2 derivatives, and says why")
+        return
+    fail("building onto v2 derivatives must refuse")
+
+
+# The frozen outpoint-derived-v3 fingerprint of the synthetic chain — an
 # absolute anchor beyond run-to-run determinism. Update deliberately if the
 # format or the fixture chain changes.
+#
+# Moved once, on purpose: v3 narrowed satoshi fields from u64 to u56, so
+# history and fees records changed width and every fingerprint with them.
+# The v2 value was
+# 8e581e76d8584286b686434045eac233f0d15be471b6ba82ca80647e8bc79b65;
+# it stays written here rather than deleted, because "the golden value
+# moved" is only a safe sentence when the old one is still readable.
 GOLDEN_DERIVED_FINGERPRINT = \
-    "8e581e76d8584286b686434045eac233f0d15be471b6ba82ca80647e8bc79b65"
+    "0eaf00a8d78210a82920b37c169ee84d3a22921422805ea0982dbd54598c0504"
 
 
 def test_golden_fingerprint(dbuilt):
     _tmp, _graph, _index, derived, _txids, _locks = dbuilt
     manifest = json.load(open(os.path.join(derived, dv.MANIFEST_NAME)))
     check(manifest["fingerprint"] == GOLDEN_DERIVED_FINGERPRINT,
-          "outpoint-derived-v2 fingerprint drifted from the frozen value: "
+          "outpoint-derived-v3 fingerprint drifted from the frozen value: "
           f"{manifest['fingerprint']}")
     print("ok  golden: the synthetic derivatives fingerprint is unchanged")
 

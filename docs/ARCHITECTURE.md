@@ -68,7 +68,7 @@ the contract.
 ### L0 — format contracts (in `docs/formats/`)
 
 `Headers-v2` (headers/coinbase/coinbase_off), `Graph-v2`, `OutpointIndex-v3`
-(blocks/txids/tx_first_out/txid_index/outputs/spends), `OutpointDerived-v2`
+(blocks/txids/tx_first_out/txid_index/outputs/spends), `OutpointDerived-v3`
 (history/tx_inputs/fees), `RevealArchive-v2`, `Nonces-v3`,
 `Nonces-witness-v1`. Each:
 record layout + ordering rule + canonical fingerprint + ancestry (every

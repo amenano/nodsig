@@ -248,7 +248,18 @@ ORD = 5
 BLOCK_REC = ORD + ORD + 4            # blocks.bin
 TXID_REC = 32                        # txids.bin
 TFO_REC = ORD                        # tx_first_out.bin
-OUT_REC = 8 + 20                     # outputs.bin
+# Satoshi fields are u56, not u64. The whole supply is 2.1e15 satoshis
+# and 2^56 is 7.2e16, so every value ever minted fits with 34x of room
+# — but that is a CONSENSUS fact carrying a layout, not an arithmetic
+# impossibility like the curve order, and this project's rule for those
+# is: declare it, and refuse loudly rather than truncate quietly. Every
+# write site checks MAX_VALUE. Big-endian is preserved, so memcmp still
+# sorts and no key contains a value anyway.
+VALUE_REC = 7
+MAX_VALUE = (1 << (8 * VALUE_REC)) - 1
+
+OUT_REC = VALUE_REC + 20             # outputs.bin
+
 RESOLVER_REC = 32 + ORD + 3          # txid_index.bin (and its runs)
 RAWSPEND_REC = 32 + 4 + ORD          # scan-phase spend runs
 SPEND_REC = ORD + ORD                # the sorted spend runs (v2: spends.bin)
@@ -287,6 +298,10 @@ MERGED = {"txid_index": (RESOLVER_REC, 32, 1024)}
 # READ: a sealed v2 index keeps spends.bin, a sorted (out, spender)
 # file with a ladder, and the published artifacts stay readable.
 LEGACY_MERGED = {"spends": (SPEND_REC, ORD, 4096)}
+
+# v2 also stored satoshis as u64, so its outputs.bin record is one byte
+# wider. The reader carries both; only the reader.
+LEGACY_OUT_REC = 8 + 20
 
 # The THIRD category, which the two above cannot express. These are
 # generation-committed like a merged file (written whole at every fusion
@@ -528,7 +543,14 @@ def _phase_scan(graph_dir, store, end_height, flush_records,
             resolver_buf.append(txid + first_out5
                                 + len(outs).to_bytes(3, "big"))
             for value, script in outs:
-                pos_buf["outputs"] += (value.to_bytes(8, "big")
+                if value > MAX_VALUE:
+                    raise OutpointError(
+                        f"an output at height {height} is worth "
+                        f"{value} satoshis, past the {MAX_VALUE} a u56 "
+                        "field holds. That is more than the whole "
+                        "supply, so the block is not one consensus "
+                        "produced: refusing rather than truncating")
+                pos_buf["outputs"] += (value.to_bytes(VALUE_REC, "big")
                                        + hash160(script))
             spender5 = n_tx.to_bytes(ORD, "big")
             for prev_txid, prev_vout in tx["inputs"]:
@@ -1401,6 +1423,12 @@ class Index:
             self.times.append(int.from_bytes(rec[10:14], "big"))
         self.n_tx = self.build["transactions"]
         self.n_out = self.build["outputs"]
+        # Declared by the format, not inferred from the bytes: a v2
+        # index carries 28-byte outputs (u64 value), a v3 one 27 (u56).
+        # Deducing it from the file size would make a truncated file
+        # look like a different format instead of a broken one.
+        self.out_rec = OUT_REC if self.format == FORMAT_TAG \
+            else LEGACY_OUT_REC
         self.watermark = self.manifest["identity"]["coverage"]["to"]
 
     # -- plumbing ----------------------------------------------------------
@@ -1463,9 +1491,16 @@ class Index:
                 int.from_bytes(r[37:40], "big"))
 
     def output(self, out_ord):
-        """output ordinal → (value_sats, lock hash160)."""
-        rec = self._pread("outputs.bin", out_ord * OUT_REC, OUT_REC)
-        return int.from_bytes(rec[0:8], "big"), rec[8:28]
+        """output ordinal → (value_sats, lock hash160).
+
+        The value width is read off the ARTIFACT, not off this module's
+        constant: v2 stored satoshis as u64, v3 as u56, and the lock is
+        the trailing 20 bytes either way. One expression covers both,
+        which is cheaper than a branch and cannot drift apart."""
+        rec = self._pread("outputs.bin", out_ord * self.out_rec,
+                          self.out_rec)
+        v = self.out_rec - 20
+        return int.from_bytes(rec[0:v], "big"), rec[v:]
 
     def spenders(self, out_ord):
         """tx ordinals that spent this output: [] if unspent, one

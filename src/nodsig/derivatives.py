@@ -85,7 +85,7 @@ BUILD = one sequential pass over the index + one sort per side
                    them (spender_of even shares the output's index):
                    each output meets its (at most one) spend in
                    lockstep, emits a history row and, if spent, a
-                   spender-side record (spender | out | value, 18 B);
+                   spender-side record (spender | out | value, 17 B);
                    per-transaction output sums stream into a temp
                    file for the fee subtraction. Sorted runs flush at
                    checkpoints; the pass resumes from exact record
@@ -180,19 +180,34 @@ from nodsig.recio import (IO_CHUNK, atomic_json, budgeted_slab,
 from nodsig.recsort import SortedFile
 from nodsig.reuse_scan import SAT
 
-FORMAT_TAG = "outpoint-derived-v2"
+FORMAT_TAG = "outpoint-derived-v3"
+
+# Sealed derivatives this code can READ. v2 is the same three files in
+# the same order, with satoshis as u64 instead of u56, so the widths are
+# carried on the reader and `verify_sealed` can take the pair directly —
+# unlike the index, where a file was replaced and the file LIST changed.
+# Builders stay strict: extending a v2 artifact would fuse 38-byte rows
+# into a 37-byte file, which is not a format question but a corruption.
+READ_TAGS = (FORMAT_TAG, "outpoint-derived-v2")
+LEGACY_VAL = 8
 STATE_NAME = "state.json"
 MANIFEST_NAME = "manifest.json"
 RUNS_DIR = "runs"
 
-HIST_REC = 20 + ORD + ORD + 8        # lock | out_ord | spender | value
+# Satoshi fields follow the index: u56, not u64 (see the comment on
+# VALUE_REC there — a consensus bound carrying a layout, declared, with
+# a loud refusal at every write site instead of a quiet truncation).
+VAL = oi.VALUE_REC
+HIST_VAL = 20 + ORD + ORD            # where the value starts in a row
+
+HIST_REC = 20 + ORD + ORD + VAL      # lock | out_ord | spender | value
 HIST_KEY = 20                        # searched by lock…
 HIST_DEDUP = 25                      # …deduplicated by (lock, out_ord)
 HIST_EVERY = 1024                    # ~40 KB bucket
-SPRUN_REC = ORD + ORD + 8            # spender | out_ord | value (runs)
+SPRUN_REC = ORD + ORD + VAL          # spender | out_ord | value (runs)
 TXIN_REC = ORD + ORD                 # spender | out_ord (final)
 TXIN_EVERY = 4096                    # ~40 KB bucket
-FEE_REC = 8
+FEE_REC = VAL
 
 UNSPENT = bytes(ORD)                 # spender 0 = tx 0 = a coinbase
 
@@ -204,6 +219,13 @@ FP_ORDER = ("history", "tx_inputs", "fees")
 # fees.bin is read positionally and has none.
 LADDERS = {"history": (HIST_REC, HIST_KEY, HIST_EVERY),
            "tx_inputs": (TXIN_REC, ORD, TXIN_EVERY)}
+
+# The same table for a v2 artifact, whose history row is one byte wider.
+# The file LIST is identical across the two versions — which is what lets
+# `verify_sealed` take the tag pair — but a ladder is rebuilt FROM its
+# file, so its spec has to carry that file's actual record width.
+LEGACY_LADDERS = {"history": (HIST_VAL + LEGACY_VAL, HIST_KEY, HIST_EVERY),
+                  "tx_inputs": (TXIN_REC, ORD, TXIN_EVERY)}
 PHASES = ("scan", "merge-history", "merge-inputs", "seal", "sealed")
 
 
@@ -241,7 +263,7 @@ def _store(derived_dir, state, clock=None):
                     state_name=STATE_NAME, clock=clock)
 
 
-def _load_state(derived_dir, required=True):
+def _load_state(derived_dir, required=True, accept=(FORMAT_TAG,)):
     path = os.path.join(derived_dir, STATE_NAME)
     if not os.path.exists(path):
         if required:
@@ -250,12 +272,20 @@ def _load_state(derived_dir, required=True):
         return None
     with open(path) as f:
         state = json.load(f)
-    if state.get("format") != FORMAT_TAG:
+    found = state.get("format")
+    if found not in accept:
+        if found in READ_TAGS:
+            raise OutpointError(
+                f"these derivatives are {found} and this build emits "
+                f"{FORMAT_TAG}: satoshi fields are one byte narrower "
+                "now, so extending or rewinding them as the new format "
+                "would fuse records of two widths into one file. Read "
+                "them, or build a fresh directory")
         raise OutpointError("unknown derivatives state format")
     return state
 
 
-def _load_manifest(derived_dir):
+def _load_manifest(derived_dir, accept=(FORMAT_TAG,)):
     path = os.path.join(derived_dir, MANIFEST_NAME)
     if not os.path.exists(path):
         raise OutpointError(f"no {MANIFEST_NAME} in {derived_dir}: "
@@ -263,7 +293,7 @@ def _load_manifest(derived_dir):
                             "`build`")
     with open(path) as f:
         manifest = json.load(f)
-    if manifest.get("format") != FORMAT_TAG:
+    if manifest.get("format") not in accept:
         raise OutpointError("unknown derivatives manifest format")
     return manifest
 
@@ -332,7 +362,8 @@ class _ForwardOutputs:
                     f"outputs.bin: short read at ordinal {out_ord}")
         i = off - self.base
         rec = self.buf[i:i + oi.OUT_REC]
-        return int.from_bytes(rec[0:8], "big"), rec[8:28]
+        return (int.from_bytes(rec[0:oi.VALUE_REC], "big"),
+                rec[oi.VALUE_REC:])
 
 
 def _phase_scan(index, store, flush_records, checkpoint_every):
@@ -468,9 +499,9 @@ def _phase_scan(index, store, flush_records, checkpoint_every):
         so = int.from_bytes(sp_rec[:ORD], "big")
         value, lock = old_outputs.fetch(so)
         hist_buf.append(lock + sp_rec[:ORD] + sp_rec[ORD:2 * ORD]
-                        + value.to_bytes(8, "big"))
+                        + value.to_bytes(VAL, "big"))
         sprun_buf.append(sp_rec[ORD:2 * ORD] + sp_rec[:ORD]
-                         + value.to_bytes(8, "big"))
+                         + value.to_bytes(VAL, "big"))
         spend_pos += 1
 
     spend_rec = next_spend()
@@ -501,8 +532,8 @@ def _phase_scan(index, store, flush_records, checkpoint_every):
             spender = spend_rec[ORD:2 * ORD]
             spend_pos += 1
             spend_rec = next_spend()
-        value = out_rec[:8]
-        lock = out_rec[8:28]
+        value = out_rec[:oi.VALUE_REC]
+        lock = out_rec[oi.VALUE_REC:]
         hist_buf.append(lock + out5 + spender + value)
         if spender != UNSPENT:
             sprun_buf.append(spender + out5 + value)
@@ -588,7 +619,12 @@ def _phase_merge_inputs(store):
 
         def fee_row(fee):
             nonlocal t, fee_sats
-            fee_buf.extend(fee.to_bytes(8, "big"))
+            if fee > oi.MAX_VALUE:
+                raise OutpointError(
+                    f"a fee of {fee} satoshis is past the "
+                    f"{oi.MAX_VALUE} a u56 field holds — more than the "
+                    "whole supply, so the source is not consensus data")
+            fee_buf.extend(fee.to_bytes(VAL, "big"))
             fee_sats += fee
             t += 1
             if len(fee_buf) >= IO_CHUNK:
@@ -674,7 +710,7 @@ def _phase_seal(store, index):
             prev_lock = rec[:HIST_KEY]
         if rec[25:30] != UNSPENT:
             spent_rows += 1
-            spent_sats += int.from_bytes(rec[30:38], "big")
+            spent_sats += int.from_bytes(rec[HIST_VAL:], "big")
     files["history"] = dict(entry)
 
     # The cross-file identity: the satoshis history says were spent
@@ -916,7 +952,7 @@ def run_rewind(index_dir, derived_dir):
                 if rec[HIST_DEDUP:HIST_DEDUP + ORD] >= tx_cut:
                     rec = rec[:HIST_DEDUP] + UNSPENT + rec[30:]
                 elif rec[HIST_DEDUP:HIST_DEDUP + ORD] != UNSPENT:
-                    spent += int.from_bytes(rec[30:38], "big")
+                    spent += int.from_bytes(rec[HIST_VAL:], "big")
                 return bytes(rec)
 
             dups, delete = store.fuse(
@@ -1039,8 +1075,15 @@ class Derived:
     def __init__(self, derived_dir, index):
         self.dir = derived_dir
         self.index = index
-        self.manifest = _load_manifest(derived_dir)
+        self.manifest = _load_manifest(derived_dir, accept=READ_TAGS)
+        self.format = self.manifest["format"]
         self.build = self.manifest["build"]
+        # Declared by the format, never inferred from the file size: v2
+        # stored satoshis as u64, v3 as u56, and the value is the tail
+        # of the record either way.
+        self.val = VAL if self.format == FORMAT_TAG else LEGACY_VAL
+        self.hist_rec = HIST_VAL + self.val
+        self.fee_rec = self.val
         parent = self.manifest["build"].get("parent")
         if (parent is None
                 or parent["fingerprint"] != index.manifest["fingerprint"]):
@@ -1076,13 +1119,13 @@ class Derived:
     def rows(self, lock):
         """One lock's history rows, streamed in ordinal (= time)
         order: (out_ord, spender_tx | None, value_sats)."""
-        sf = self._sorted_file("history", HIST_REC, HIST_KEY)
+        sf = self._sorted_file("history", self.hist_rec, HIST_KEY)
         for rec in sf.scan(lock):
             spender = rec[25:30]
             yield (int.from_bytes(rec[20:25], "big"),
                    None if spender == UNSPENT
                    else int.from_bytes(spender, "big"),
-                   int.from_bytes(rec[30:38], "big"))
+                   int.from_bytes(rec[HIST_VAL:], "big"))
 
     def balance(self, lock):
         """(unspent outputs, satoshis) — the offline balance, no node
@@ -1098,8 +1141,9 @@ class Derived:
         if self._fees_fd is None:
             self._fees_fd = os.open(
                 os.path.join(self.dir, "fees.bin"), os.O_RDONLY)
-        data = os.pread(self._fees_fd, FEE_REC, tx_ord * FEE_REC)
-        if len(data) != FEE_REC:
+        data = os.pread(self._fees_fd, self.fee_rec,
+                        tx_ord * self.fee_rec)
+        if len(data) != self.fee_rec:
             raise OutpointError("fees.bin: short read")
         return int.from_bytes(data, "big")
 
@@ -1116,7 +1160,7 @@ class Derived:
 # ---------------------------------------------------------------------------
 
 def run_stats(derived_dir, out=sys.stdout):
-    state = _load_state(derived_dir)
+    state = _load_state(derived_dir, accept=READ_TAGS)
     print(f"phase: {state['phase']}   cursors: "
           f"{state['out_pos']:,} outputs, {state['spend_pos']:,} "
           f"spends, {state['tx_pos']:,} txs", file=out)
@@ -1129,7 +1173,8 @@ def run_stats(derived_dir, out=sys.stdout):
     print(f"  fees total {t['total_fees_sats']:,} sats, updated rows "
           f"{t['updated_rows']:,}", file=out)
     if state["phase"] == "sealed":
-        print(f"fingerprint: {_load_manifest(derived_dir)['fingerprint']}",
+        print("fingerprint: "
+              f"{_load_manifest(derived_dir, accept=READ_TAGS)['fingerprint']}",
               file=out)
 
 
@@ -1145,7 +1190,7 @@ def run_verify(derived_dir, index_dir=None):
     is therefore a declaration until an index is handed over to confront
     it with. Without the flag the audit says both were taken on trust,
     and points at the flag that would settle them."""
-    manifest = _load_manifest(derived_dir)
+    manifest = _load_manifest(derived_dir, accept=READ_TAGS)
     coverage = None
     if index_dir is not None:
         imanifest = oi._load_manifest(index_dir)
@@ -1169,9 +1214,17 @@ def run_verify(derived_dir, index_dir=None):
     # reaching this call with an index means the declaration WAS
     # confronted — and the report has to say so, or it tells the
     # operator to pass the very flag they passed.
-    verify_sealed(derived_dir, manifest, FORMAT_TAG, OutpointError,
+    # The tag PAIR is legitimate here and was not for the index: both
+    # versions are the same three files in the same order, which is the
+    # condition verify_sealed states for a sequence. The LADDERS are a
+    # different matter — they are rebuilt from their file, so their spec
+    # must carry that file's real record width — and getting that wrong
+    # showed up as "truncated record", not as a wrong digest.
+    verify_sealed(derived_dir, manifest, READ_TAGS, OutpointError,
                   fp_order=FP_ORDER,
-                  ladders=LADDERS, coverage_from_data=coverage,
+                  ladders=(LADDERS if manifest["format"] == FORMAT_TAG
+                           else LEGACY_LADDERS),
+                  coverage_from_data=coverage,
                   trust_hint="--index",
                   parent_confirmed=(True if index_dir is not None
                                     else None))

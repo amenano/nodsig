@@ -69,8 +69,26 @@ fingerprint, never by a tag.
   artifact and reads it. **A v2 index cannot be extended, rewound, or used to
   build derivatives**, and each of the three refuses by name: mixing the two
   layouts would produce bytes no rebuild reproduces.
-- **unchanged:** `reveal-archive-v2`, `outpoint-derived-v2`,
-  `nonces-witness-v1`, `graph-v2`, `headers-v2`.
+- **`outpoint-derived-v2` → `outpoint-derived-v3`**, and the index's
+  `outputs.bin` with it: **satoshi fields become `u56`**, 7 bytes instead of 8.
+  The whole supply is 2.1e15 satoshis against 2^56 = 7.2e16, so every amount
+  that can exist fits with 34× of room. Records go 28 → 27 (`outputs`),
+  38 → 37 (`history`), 8 → 7 (`fees`), for about **9 GB** across the two
+  artifacts.
+
+  The bound is a consensus fact carrying a layout, not an arithmetic
+  impossibility, so it is written into the format text and **every write site
+  refuses loudly** instead of truncating: a value past the maximum means the
+  source is not consensus data, and the build stops. Big-endian is kept, so
+  `memcmp` still sorts and no search changes.
+
+  Reading is widened again: a **v2 derived artifact** still answers `history`,
+  `fee`, `cospends`, `verify` and `check` when paired with the v2 index it was
+  built from, and a test builds that genuine pair and reads it back. It
+  **cannot be extended or rewound** — fusing 38-byte rows into a 37-byte file
+  is not a format question but a corruption — and the build says so.
+- **unchanged:** `reveal-archive-v2`, `nonces-witness-v1`, `graph-v2`,
+  `headers-v2`.
 
 ### Do your artifacts still work?
 
@@ -83,7 +101,7 @@ different promises.
 |---|---|---|
 | a `nonces-v2` census | yes | **no** — needs a fresh scan |
 | an `outpoint-index-v2` | yes | **no** — needs a rebuild |
-| derivatives built on a v2 index | yes, with that index | **no** — the build refuses a v2 index |
+| `outpoint-derived-v2`, paired with its v2 index | yes | **no** — the build refuses both |
 | archive, headers, graph | yes | yes, untouched |
 
 Rebuilding the census means a full chain scan, because it is co-emitted by the
@@ -96,8 +114,9 @@ skip.
 
 What the rebuild buys, stated plainly so nobody hurries for the wrong reason:
 the nonce rules remove **at most 79 records out of 3,727,721,550** — worth
-having for correctness, not for space. The index change is worth **15.1 GB**
-and a faster spend lookup. Neither is a reason to rebuild by itself. **The
+having for correctness, not for space. The spend side is worth **15.1 GB** and
+a faster lookup, `u56` about **9 GB** more: roughly **24 GB off ~596**, which
+is 4%. None of it is a reason to rebuild by itself. **The
 reason to rebuild is that you want the chain re-scanned anyway**; if you only
 query what you already have, this release costs you nothing and you can stay
 where you are.

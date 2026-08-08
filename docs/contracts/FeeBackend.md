@@ -5,7 +5,7 @@ satoshis, read in O(1) — with coinbase transactions reported as such (they cre
 coins and pay no fee).
 
 - **Layer:** L1 (in-process). See [ARCHITECTURE](../ARCHITECTURE.md).
-- **Reads format:** [OutpointDerived-v2](../formats/OutpointDerived-v2.md)
+- **Reads format:** [OutpointDerived-v3](../formats/OutpointDerived-v3.md)
   (`fees.bin`, positional).
 - **Reference impl:** `Derived.fee` + the `fee` command composition.
 - **Depends on:** [IndexReader](./IndexReader.md) (to resolve a txid to its tx

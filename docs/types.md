@@ -51,7 +51,7 @@ Source = { id: string, watermark: u32, fingerprint: digest32? }
 ```
 
 - `id` — a **stable identifier of the source artifact**: its format tag
-  plus its logical role (e.g. `outpoint-derived-v2`). It is **not** a filesystem
+  plus its logical role (e.g. `outpoint-derived-v3`). It is **not** a filesystem
   path. Paths are local and private and MUST NEVER appear in a result (they would
   leak topology and make results non-portable).
 - `watermark` — highest confirmed height the source covers; every answer is "as

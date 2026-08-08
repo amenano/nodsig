@@ -176,7 +176,7 @@ def expected_files(txids):
 
     txids_bin = b"".join(txids[name] for name in order)
     tfo = b"".join(fo.to_bytes(5, "big") for fo in first_out)
-    outputs = b"".join(v.to_bytes(8, "big") + hash160(spk)
+    outputs = b"".join(v.to_bytes(oi.VALUE_REC, "big") + hash160(spk)
                        for name in order for v, spk in outs[name])
 
     # Resolver: unique txids sorted as bytes; the BIP30 twin keeps the
@@ -204,7 +204,7 @@ def expected_files(txids):
         oi.SLOT_MANY if len(by_out.get(o, ())) > 1
         else (sorted(by_out[o])[0].to_bytes(5, "big") if o in by_out
               else oi.SLOT_UNSPENT)
-        for o in range(len(outputs) // 28))
+        for o in range(len(outputs) // oi.OUT_REC))
     spend_extra = b"".join(
         so.to_bytes(5, "big") + sp.to_bytes(5, "big")
         for so in sorted(by_out) if len(by_out[so]) > 1
@@ -865,11 +865,14 @@ def test_building_on_a_v2_index_refuses_loudly(built):
 # Moved once, on purpose: v3 replaced spends.bin with spender_of.bin plus
 # spend_extra.bin, so FP_ORDER changed and every fingerprint with it. The
 # v2 value was
-# 9040d59c747256a7a9c012f5c4499f850aaf25de7e56ff5728c8f00931cab42d;
+# 9040d59c747256a7a9c012f5c4499f850aaf25de7e56ff5728c8f00931cab42d, and
+# the value it took with spender_of alone, before satoshis narrowed to
+# u56, was
+# 7f1cb2e86d596fc1abb882ca7169907bdcb84722d2d3c0b9fd4dd67568270484;
 # it is written down here rather than deleted, because "the golden value
 # moved" is only a safe sentence when the old one is still readable.
 GOLDEN_INDEX_FINGERPRINT = \
-    "7f1cb2e86d596fc1abb882ca7169907bdcb84722d2d3c0b9fd4dd67568270484"
+    "8c2764e249c73662020455c52c56032e95ac3f00fca7dce52f850c77d33f05f4"
 
 
 def test_golden_fingerprint(built):

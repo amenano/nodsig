@@ -6,7 +6,7 @@ paid to that lock, with its value, its receive height, and — if spent — the
 spender and the spend height.
 
 - **Layer:** L1 (in-process). See [ARCHITECTURE](../ARCHITECTURE.md).
-- **Reads format:** [OutpointDerived-v2](../formats/OutpointDerived-v2.md)
+- **Reads format:** [OutpointDerived-v3](../formats/OutpointDerived-v3.md)
   (`history.bin`) **plus** the bound [OutpointIndex-v3](../formats/OutpointIndex-v3.md)
   (heights are read from the index, not stored in `history.bin`).
 - **Reference impl:** `Derived.rows` + the `history` command composition.

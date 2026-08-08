@@ -5,7 +5,7 @@ already tie together, and what that does to the separations they say they
 intended.
 
 - **Layer:** L1 (in-process). See [ARCHITECTURE](../ARCHITECTURE.md).
-- **Reads format:** [OutpointDerived-v2](../formats/OutpointDerived-v2.md)
+- **Reads format:** [OutpointDerived-v3](../formats/OutpointDerived-v3.md)
   (`tx_inputs.bin`, `history.bin`) + [IndexReader](./IndexReader.md) (locks,
   txids, heights). Class 1 reads **nothing**.
 - **Reference impl:** `linkage.same_key`, `linkage.IndexLinkage`.
@@ -23,7 +23,7 @@ intended.
 
 ## Source & status
 
-`Source { id: "outpoint-derived-v2", watermark: u32, fingerprint: digest32 }`
+`Source { id: "outpoint-derived-v3", watermark: u32, fingerprint: digest32 }`
 for classes 2 and 3. Class 1 answers with `source: "address-codec"` — no
 watermark, no fingerprint, `perishable: false`.
 

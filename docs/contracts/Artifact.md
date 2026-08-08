@@ -9,7 +9,7 @@ no `Result<T>` envelope.
 - **Instances:** [Headers-v2](../formats/Headers-v2.md),
   [Graph-v2](../formats/Graph-v2.md),
   [OutpointIndex-v3](../formats/OutpointIndex-v3.md),
-  [OutpointDerived-v2](../formats/OutpointDerived-v2.md),
+  [OutpointDerived-v3](../formats/OutpointDerived-v3.md),
   [RevealArchive-v2](../formats/RevealArchive-v2.md),
   [Nonces-v3](../formats/Nonces-v3.md),
   [Nonces-witness-v1](../formats/Nonces-witness-v1.md).
@@ -47,7 +47,7 @@ manifest = {
 }
 
 Identity = {
-    format:   string,               // e.g. "outpoint-derived-v2"
+    format:   string,               // e.g. "outpoint-derived-v3"
     coverage: { from:u32, to:u32 }, // the range of chain this artifact holds
     files:    [ { name:string, sha256:digest32 } ],   // IN CANONICAL ORDER
 }

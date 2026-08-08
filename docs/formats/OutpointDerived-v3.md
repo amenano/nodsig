@@ -1,4 +1,4 @@
-# OutpointDerived-v2: format (L0)
+# OutpointDerived-v3: format (L0)
 
 The three spend-side derivatives of the outpoint index: a lock's payment
 **history**, every transaction's **fee**, and the **co-spend** reading. Everything
@@ -26,9 +26,9 @@ graph. Read by [HistoryBackend](../contracts/HistoryBackend.md),
 
 | file | width | order | layout |
 |---|---|---|---|
-| `history.bin` | 38 | sorted by `(lock, output_ordinal)`; key = `lock` (20) | `lock:digest20` \| `output_ordinal:u40` \| `spender_tx:u40` \| `value:u64` |
+| `history.bin` | 37 | sorted by `(lock, output_ordinal)`; key = `lock` (20) | `lock:digest20` \| `output_ordinal:u40` \| `spender_tx:u40` \| `value:u56` |
 | `tx_inputs.bin` | 10 | sorted by `(spender_tx, output_ordinal)`; key = `spender_tx` (5) | `spender_tx:u40` \| `output_ordinal:u40` |
-| `fees.bin` | 8 | positional by `tx_ordinal` | `fee:u64` (satoshis) |
+| `fees.bin` | 7 | positional by `tx_ordinal` | `fee:u56` (satoshis) |
 
 - **`history.bin`** — one row per output **ever created**: who received it (the
   lock), when (the ordinal = chain time), whether/by whom it was spent, and its
@@ -105,6 +105,37 @@ spent rows, Σ fees from the truncated `fees.bin`. The seal's cross-check is
 therefore a real test of the rewind rather than a formality — the two roads are
 re-walked, and a sift that dropped the wrong row makes them disagree.
 
+## Satoshi fields are `u56`
+
+`value` and `fee` are **7 bytes**, not 8. The whole supply is 2.1e15 satoshis
+and 2^56 is 7.2e16, so every amount that can exist fits with **34x** of room.
+
+That bound is a **consensus fact carrying a layout**, not an arithmetic
+impossibility like the curve order, so it follows this project's rule for such
+things: it is declared here, and every write site **refuses loudly** rather than
+truncating quietly. A value past `MAX_VALUE` means the source is not something
+consensus produced, and the build stops instead of storing a wrong number.
+
+Big-endian is preserved, so `memcmp` still sorts; no key contains a value, so no
+search changes. Across the index and these three files the narrowing is worth
+about **9 GB**.
+
+## The previous format (`outpoint-derived-v2`)
+
+`outpoint-derived-v2` is this format with `u64` satoshis: `history.bin` rows are
+38 bytes and `fees.bin` records 8. Same three files, same order, same keys, same
+ladder steps.
+
+The tool **reads a v2 artifact**: `history`, `fee`, `cospends`, `verify`,
+`stats` and `check` all work on one, paired with the v2 index it was built from.
+Because the file list is unchanged, `verify` accepts the two tags together —
+unlike the index, where a file was replaced. The **ladder specs still branch**,
+though, since a ladder is rebuilt from its file and therefore needs that file's
+real record width.
+
+It **cannot be extended or rewound**: fusing 38-byte rows into a 37-byte file is
+not a format question, it is a corruption. The build refuses and says so.
+
 ## Sidecar ladders — caches, NOT in the fingerprint
 
 `history` every **1024** (samples the 20-byte lock), `tx_inputs` every **4096**
@@ -133,7 +164,7 @@ index with `unresolved > 0`.
 
 `manifest.json` follows the shared shape in
 [Artifact](../contracts/Artifact.md). The identity holds the tag
-`outpoint-derived-v2`, the coverage, and the three data files'
+`outpoint-derived-v3`, the coverage, and the three data files'
 digests in this order:
 
 ```

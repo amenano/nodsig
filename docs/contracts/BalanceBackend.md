@@ -5,7 +5,7 @@ how much it ever received, how much was spent, and what remains unspent. Compute
 from confirmed history only — **no node is asked**.
 
 - **Layer:** L1 (in-process). See [ARCHITECTURE](../ARCHITECTURE.md).
-- **Reads format:** [OutpointDerived-v2](../formats/OutpointDerived-v2.md)
+- **Reads format:** [OutpointDerived-v3](../formats/OutpointDerived-v3.md)
   (`history.bin`).
 - **Reference impl:** `Derived.balance` (and the summary line of the `history`
   window).

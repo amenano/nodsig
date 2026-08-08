@@ -36,7 +36,7 @@ Genesis excluded — ordinals start at block 1.
 | `blocks.bin` | 14 | height `i+1` | `first_tx:u40` \| `first_out:u40` \| `time:u32` |
 | `txids.bin` | 32 | tx ordinal | `txid` (serialized order) |
 | `tx_first_out.bin` | 5 | tx ordinal | `first_output_ordinal:u40` (strictly increasing → also binary-searchable by value) |
-| `outputs.bin` | 28 | output ordinal | `value:u64` \| `lock:digest20` (hash160 of the **full** scriptPubKey) |
+| `outputs.bin` | 27 | output ordinal | `value:u56` \| `lock:digest20` (hash160 of the **full** scriptPubKey) |
 
 ## Sorted files (searchable by key, deduplicated)
 

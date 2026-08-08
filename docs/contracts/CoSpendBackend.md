@@ -5,7 +5,7 @@ by one transaction (its inputs), each with value, lock and origin outpoint. This
 is the **common-input hint** (Q2) — a hint about shared ownership, never a proof.
 
 - **Layer:** L1 (in-process). See [ARCHITECTURE](../ARCHITECTURE.md).
-- **Reads format:** [OutpointDerived-v2](../formats/OutpointDerived-v2.md)
+- **Reads format:** [OutpointDerived-v3](../formats/OutpointDerived-v3.md)
   (`tx_inputs.bin`) + [IndexReader](./IndexReader.md) (values, locks, outpoints,
   heights) + [FeeBackend](./FeeBackend.md) semantics for the group fee.
 - **Reference impl:** `Derived.inputs_of` + the `cospends` command composition.

@@ -132,10 +132,10 @@ published with this project were produced: run once, agreed, reported.
 | ├ `outputs.bin`, `spender_of_gNNNN.bin`, `spend_extra_gNNNN.bin` | records | Outputs in ordinal coordinates; one slot per output naming its spender, with an overflow file for the duplicate-spend anomaly (empty on a consensus-valid chain) | `index build` | as above |
 | ├ `txids.bin`, `txid_index_gNNNN.bin`, `tx_first_out.bin`, `blocks.bin` | records | The dictionaries turning txids and heights into ordinals, and back | `index build` | as above |
 | └ `manifest.json` | `outpoint-index-v3` | Fingerprint and coverage; the parent graph is **declared** in `build` | `index build` | verification, `derived build` |
-| `<derived>/` | `outpoint-derived-v2` | The same facts reordered by lock, by transaction, by co-spend | `derived build` | `derived history/fee/cospends`, `check` |
+| `<derived>/` | `outpoint-derived-v3` | The same facts reordered by lock, by transaction, by co-spend | `derived build` | `derived history/fee/cospends`, `check` |
 | ├ `history_gNNNN.bin` | records | One row per output carrying both events, receipt and spend | `derived build` | `derived history`, `check` |
 | ├ `tx_inputs.bin`, `fees.bin` | records | Inputs per transaction, and each transaction's fee | `derived build` | `derived fee/cospends`, `check` |
-| └ `manifest.json` | `outpoint-derived-v2` | Fingerprint and coverage; the parent index is declared in `build`, and a stale pairing is refused | `derived build` | verification |
+| └ `manifest.json` | `outpoint-derived-v3` | Fingerprint and coverage; the parent index is declared in `build`, and a stale pairing is refused | `derived build` | verification |
 | `*.lad` (inside index and derived) | ladders | Search caches: one sample every few thousand keys. **Outside the fingerprint**; without them a search falls back to a blind bisection, slower and with the same answer | the builders | the readers, when present |
 | `<checkpoint>/` | `reuse-scan-v1` | *Second road only.* The direct reuse scan's state: a `hits_<type>.bin` bitmap of which locks history has opened, plus `state.json` and its own `curve.csv` | `reuse scan` | itself (resume), `archive crosscheck` |
 
