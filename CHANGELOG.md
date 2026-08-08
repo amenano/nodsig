@@ -18,10 +18,10 @@ Three questions are answered under every release:
 The two clocks of this project stay separate, as
 [the README's *Stability* section](README.md) says: the **formats** are the
 contract, the **CLI** is convenience, and `reveal-archive-v2` inside a tool
-numbered 1.1.0 is not a discrepancy. Artifacts are identified by their
+numbered 1.2.0 is not a discrepancy. Artifacts are identified by their
 fingerprint, never by a tag.
 
-## Unreleased
+## 1.2.0 — the spend side, in one slot per output
 
 ### Formats
 
