@@ -223,7 +223,7 @@ belongs to does not.
 
 - [`exposure-check.md`](exposure-check.md) for the offline, one-artifact
   question: has this address's key been revealed at all.
-- [`formats/Nonces-v2.md`](formats/Nonces-v2.md) for the record layout, the
+- [`formats/Nonces-v3.md`](formats/Nonces-v3.md) for the record layout, the
   append and rewind guarantees, and the perimeter in format terms.
 - [`ARTIFACTS.md`](ARTIFACTS.md) for where the census sits among the artifacts,
   and what it costs to build.

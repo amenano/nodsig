@@ -348,5 +348,5 @@ exposure question by itself, this is optional.
 - [`ARTIFACTS.md`](ARTIFACTS.md) for the artifact map, including which parts
   you can skip.
 - [`gallery.md`](gallery.md) for what the other commands print.
-- [`formats/Nonces-v2.md`](formats/Nonces-v2.md) for the census of nonce points,
+- [`formats/Nonces-v3.md`](formats/Nonces-v3.md) for the census of nonce points,
   what a repeated one means, and what it deliberately does not cover.

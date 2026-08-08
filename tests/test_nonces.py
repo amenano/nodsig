@@ -29,8 +29,8 @@ import json
 import pytest
 
 from nodsig.blockparse import TxIn
-from nodsig.nonces import (FLAG_ECDSA, FLAG_SCHNORR, R_PREFIX, REC,
-                           SIGHASH_ABSENT, SIGHASH_ALL, SIGHASH_OTHER,
+from nodsig.nonces import (CURVE_ORDER, FLAG_ECDSA, FLAG_SCHNORR, R_PREFIX,
+                           REC, SIGHASH_ABSENT, SIGHASH_ALL, SIGHASH_OTHER,
                            SIGHASH_SINGLE_ACP, extract_nonces, new_stats,
                            record, rec_sighash, sighash_bits, signature_r,
                            taproot_r)
@@ -128,6 +128,81 @@ def test_der_refusals_are_counted_not_guessed():
                  b"\x30", bytes(9)):
         assert signature_r(item, quiet) is None
     assert quiet["malformed_der"] == 0
+
+
+def test_impossible_r_is_refused_and_the_rule_stays_narrow():
+    """The two validity rules, and the four things they must NOT do.
+
+    An ECDSA `r` is x(k*G) taken mod n, so `0 < r < n` holds for every
+    signature anyone ever made. Shape alone cannot see that: one census
+    point turned out to carry the whole values 0, 1 and 82 at once,
+    which is three sets of bytes with a signature's silhouette and no
+    signature behind any of them.
+
+    Half of what is pinned here is the NARROWNESS. Every line below the
+    refusals guards against a plausible-sounding tightening that would
+    throw away real, consensus-validated data.
+    """
+    stats = new_stats()
+
+    # Zero, in the two encodings history contains: minimal, and padded.
+    # Same scalar, and the canonicalization must not hide either one.
+    assert signature_r(der(b"\x00", minimal(S1)), stats) is None
+    assert signature_r(der(bytes(4), minimal(S1)), stats) is None
+
+    # At and above the group order. n itself is the first refused value.
+    order = CURVE_ORDER.to_bytes(32, "big")
+    assert signature_r(der(order, minimal(S1)), stats) is None
+    assert signature_r(der((CURVE_ORDER + 1).to_bytes(32, "big"),
+                           minimal(S1)), stats) is None
+    assert signature_r(der(b"\xff" * 32, minimal(S1)), stats) is None
+
+    # Counted apart, and NOT as malformed: the shape held perfectly in
+    # all five. A counter that lumped them in with broken DER would hide
+    # the one number that says whether this rule is worth its lines.
+    assert stats["impossible_r"] == 5
+    assert stats["malformed_der"] == 0
+    assert stats["oversize_r"] == 0
+
+    # n - 1 is the largest legal r and is KEPT. An off-by-one here drops
+    # a real signature, silently, once in about 2^128: that is to say,
+    # a bug no measurement would ever surface.
+    top = (CURVE_ORDER - 1).to_bytes(32, "big")
+    assert signature_r(der(top, minimal(S1))) == top
+
+    # r = 1 is implausible and NOT impossible. Deciding it would need
+    # the curve arithmetic this project does not do, so the value is
+    # kept and the report says what it is. Implausible is not the rule.
+    assert signature_r(der(minimal(1), minimal(S1))) == bytes(31) + b"\x01"
+
+    # And no threshold on SIZE, ever: the chain carries valid signatures
+    # whose r is 166 and 223 bits wide. "Too small to be genuine" is the
+    # instinctive fix, and it would reject measured, real data.
+    for bits in (166, 223):
+        body = minimal((1 << (bits - 1)) | 1)
+        assert signature_r(der(body, minimal(S1))) \
+            == bytes(32 - len(body)) + body
+
+    # Schnorr is untouched, and that asymmetry is the point: BIP 340
+    # publishes R.x as a FIELD element bounded by p, not a scalar
+    # reduced mod n, and p is the larger of the two. A value between n
+    # and p is a valid point, so applying the ECDSA rule here would
+    # throw away a real signature.
+    assert taproot_r(order + bytes(32)) == order
+    assert taproot_r(b"\xff" * 32 + bytes(32)) == b"\xff" * 32
+
+
+def test_an_input_signed_with_an_impossible_r_yields_no_nonce():
+    """The rule where it actually decides the artifact's content: an
+    input whose scriptSig is a well-formed DER signature over r = 0
+    contributes nothing, and is counted as an input with no nonce
+    rather than passing silently."""
+    stats = new_stats()
+    dud = der(b"\x00", minimal(S1))
+    assert extract_nonces(_txin(push(dud) + push(PUBKEY)), stats) == []
+    assert stats["impossible_r"] == 1
+    assert stats["nonces_ecdsa"] == 0
+    assert stats["inputs_without_nonce"] == 1
 
 
 def test_schnorr_shapes_and_the_public_key_trap():
@@ -351,7 +426,7 @@ import pytest
 
 from nodsig import nonces as nn
 from nodsig import reveal_archive as ra
-from nodsig.artifact import WallClock
+from nodsig.artifact import WallClock, seal_manifest
 import test_blockparse as tbw
 import test_reuse_scan as trs
 
@@ -567,6 +642,73 @@ def test_the_height_column_can_be_read_by_a_person():
         == "296,149 298,481 x2 298,505"
     assert nn._height_sample([2, 3]) == "2 3"
     assert nn._height_sample([]) == ""
+
+
+def _relabel(nonces_dir, tag):
+    """Rewrite a sealed census under a different format tag.
+
+    Honest here for one reason worth stating: this synthetic chain
+    contains no impossible `r`, so a build under the previous rules and
+    a build under the current ones write the SAME records. Only the
+    label differs, which is what makes a relabelled fixture a fair
+    stand-in for the published artifact, the one thing a test cannot
+    regenerate. The manifest is re-sealed rather than patched, so the
+    fingerprint stays the one its identity hashes to and the test is
+    about the format gate and not about a broken file.
+    """
+    state_path = os.path.join(nonces_dir, nn.STATE_NAME)
+    with open(state_path) as f:
+        state = json.load(f)
+    state["format"] = tag
+    with open(state_path, "w") as f:
+        json.dump(state, f)
+    man = nn._load_manifest(nonces_dir)
+    man["identity"]["format"] = tag
+    with open(os.path.join(nonces_dir, nn.MANIFEST_NAME), "w") as f:
+        json.dump(seal_manifest(tag, man["identity"], man["build"]), f)
+
+
+def test_the_previous_census_reads_but_cannot_be_grown(tmp, tiny_flush):
+    """The compatibility promise of this release, and its exact limit.
+
+    Anyone who downloaded the published census keeps a working tool:
+    every command that only READS one works on the previous format.
+    The census is appendable, though, and growing an old one would fuse
+    records the current rules refuse to collect, producing a file no
+    rebuild reproduces, which is `append ≡ rebuild` broken in the one
+    way no digest would catch. So the writing commands refuse, and say
+    that instead of "unknown format".
+    """
+    nd = _scan(tmp, "compat")
+    nn.run_merge(nd)
+    assert nn._load_manifest(nd)["format"] == "nonces-v3"
+    before = _records(nd)
+
+    _relabel(nd, "nonces-v2")
+
+    # Reading: same answers, from the older format.
+    assert _records(nd) == before
+    groups = {g.point: g for g in nn.run_groups(nd, out=io.StringIO())}
+    assert groups[point_of(NONCE_A)].count == 2
+    nn.run_lookup(nd, [point_of(NONCE_A).hex()], out=io.StringIO())
+    nn.run_verify(nd, deep=True)
+
+    # Writing: refused, naming the reason.
+    with pytest.raises(nn.NonceError, match="not be the file a rebuild"):
+        nn.run_merge(nd)
+    with pytest.raises(nn.NonceError, match="not be the file a rebuild"):
+        nn.run_rewind(nd, 3)
+    # Including the scan itself, which is the road a growing archive
+    # would actually take.
+    with pytest.raises(nn.NonceError, match="collect different things"):
+        _scan(tmp, "compat2", nonces_dir=nd,
+              archive_dir=os.path.join(tmp, "compat2_archive"))
+
+    # A format from neither generation stays simply unknown: the widened
+    # gate accepts two tags, not anything that parses.
+    _relabel(nd, "nonces-v1")
+    with pytest.raises(nn.NonceError, match="unknown nonce archive format"):
+        nn.run_groups(nd, out=io.StringIO())
 
 
 def test_append_equals_rebuild(tmp, tiny_flush):

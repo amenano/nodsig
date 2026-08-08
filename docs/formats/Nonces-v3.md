@@ -1,4 +1,4 @@
-# Nonces-v2: format (L0)
+# Nonces-v3: format (L0)
 
 Every **signature nonce point** ever published in a confirmed block, sorted, with
 the height that published it. A repeated point is the finding: one key signing
@@ -100,12 +100,14 @@ on.
 That estimate assumes the values are drawn, and **the chain's are not all
 drawn**, which is where it stops applying. A short `r`, whether constructed or
 degenerate, spends most of the 12 bytes on zeros and has few left to
-distinguish it. Measured at height 957,301: **one group in 5,149** turned out
-to be a prefix collision rather than a repeated nonce, and its three scalars
-were `0`, `1` and `82`. So a repeated point is a repeated nonce **for values
-the estimate covers**, and for the rest it is a candidate that the whole
-scalar settles: that is one of the things the witness table keeps
-(see [`Nonces-witness-v1`](Nonces-witness-v1.md)).
+distinguish it. Measured at height 957,301, on a v2 census: **one group in
+5,149** turned out to be a prefix collision rather than a repeated nonce, and
+its three scalars were `0`, `1` and `82`. The validity filter below removes the
+`0` from that group but not the other two, so the collision survives into this
+version, which is the point of quoting it. A repeated point is a repeated
+nonce **for values the estimate covers**, and for the rest it is a candidate
+that the whole scalar settles: that is one of the things the witness table
+keeps (see [`Nonces-witness-v1`](Nonces-witness-v1.md)).
 
 The general lesson, stated because it cost something to learn: a probability
 computed over an assumed distribution is not a measurement, and this format's
@@ -165,24 +167,72 @@ pay-to-anchor spends have an empty witness and scriptSig by construction, and
 some scripts are satisfied with no signature at all. On a recent sample 1.6% of
 inputs produced nothing, and 84% of those had an entirely empty witness.
 
-**A record means the bytes had a signature's SHAPE, not that they were one.**
-The filter checks the three markers, the two lengths and the total, which is
-strong enough that a false positive has to be data deliberately shaped like a
-signature. The chain contains some: resolving the groups at height 957,301
-found one point whose 12 bytes cover three different scalars, and they are
-`0`, `1` and `82`. None can be a nonce point, since ECDSA requires
-`0 < r < n` and an `r` of 1 would ask a curve point's x-coordinate to be one.
+**A record means the bytes had a signature's SHAPE and a possible VALUE, not
+that they were a signature.** Two filters run, and they answer different
+questions.
 
-This format does not apply that validity rule, and the omission is stated
-rather than repaired in place: adding it would change what is collected and
-therefore the canonical fingerprint of every census already sealed. What
-resolves such a point is the witness table, which keeps the whole scalar
-(see [`Nonces-witness-v1`](Nonces-witness-v1.md)).
+The shape filter checks the three markers, the two lengths and the total, which
+is strong enough that a false positive has to be data deliberately shaped like
+a signature. The chain contains some: resolving the groups at height 957,301
+found one point whose 12 bytes covered three different scalars: `0`, `1` and
+`82`.
 
-Note which rule is legitimate and which is not. `r == 0` and `r >= n` are
-invalid by definition. A rule on SIZE would be wrong: the chain carries real
-signatures, validated by consensus, whose `r` is 166 and 223 bits, so any
-"too small to be genuine" threshold would reject genuine data.
+The **validity** filter, new in this version, refuses the two of those that
+arithmetic excludes:
+
+```
+r == 0    ECDSA requires 0 < r < n, and r is x(k*G) reduced mod n
+r >= n    likewise: no signature can publish a value at or above the order
+```
+
+Neither is a heuristic; both are the definition. What they cost was measured
+before being adopted: at height 957,301 they remove **at most 79 records out of
+3,727,721,550** (~1.3 KB of 55.55 GB), so they are worth having for correctness
+and not for space. The true figure is lower still, because the same measurement
+counts every `r` under a null 12-byte prefix, which includes the small but
+legal values the rule keeps.
+
+Note carefully which rule is legitimate and which is not.
+
+- **A rule on SIZE would be wrong.** The chain carries real signatures,
+  validated by consensus, whose `r` is 166 and 223 bits. Any "too small to be
+  genuine" threshold rejects genuine data, and this project measured that
+  itself rather than assuming it.
+- **`r = 1` is kept**, though it would ask a curve point's x-coordinate to be
+  one. Deciding it needs curve arithmetic, which is outside this project's
+  perimeter; implausible is not the rule, impossible is.
+- **The rules do not apply to Schnorr.** BIP 340 publishes `R.x` as a **field**
+  element, bounded by `p`, not a scalar reduced mod `n`, and `p > n`. An
+  x-coordinate between `n` and `p` is a valid point, so extending the rule to
+  Schnorr records would discard a real signature. The gap is about 2^129 wide
+  out of 2^256, which is why nobody has seen one; rarity is the wrong reason to
+  keep a rule and the wrong reason to drop one.
+- **The strong filter stays out.** Checking that `r` is the x-coordinate of a
+  real curve point would halve the false positives and costs one modular
+  exponentiation per signature: out of scale over 3.7 billion, and across the
+  line this project draws at curve arithmetic. It is declared here rather than
+  chased.
+
+What still resolves a point the filters cannot decide is the witness table,
+which keeps the whole scalar (see
+[`Nonces-witness-v1`](Nonces-witness-v1.md)).
+
+## The previous format (`nonces-v2`)
+
+`nonces-v2` is this format **without the validity filter**: same 16-byte
+record, same order, same ladder, same fusion. A v2 census therefore holds every
+record a v3 one holds, plus a handful of items that were never signatures.
+
+The tool **reads a v2 census**: `groups`, `lookup`, `verify`, `resolve`,
+`witness-verify` and `check` all work on one, so an artifact downloaded under
+the previous version keeps its value.
+
+It **cannot be grown or rewound**, and that limit is not an omission. Both
+operations promise the bytes a rebuild would have written (`append ≡ rebuild`,
+`rewind ≡ rebuild`); a fusion that extended a v2 base would carry forward
+records the current rules refuse to collect, so the result would match no
+rebuild at all. A build refuses, and says so. Growing past a v2 census means
+a fresh scan.
 
 ## Appendability
 
@@ -278,6 +328,10 @@ refused.
 - Canonicalize `r` before truncating: strip the leading zeros a DER integer may
   carry, then left-pad to 32 bytes. Two encodings of one scalar must produce one
   point, or a real group splits in two and reports nothing.
+- Apply the validity rules **after** that strip and **only** to ECDSA: an empty
+  body is the value zero, and only a full 32 bytes can reach `n`, so both tests
+  are byte comparisons rather than integer conversions. Do not extend them to
+  Schnorr, and do not add a threshold on size; the section above says why.
 - A DER signature at exactly 64 or 65 bytes cannot be told apart from a Schnorr
   signature whose `R.x` begins with `0x30`. Parse both readings, count neither
   as malformed: one taproot signature in 256 starts that way.

@@ -11,7 +11,7 @@ no `Result<T>` envelope.
   [OutpointIndex-v2](../formats/OutpointIndex-v2.md),
   [OutpointDerived-v2](../formats/OutpointDerived-v2.md),
   [RevealArchive-v2](../formats/RevealArchive-v2.md),
-  [Nonces-v2](../formats/Nonces-v2.md),
+  [Nonces-v3](../formats/Nonces-v3.md),
   [Nonces-witness-v1](../formats/Nonces-witness-v1.md).
 - **Reference impl:** `build`/`verify`/`stats`/`rewind` of each tool, over three
   shared pieces: `artifact.canonical_identity` (one definition of what an

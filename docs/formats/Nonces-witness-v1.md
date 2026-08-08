@@ -1,7 +1,7 @@
 # Nonces-witness-v1: format (L0)
 
 The evidence that resolves a repeated nonce point. The census
-([`Nonces-v2`](Nonces-v2.md)) can say **which** points repeat and never
+([`Nonces-v3`](Nonces-v3.md)) can say **which** points repeat and never
 **what** a repeat means, because the meaning lives in `s` and a 16-byte
 record does not hold it. This table holds the signatures that decide.
 
@@ -10,7 +10,9 @@ record does not hold it. This table holds the signatures that decide.
 - **Read by** `nonces witness-verify`
 - **Built by** `nonces resolve` (needs a node: the signatures live only in
   the blocks)
-- **Parent** the `nonces-v2` census it resolved, declared in the manifest
+- **Parent** the census it resolved (`nonces-v3`, or the `nonces-v2` this
+  tool still reads), declared in the manifest under its own tag, never under
+  the one the building code happens to emit
 
 ## What one record is
 

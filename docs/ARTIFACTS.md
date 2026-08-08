@@ -122,9 +122,9 @@ published with this project were produced: run once, agreed, reported.
 | ├ `headers.bin` | records | The 80 header bytes verbatim, then the block's size and weight | `archive scan --headers` | as above |
 | ├ `coinbase.bin`, `coinbase_off.bin` | records | Each block's coinbase scriptSig, and where it starts | `archive scan --headers` | as above |
 | └ `manifest.json` | `headers-v2` | Fingerprint and coverage `0..H`; no parent, it comes from the blocks | `headers fingerprint` | verification |
-| `<nonces>/` | `nonces-v2` | Every signature nonce point ever published, with the height. Off by default, enabled with `--nonces` (~55-60 GB): the repeated ones are the candidates for a key recoverable from public data, which a block re-read confirms or rules out | `archive scan --nonces` | `nonces groups/lookup/verify/rewind`, `nonces address` (with the index and a node) |
+| `<nonces>/` | `nonces-v3` | Every signature nonce point ever published, with the height. Off by default, enabled with `--nonces` (~55-60 GB): the repeated ones are the candidates for a key recoverable from public data, which a block re-read confirms or rules out | `archive scan --nonces` | `nonces groups/lookup/verify/rewind`, `nonces address` (with the index and a node) |
 | ├ `nonces_gNNNN.bin` | records | One 16-byte record per signature: point, height, scheme, and the sighash mode it committed to | `archive scan --nonces` | as above |
-| └ `manifest.json` | `nonces-v2` | Fingerprint and coverage; no parent, it comes from the blocks | `nonces merge` | `nonces verify` |
+| └ `manifest.json` | `nonces-v3` | Fingerprint and coverage; no parent, it comes from the blocks | `nonces merge` | `nonces verify` |
 | `<witness>/` | `nonces-witness-v1` | The evidence that resolves each repeated point: per (nonce point, public key), the signatures that decide whether a key follows. Optional, built after the census (~36 min over the whole chain, a few MB) | `nonces resolve` (needs the node) | `nonces witness-verify` |
 | `<graph>/` | `graph-v2` | The raw transaction graph. Off by default, enabled with `--graph` | `archive scan --graph` | `graph`, `blockstats`, `index build` |
 | block-stats CSV | `block-stats-v2` | Per-block series (transactions, inputs, outputs, size, time) derived from the graph | `blockstats build` | `blockstats summary`, a human |

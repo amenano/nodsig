@@ -23,7 +23,7 @@ records, and erasing that would erase the finding. The flags byte holds
 the scheme in two bits and the SIGHASH MODE in three more: what a
 signature committed to is half of what recovering a key from a repeated
 nonce needs, the signature carries it already, and no artifact we keep
-could give it back later. The format is `docs/formats/Nonces-v2.md`,
+could give it back later. The format is `docs/formats/Nonces-v3.md`,
 which is the source this module follows.
 
 Because the fusion REDUCES NOTHING and every record carries its own
@@ -119,7 +119,23 @@ from nodsig.genstore import GenStore, new_state_fields
 from nodsig.recio import atomic_json, read_fixed
 from nodsig.recsort import SortedFile
 
-FORMAT_TAG = "nonces-v2"
+FORMAT_TAG = "nonces-v3"
+
+# The censuses this code READS. v3 differs from v2 in what was collected,
+# not in how it is laid out: `signature_r` now refuses values ECDSA cannot
+# produce, so a v3 census holds the same records minus a handful that were
+# never signatures. Everything that reads one (lookup, groups, verify,
+# resolve, check) works on either, which is why anyone who downloaded the
+# published v2 artifact keeps a working tool.
+#
+# BUILDING is a different question and stays on FORMAT_TAG alone. A merge
+# that extended a v2 base would write a file no v3 rebuild could reproduce,
+# because the base carries records the new rules reject: `append ≡ rebuild`
+# is contractual, and this is exactly where it would break. Same for a
+# rewind, which promises the bytes a build stopped at that height would
+# have written. So `_load_state` is strict unless a caller asks otherwise,
+# and only the read paths ask.
+READ_TAGS = (FORMAT_TAG, "nonces-v2")
 STATE_NAME = "state.json"
 MANIFEST_NAME = "manifest.json"
 RUNS_DIR = "runs"
@@ -226,16 +242,31 @@ def new_stats():
         # A DER integer wider than 32 bytes once its padding is gone.
         # Cannot be a curve scalar, so it is not a signature.
         "oversize_r": 0,
+        # A DER integer that held together as one but names a value ECDSA
+        # cannot produce: zero, or at/above the group order. See
+        # signature_r for why these two lines and no others.
+        "impossible_r": 0,
         "malformed_scriptsig": 0,
         "inputs_without_nonce": 0,
     }
 
 
+# The order of the secp256k1 group, in both forms this module uses. It is
+# here for TWO purposes, stated so that its presence is not mistaken for
+# something this project does not do: `canonical_s` folds s and n-s
+# together, and `signature_r` refuses a value at or above it. That is
+# comparison and arithmetic on integers modulo a constant, NOT arithmetic
+# on curve points; nothing in this project multiplies a point, derives a
+# key, or verifies a signature.
+CURVE_ORDER = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141
+_ORDER_BE = CURVE_ORDER.to_bytes(32, "big")
+
+
 def signature_r(item, stats=None):
     """The nonce point of a DER ECDSA signature, as 32 big-endian bytes.
 
-    Returns None if the bytes are not one. The layout, which is all
-    that is checked, because nothing here can verify a signature:
+    Returns None if the bytes are not one. Two things are checked, and
+    it is worth keeping them apart. First the layout:
 
         0x30 <len> 0x02 <rlen> <r> 0x02 <slen> <s> <sighash byte>
 
@@ -246,6 +277,15 @@ def signature_r(item, stats=None):
     than in the reveal archive, where over-collection is provably
     harmless: two inputs carrying the same non-signature bytes would
     look like a repeated nonce.
+
+    Then the two VALIDITY rules on the value itself, `r != 0` and
+    `r < n`. Shape alone accepts bytes that no signer could have
+    produced, and the chain holds them: one 12-byte census point turned
+    out to carry three different whole values, `0`, `1` and `82`. Those
+    are not signatures, and until this rule existed the census collected
+    them and a reader had to be told so afterwards. Nothing here
+    verifies a signature, and these two comparisons do not begin to:
+    they only refuse values the definition of ECDSA excludes.
 
     `r` is canonicalized before it is truncated, its leading zero
     padding removed and the value left-padded to 32 bytes, so the same
@@ -286,6 +326,28 @@ def signature_r(item, stats=None):
         if stats is not None:
             stats["oversize_r"] += 1
         return None
+    # ECDSA's own definition: r is the x-coordinate of k*G taken mod n,
+    # so 0 < r < n always. Zero and anything at or above the order are
+    # not unlikely, they are IMPOSSIBLE: bytes that had a signature's
+    # shape without being one. Both tests ride on the lstrip above: an
+    # empty `r` is the value zero, and only a full 32 bytes can reach n,
+    # so the comparison is big-endian bytes at C speed and never an
+    # int conversion (50.3 ns per signature against 174.6 for the
+    # int.from_bytes form: about 3 minutes against 11 over the chain).
+    #
+    # Note which rule this is NOT. There is no threshold on SIZE: the
+    # chain carries consensus-validated signatures whose r is 166 and
+    # 223 bits, so "too small to be genuine" would reject real data.
+    # Only 0 and n are lines the arithmetic itself draws. The stronger
+    # filter, checking that r is the x-coordinate of a real curve
+    # point, would halve the false positives and costs one modular
+    # exponentiation per signature: out of scale over 3.7 billion, and
+    # across the line this project does not cross. It is declared in
+    # the format instead of chased.
+    if not r or (len(r) == 32 and r >= _ORDER_BE):
+        if stats is not None:
+            stats["impossible_r"] += 1
+        return None
     return bytes(32 - len(r)) + r
 
 
@@ -321,14 +383,6 @@ def signature_s(item, schnorr=False):
     rlen = item[3]
     slen = item[5 + rlen]
     return bytes(item[6 + rlen:6 + rlen + slen]).lstrip(b"\x00")
-
-
-# The order of the secp256k1 group. It is here for ONE purpose, stated so
-# that its presence is not mistaken for something this project does not do:
-# `canonical_s` needs it to fold s and n-s together. That is arithmetic on
-# integers modulo a constant, NOT arithmetic on curve points; nothing in
-# this project multiplies a point, derives a key, or verifies a signature.
-CURVE_ORDER = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141
 
 
 def canonical_s(s_bytes):
@@ -379,6 +433,17 @@ def taproot_r(item, key_path=False):
     signatures (1.17% of the 65-byte form, i.e. the 3 first bytes out of
     256 that a key can start with) and protecting nothing, because a
     witness holding a single item cannot be holding a pushed key.
+
+    THE VALIDITY RULES OF `signature_r` DO NOT TRANSFER HERE, and the
+    asymmetry is deliberate rather than an oversight. An ECDSA `r` is a
+    scalar reduced mod n, so `r >= n` is impossible. A BIP 340 `R.x` is
+    not reduced at all: it is a FIELD element, bounded by p, and p is
+    larger than n. An x-coordinate between n and p is a perfectly valid
+    point, so refusing one here would throw away a real signature. The
+    gap is about 2^129 wide out of 2^256, which is why nobody has seen
+    one, but "vanishingly rare" is the wrong reason to keep a rule, and
+    the wrong reason to drop one. This module refuses only what the
+    arithmetic excludes, and here the arithmetic excludes nothing.
     """
     n = len(item)
     if n == 64:
@@ -447,7 +512,7 @@ def extract_nonces(tx_in, stats, sig_pushes=None, detail_out=None):
 
     The chain scan passes nothing and so pays one `is None` test per
     signature: this function is 10% of the pass's CPU and the census
-    itself has no use for either value (see Nonces-v2 on why the record
+    itself has no use for either value (see Nonces-v3 on why the record
     is 16 bytes). Only the per-address question needs them, on the few
     blocks the index names.
     """
@@ -639,7 +704,14 @@ class NonceEmitter:
         else:
             with open(state_path) as f:
                 self.state = json.load(f)
-            if self.state.get("format") != FORMAT_TAG:
+            found = self.state.get("format")
+            if found != FORMAT_TAG:
+                if found in READ_TAGS:
+                    raise NonceError(
+                        f"this archive is {found} and this scan emits "
+                        f"{FORMAT_TAG}: the two collect different things, so "
+                        "feeding one into the other would write a file no "
+                        "rebuild reproduces. Use a fresh scan directory")
                 raise NonceError("unknown nonce archive format")
             saved = self.state["scan_stats"]
             self.stats = dict(saved) if saved else new_stats()
@@ -795,14 +867,29 @@ class NonceEmitter:
 # Reading a built archive
 # ---------------------------------------------------------------------------
 
-def _load_state(nonces_dir):
+def _load_state(nonces_dir, accept=(FORMAT_TAG,)):
+    """The state file, refused unless its format is one of `accept`.
+
+    The default is the tag this code EMITS, so a caller that says
+    nothing gets the strict rule. Read-only commands pass `READ_TAGS`
+    to also accept the previous census; a builder must not, and the
+    comment on READ_TAGS says why.
+    """
     path = os.path.join(nonces_dir, STATE_NAME)
     if not os.path.exists(path):
         raise NonceError(f"no {STATE_NAME} in {nonces_dir}: not a nonce "
                          "archive (build one with `archive scan --nonces`)")
     with open(path) as f:
         state = json.load(f)
-    if state.get("format") != FORMAT_TAG:
+    found = state.get("format")
+    if found not in accept:
+        if found in READ_TAGS:
+            raise NonceError(
+                f"this archive is {found} and the tool writes {FORMAT_TAG}: "
+                "it can be read, but not extended or rewound. Growing it "
+                "would write records the current rules refuse to collect, "
+                "so the result would not be the file a rebuild produces. "
+                "Build a fresh one with `archive scan --nonces`")
         raise NonceError("unknown nonce archive format")
     return state
 
@@ -830,7 +917,7 @@ def iter_records(nonces_dir, state=None, verify_sha=True):
     The sha is checked as the bytes go past (that is `read_fixed`'s
     job), so a corrupt file cannot be silently reported on.
     """
-    state = state or _load_state(nonces_dir)
+    state = state or _load_state(nonces_dir, READ_TAGS)
     entry = _merged_entry(state)
     if entry is None:
         return
@@ -842,7 +929,7 @@ def iter_records(nonces_dir, state=None, verify_sha=True):
 
 def open_sorted(nonces_dir, state=None):
     """The fused file as a ladder-backed searchable file."""
-    state = state or _load_state(nonces_dir)
+    state = state or _load_state(nonces_dir, READ_TAGS)
     entry = _merged_entry(state)
     if entry is None:
         raise NonceError("nothing fused yet: run `nonces merge` first")
@@ -1069,14 +1156,14 @@ def run_verify(nonces_dir, deep=False):
     was taken on trust, because an audit silent about what it did not
     check reads as an audit that checked everything.
     """
-    state = _load_state(nonces_dir)
+    state = _load_state(nonces_dir, READ_TAGS)
     manifest = _load_manifest(nonces_dir)
     if state["runs"]:
         print(f"note: {len(state['runs'])} run(s) written since the last "
               f"merge are NOT SEALED and not audited here", file=sys.stderr)
 
     top = _audit_records(nonces_dir, manifest, state) if deep else None
-    verify_sealed(nonces_dir, manifest, FORMAT_TAG, NonceError,
+    verify_sealed(nonces_dir, manifest, READ_TAGS, NonceError,
                   fp_order=(LOGICAL,),
                   ladders=LADDERS,
                   coverage_from_data=(None if top is None
@@ -1240,7 +1327,7 @@ def run_groups(nonces_dir, min_count=2, limit=20, csv_path=None,
     are counted apart for the same reason: they are deliberate, they are
     the biggest groups, and a reader who ranks by size sees them first.
     """
-    state = _load_state(nonces_dir)
+    state = _load_state(nonces_dir, READ_TAGS)
     # Pending runs are part of the coverage the banner claims, and they
     # are sorted, so folding them in is one heap-merge — the same walk,
     # over everything the watermark stands for.
@@ -1348,7 +1435,7 @@ def run_lookup(nonces_dir, values, out=sys.stdout):
     12 bytes are the key, and truncating here rather than making the
     caller do it is what keeps a copied-and-pasted r usable.
     """
-    state = _load_state(nonces_dir)
+    state = _load_state(nonces_dir, READ_TAGS)
     # Before the first merge the whole archive lives in runs; after it,
     # the runs are the not-yet-fused tail. Either way they are part of
     # every answer, so a missing fused file is a smaller archive, not a
@@ -1910,6 +1997,7 @@ def _report(out, t, blocks, txs, inputs, nbytes, records, sorted_records,
       f"({_pct(nonce_stats['inputs_without_nonce'], inputs)})")
     p(f"  DER-shaped near misses: {nonce_stats['malformed_der']:,}, "
       f"oversize r: {nonce_stats['oversize_r']:,}, "
+      f"impossible r (0 or >= n): {nonce_stats['impossible_r']:,}, "
       f"malformed scriptSigs: {arch_stats['malformed_scriptsig']:,}")
     if unknown:
         p("  unrecognized witness items >=32 B, most common "

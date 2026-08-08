@@ -1625,7 +1625,7 @@ def main(argv=None):
                          "archive starts at genesis, so the scan fetches "
                          "height 0 for it")
     ps.add_argument("--nonces",
-                    help="ALSO co-emit the nonce census (nonces-v2) into "
+                    help="ALSO co-emit the nonce census (nonces-v3) into "
                          "this directory: one 16-byte record per "
                          "signature, ~55 GB for the whole chain, and the "
                          "repeated nonce points it sorts together are "

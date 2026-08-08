@@ -4,8 +4,8 @@ witness.py — Nonces-witness-v1: the evidence that resolves a repeated point.
 
 WHAT THIS IS FOR
 ================
-The nonce census (`nonces-v2`) records, for every signature, the first 12
-bytes of its nonce point and the height. That is enough to say WHICH points
+The nonce census records, for every signature, the first 12 bytes of its
+nonce point and the height. That is enough to say WHICH points
 repeat and never enough to say WHAT a repeat means, because the meaning
 lives in `s`, which a 16-byte record does not hold. So `nonces groups`
 emits candidates it cannot resolve, and a reader has to go back to the
@@ -43,7 +43,9 @@ the chain already does. "Exposed" here means a proof obligation was met:
 two signatures, one nonce, one key, two different messages. Computing the
 key from that is arithmetic anyone can do and this project does not do it:
 there is no curve arithmetic in nodsig, and `CURVE_ORDER` in `nonces.py`
-is used only to fold `s` with `n-s`.
+is used only to fold `s` with `n-s` and to refuse an `r` the definition of
+ECDSA excludes. Both are comparisons against a constant; neither
+multiplies a point.
 
 THE THREE CONDITIONS, AND WHY EACH ONE IS THERE
 ===============================================
@@ -223,9 +225,14 @@ def _impossible_scalar(r):
     `r` is the x-coordinate of k*G taken mod n, so `0 < r < n` always.
     Zero and anything at or above the group order are therefore not
     small or unlikely, they are impossible: bytes that had a signature's
-    SHAPE without being one. The census cannot see this, because it
-    stores 12 truncated bytes; here the whole scalar is on hand and the
-    test is two comparisons.
+    SHAPE without being one.
+
+    The census applies the same rule at extraction now, so a `nonces-v3`
+    parent brings none of these through and this branch reports nothing.
+    It stays for the censuses that predate the rule, which this tool
+    still reads and resolves: there, the stored point is 12 truncated
+    bytes and the value cannot be judged, while here the whole scalar is
+    on hand and the test is two comparisons.
 
     Note which rule this is NOT. There is no threshold on SIZE, because
     the chain carries consensus-validated signatures whose `r` is 166
@@ -434,7 +441,11 @@ def _seal(witness_dir, parent, groups, rows, clock, out):
     manifest = seal_manifest(FORMAT_TAG, identity, {
         "producer": producer(),
         "seconds": clock.stamp(),
-        "parent": declared_parent(nn.FORMAT_TAG, parent["fingerprint"]),
+        # The parent's OWN tag, read from its manifest, never this code's
+        # constant: a table can be resolved over a census in the previous
+        # format, and writing the tag we happen to emit would file it
+        # under an artifact that does not exist.
+        "parent": declared_parent(parent["format"], parent["fingerprint"]),
         "points_resolved": len(groups),
         "rows": len(rows),
         "files": files,
@@ -452,7 +463,7 @@ def _seal(witness_dir, parent, groups, rows, clock, out):
     })
     atomic_json(os.path.join(witness_dir, MANIFEST_NAME), manifest)
     print(f"witness table over {len(groups):,} repeated point(s)", file=out)
-    print(f"  parent nonces-v2: {parent['fingerprint']}  (declared)",
+    print(f"  parent {parent['format']}: {parent['fingerprint']}  (declared)",
           file=out)
     print(f"fingerprint: {fingerprint}", file=out)
     return fingerprint
@@ -529,13 +540,17 @@ def run_verify(witness_dir, nonces_dir=None, csv_path=None):
     parent_confirmed = None
     if nonces_dir:
         declared = manifest.get("build", {}).get("parent", {})
-        actual = nn._load_manifest(nonces_dir, required=True)["fingerprint"]
+        census = nn._load_manifest(nonces_dir, required=True)
+        actual = census["fingerprint"]
         if declared.get("fingerprint") != actual:
             raise WitnessError(
                 f"this table declares the census {declared.get('fingerprint')}"
                 f" but the one given is {actual}: they are not the same "
                 "artifact, and the resolutions are about the other one")
-        parent_confirmed = f"ok parent {nn.FORMAT_TAG} {actual}"
+        # The census's own tag: the fingerprint match above already
+        # covers it (the format is inside the hashed identity), so this
+        # line reports what was confirmed rather than what we emit.
+        parent_confirmed = f"ok parent {census['format']} {actual}"
 
     verify_sealed(witness_dir, manifest, FORMAT_TAG, WitnessError,
                   fp_order=[LOGICAL], parent_confirmed=parent_confirmed)

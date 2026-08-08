@@ -457,6 +457,14 @@ def verify_sealed(directory, manifest, tag, error, fp_order, ladder_hint="",
     is actually on disk. Raise `error` on any mismatch. Every artifact that
     seals an identity shares this verbatim.
 
+    `tag` is normally one format tag. It may instead be a sequence, for
+    a format that has a READABLE PREDECESSOR: a tool that emits the new
+    version and still reads artifacts somebody downloaded under the old
+    one. The sequence is legitimate only while every tag in it is made
+    of the same files in the same order, since `fp_order` is passed
+    once; a version that adds or renames a file needs its own call.
+    Emission is never widened this way: a builder writes one tag.
+
     `fp_order` is the file list the format tag mandates, stated by the
     code and not read from the manifest, and the audit's first check is
     that the identity lists exactly those names in exactly that order.
@@ -509,17 +517,19 @@ def verify_sealed(directory, manifest, tag, error, fp_order, ladder_hint="",
     unchanged; only the second read is gone."""
     ladders = ladders or {}
     prepared = prepared or {}
+    accepted = (tag,) if isinstance(tag, str) else tuple(tag)
     identity = manifest["identity"]
     build = manifest["build"]
-    if identity["format"] != tag:
-        raise error(f"identity declares format {identity['format']!r}, "
-                    f"not {tag!r}")
+    found_tag = identity["format"]
+    if found_tag not in accepted:
+        raise error(f"identity declares format {found_tag!r}, not "
+                    + " or ".join(repr(t) for t in accepted))
     listed = [entry["name"] for entry in identity["files"]]
     if listed != list(fp_order):
         raise error(
             f"identity lists files {', '.join(listed) or '(none)'}, but "
-            f"{tag} is made of {', '.join(fp_order)}: this manifest does "
-            "not describe a complete artifact of its declared format")
+            f"{found_tag} is made of {', '.join(fp_order)}: this manifest "
+            "does not describe a complete artifact of its declared format")
     rebuilt = {}
     for entry in identity["files"]:
         name = entry["name"]
@@ -534,7 +544,7 @@ def verify_sealed(directory, manifest, tag, error, fp_order, ladder_hint="",
             if every != spec[2]:
                 raise error(
                     f"{build['caches'][name]['file']}: declares a step of "
-                    f"{every} records, but {tag} fixes it at "
+                    f"{every} records, but {found_tag} fixes it at "
                     f"{spec[2]}{ladder_hint}")
         if name in prepared:
             found, ladder = prepared[name]
