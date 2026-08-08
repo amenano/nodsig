@@ -473,10 +473,90 @@ def test_first_segwit_tx():
     print("ok  first SegWit tx (block 481,824): txid, redeem script, witness")
 
 
+def test_every_field_is_bytes_whatever_the_buffer_was():
+    """The hot loops slice `buf` directly instead of copying each field,
+    which is only safe because the buffer is normalized once on the way
+    in. Hand the parser something that is not `bytes` and every field must
+    still come out `bytes`.
+
+    Why this is a test and not a comment: a `memoryview` over the right
+    bytes compares EQUAL to those bytes, so every other assertion in this
+    file would keep passing while the parser quietly handed out views into
+    a buffer the caller may reuse or mutate. The type is the whole check,
+    and it was a real regression during the profiling work.
+    """
+    raw, _, _ = build_synthetic()
+
+    for wrap, name in ((memoryview, "memoryview"), (bytearray, "bytearray")):
+        blk = bp.parse_block(wrap(raw))
+        plain = bp.parse_block(raw)
+        check(blk == plain, f"{name} gave a different block than bytes")
+        check(type(blk.header.prev_hash) is bytes
+              and type(blk.header.merkle_root) is bytes,
+              f"{name}: header fields are not bytes")
+        for tx in blk.transactions:
+            check(type(tx.txid) is bytes and type(tx.wtxid) is bytes,
+                  f"{name}: txid/wtxid are not bytes")
+            for vin in tx.inputs:
+                check(type(vin.prev_txid) is bytes
+                      and type(vin.script_sig) is bytes,
+                      f"{name}: input fields are not bytes")
+                for item in vin.witness:
+                    check(type(item) is bytes,
+                          f"{name}: a witness item is not bytes")
+            for vout in tx.outputs:
+                check(type(vout.script_pubkey) is bytes,
+                      f"{name}: scriptPubKey is not bytes")
+
+    print("ok  every parsed field is bytes, whatever buffer came in")
+
+
+def test_truncation_is_named_field_by_field():
+    """Cutting the bytes at EVERY position must raise, and the message
+    must say what was being read.
+
+    The bounds checks in the input and output loops are inline now, one
+    per field, instead of going through `_take`. Inline checks are exactly
+    the kind that get forgotten one branch at a time, and a forgotten one
+    does not crash: it slices short and hands back a truncated field that
+    every downstream digest would then certify. So this walks every cut
+    rather than sampling a few.
+    """
+    raw, _, _ = build_synthetic()
+    for cut in range(1, len(raw)):
+        try:
+            bp.parse_block(raw[:cut])
+        except bp.ParseError as e:
+            check(str(e) != "", f"empty error message at cut {cut}")
+        else:
+            fail(f"a block cut at {cut} parsed without error")
+
+    # And the naming itself, on the two loops that were rewritten: the
+    # message must still identify the field, not merely report a failure.
+    seen = set()
+    for cut in range(80, len(raw)):
+        try:
+            bp.parse_block(raw[:cut])
+        except bp.ParseError as e:
+            seen.add(str(e))
+    check(any("scriptSig" in m for m in seen),
+          "no truncation message names a scriptSig")
+    check(any("scriptPubKey" in m for m in seen),
+          "no truncation message names a scriptPubKey")
+    check(any("witness item" in m for m in seen),
+          "no truncation message names a witness item")
+    check(any("previous txid" in m for m in seen),
+          "no truncation message names a previous txid")
+
+    print(f"ok  every one of {len(raw) - 1} truncations refused, and named")
+
+
 def main():
     test_compactsize()
     test_synthetic()
     test_failure_paths()
+    test_every_field_is_bytes_whatever_the_buffer_was()
+    test_truncation_is_named_field_by_field()
     test_genesis()
     test_first_segwit_tx()
     test_block_id_settles_the_question_before_the_parser_sees_anything()
