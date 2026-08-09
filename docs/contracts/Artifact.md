@@ -165,6 +165,15 @@ identical bytes take different times, so a duration inside the identity would
 give the same content two fingerprints. It is out of the statement for the
 sharper reason `producer` is: nothing can ever confirm it.
 
+**Which verbs the reference implementation records today**, so the gap between
+what this contract describes and what actually appears in a manifest is stated
+rather than discovered: `scan`, `merge`, `build`, `append`, `rewind`,
+`fingerprint`, `resolve`. `scan` was the last one wired, and it matters more
+than the others: it is the longest phase of the pipeline, and it is the one a
+reader is most likely to be planning against. A manifest sealed before a verb
+was wired simply has no entry for it, which is the "absent where nothing
+recorded it" case above and not a different format.
+
 Three properties a re-implementation has to get right, because each of them
 changes what the number means:
 

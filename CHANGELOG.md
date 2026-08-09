@@ -21,6 +21,34 @@ contract, the **CLI** is convenience, and `reveal-archive-v2` inside a tool
 numbered 1.2.1 is not a discrepancy. Artifacts are identified by their
 fingerprint, never by a tag.
 
+## Unreleased
+
+### Under the hood
+
+- **The scan now records its own seconds.** `build.seconds` already specified
+  what a `scan` entry would mean — including the warning that the four
+  co-emitted artifacts each record the *same* seconds and must never be summed
+  — but no scan was writing one, so the longest phase of the whole pipeline
+  was the one with no measured cost attached to it. It is wired now, in all
+  four writers, and the figure accumulates across resumes because the total
+  lives in each artifact's state.
+
+  Why that last property is the point: a chain-scale run is not something most
+  people can leave running for days without interruption. A scan stopped at
+  height 400,000 and resumed reports what it really cost, not what its last
+  stretch cost. What is lost is the interval between the last checkpoint and
+  the interruption, so the figure is a **floor** — the contract said so
+  already, and it still does.
+
+  Nothing about how commands are invoked changes: no flag, no wrapper, no
+  special mode.
+
+### Do your artifacts still work?
+
+**Yes, unchanged.** No format moved, no record width, no fingerprint. An
+artifact sealed before this simply carries no `scan` entry, which is the same
+"absent where nothing recorded it" the contract already described.
+
 ## 1.2.1 — a v2 pair can confirm its own ancestry again
 
 ### Fixed
