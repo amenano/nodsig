@@ -18,10 +18,10 @@ Three questions are answered under every release:
 The two clocks of this project stay separate, as
 [the README's *Stability* section](README.md) says: the **formats** are the
 contract, the **CLI** is convenience, and `reveal-archive-v2` inside a tool
-numbered 1.2.1 is not a discrepancy. Artifacts are identified by their
+numbered 1.3.0 is not a discrepancy. Artifacts are identified by their
 fingerprint, never by a tag.
 
-## Unreleased
+## 1.3.0 — a pass that measures itself
 
 ### Under the hood
 
@@ -63,6 +63,15 @@ fingerprint, never by a tag.
 **Yes, unchanged.** No format moved, no record width, no fingerprint. An
 artifact sealed before this simply carries no `scan` entry, which is the same
 "absent where nothing recorded it" the contract already described.
+
+One limit of the field worth stating, since this release is the one that makes
+it matter: **a run split across sessions carries the version of the last
+process that sealed it**, not of every process that built it. `build.producer`
+records one version and one commit — the ones the sealing process ran under.
+If a long build spans releases, the manifest names the last, and the honest
+way to use that is to keep a durable log beside it. The alternative would be a
+list of every revision that touched the artifact, which nothing can verify
+after the fact and which would therefore be a field that guesses.
 
 ## 1.2.1 — a v2 pair can confirm its own ancestry again
 
