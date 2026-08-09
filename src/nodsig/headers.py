@@ -297,6 +297,9 @@ class HeaderEmitter:
     direction that heals; the other one would be a hole.
     """
 
+    # See GraphWriter.clock: the scan's seconds, carried per artifact.
+    clock = None
+
     def __init__(self, headers_dir, flush_bytes=8 * 2**20):
         self.dir = headers_dir
         self.flush_bytes = flush_bytes
@@ -315,6 +318,9 @@ class HeaderEmitter:
         the host must actually start feeding from."""
         os.makedirs(self.dir, exist_ok=True)
         state_path = os.path.join(self.dir, STATE_NAME)
+        # See GraphWriter.load: unconditional, so the first stretch of a
+        # scan is measured too and not just the resumes.
+        self.clock = WallClock("scan")
         if not os.path.exists(state_path):
             if start_height > 1:
                 raise HeaderError(
@@ -331,6 +337,7 @@ class HeaderEmitter:
 
         with open(state_path) as f:
             state = json.load(f)
+        self.clock = WallClock("scan", state)
         if state.get("format") != FORMAT_TAG:
             raise HeaderError("unknown header archive format")
         self.from_height = state["from_height"]
@@ -475,12 +482,14 @@ class HeaderEmitter:
         self._write_state()
 
     def _write_state(self):
-        atomic_json(os.path.join(self.dir, STATE_NAME),
-                    {"format": FORMAT_TAG,
-                     "from_height": self.from_height,
-                     "last_height": self.watermark,
-                     "last_block_hash": self.last_hash,
-                     "sizes": self.sizes})
+        st = {"format": FORMAT_TAG,
+              "from_height": self.from_height,
+              "last_height": self.watermark,
+              "last_block_hash": self.last_hash,
+              "sizes": self.sizes}
+        if self.clock is not None:
+            self.clock.stamp(st)
+        atomic_json(os.path.join(self.dir, STATE_NAME), st)
 
 
 # ---------------------------------------------------------------------------

@@ -717,7 +717,12 @@ class NonceEmitter:
             self.stats = dict(saved) if saved else new_stats()
             self.stats_valid = saved is not None
 
-        self.store = store_of(self.dir, self.state)
+        # The scan's clock, carried in THIS census's state. See
+        # GraphWriter.clock: one walk feeds four artifacts and each
+        # records the same seconds under `scan`, which is why those four
+        # numbers must never be added to each other.
+        self.store = store_of(self.dir, self.state,
+                              clock=WallClock("scan", self.state))
         self.store.make_runs_dir()
         self.store.clean_orphans()
         self._heal(start_height)

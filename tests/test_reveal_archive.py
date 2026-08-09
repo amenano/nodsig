@@ -1132,3 +1132,58 @@ def test_the_form_bit_and_the_v1_projection(tmp):
                                  & (15 if cat == "keys" else 0),)))
         check(got[cat] == mirror.hexdigest(),
               f"{cat}: the v1 projection drifted from the raw mirror")
+
+
+# ---------------------------------------------------------------------------
+# The scan's own seconds, in all four artifacts it co-emits
+# ---------------------------------------------------------------------------
+
+def test_the_scan_records_its_seconds_in_every_artifact_it_emits(tmp, blocks):
+    """One walk of the chain writes four artifacts, and each records the
+    SAME seconds under `scan` in its own state.
+
+    Why this is a test and not a hope: the number is the only measured
+    cost a reader ever gets for the longest phase of the pipeline, and it
+    is the one that has to survive a run split over several sessions. It
+    is wired in four different writers, so nothing but a test keeps the
+    four in step.
+
+    What it must NOT tempt anyone into: adding those four numbers. They
+    are one pass seen four times. WallClock's docstring says so, and the
+    assertion below pins the equality that makes the sum wrong."""
+    server, url = trs.serve(blocks)
+    archive = os.path.join(tmp, "sec_archive")
+    graph = os.path.join(tmp, "sec_graph")
+    nonces = os.path.join(tmp, "sec_nonces")
+    try:
+        ra.run_scan(url, "user:pass", 2, archive, batch_size=2,
+                    checkpoint_every=2, graph_dir=graph,
+                    nonces_dir=nonces)
+        first = {}
+        for name, d in (("archive", archive), ("graph", graph),
+                        ("nonces", nonces)):
+            with open(os.path.join(d, "state.json")) as f:
+                st = json.load(f)
+            check("seconds" in st and "scan" in st["seconds"],
+                  f"{name}: the scan left no seconds in its state: {st.keys()}")
+            first[name] = st["seconds"]["scan"]
+
+        # RESUME. The total lives in the state, so a second stretch adds
+        # to the first instead of replacing it. This is the property the
+        # whole thing exists for: a run split over sessions still reports
+        # what it really cost.
+        ra.run_scan(url, "user:pass", 4, archive, batch_size=2,
+                    checkpoint_every=2, graph_dir=graph,
+                    nonces_dir=nonces)
+        for name, d in (("archive", archive), ("graph", graph),
+                        ("nonces", nonces)):
+            with open(os.path.join(d, "state.json")) as f:
+                st = json.load(f)
+            check(st["seconds"]["scan"] >= first[name],
+                  f"{name}: seconds went BACKWARDS across a resume "
+                  f"({st['seconds']['scan']} < {first[name]}): the total "
+                  "restarted instead of accumulating")
+    finally:
+        server.shutdown()
+    print("ok  scan seconds: recorded in all four artifacts, and they "
+          "accumulate across a resume")

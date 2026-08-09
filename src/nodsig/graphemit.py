@@ -231,6 +231,14 @@ class GraphEmitter:
     name does not exist, and its blocks will be emitted again.
     """
 
+    # The clock of the pass that FEEDS this archive. A scan co-emits the
+    # archive, the headers, the nonce census and this graph, and each one
+    # records the same seconds under `scan` in its own state: four views of
+    # one walk, which is exactly why WallClock's docstring says they must
+    # never be added together. Carried per artifact, because an emission
+    # can be switched on later than the others and then honestly owes less.
+    clock = None
+
     def __init__(self, graph_dir, flush_bytes=256 * 2**20):
         self.dir = graph_dir
         self.flush_bytes = flush_bytes
@@ -249,9 +257,15 @@ class GraphEmitter:
         will feed blocks from `start_height` on."""
         os.makedirs(os.path.join(self.dir, RUNS_DIR), exist_ok=True)
         state_path = os.path.join(self.dir, STATE_NAME)
+        # Built unconditionally: a FRESH archive has no state to carry a
+        # total from, and it is exactly the first stretch of a long scan.
+        # Building the clock only on the resume path would have left the
+        # first session unmeasured, which is the session that matters most.
+        self.clock = WallClock("scan")
         if os.path.exists(state_path):
             with open(state_path) as f:
                 state = json.load(f)
+            self.clock = WallClock("scan", state)
             if state.get("format") != FORMAT_TAG:
                 # A readable earlier major is not an unknown format, and
                 # saying "unknown" to the owner of a 300 GB archive
@@ -415,10 +429,13 @@ class GraphEmitter:
     def _write_state(self):
         tmp = os.path.join(self.dir, STATE_NAME + ".tmp")
         with open(tmp, "w") as f:
-            json.dump({"format": FORMAT_TAG,
-                       "last_height": self.watermark,
-                       "last_block_hash": self.last_hash,
-                       "runs": self.runs}, f, indent=1)
+            st = {"format": FORMAT_TAG,
+                  "last_height": self.watermark,
+                  "last_block_hash": self.last_hash,
+                  "runs": self.runs}
+            if self.clock is not None:
+                self.clock.stamp(st)
+            json.dump(st, f, indent=1)
         os.replace(tmp, os.path.join(self.dir, STATE_NAME))
 
     def totals(self):

@@ -426,6 +426,14 @@ def test_an_archive_ahead_of_its_host_is_cut_to_the_resume_point(tmp, chain):
         want = json.load(f)
     with open(os.path.join(ahead, hd.STATE_NAME)) as f:
         got = json.load(f)
+    # `seconds` is compared apart, on purpose. It is the one field that
+    # SHOULD differ between two archives that reached the same height by
+    # different roads: one was fed straight through, the other was fed
+    # too far and healed back, and they did not cost the same. What must
+    # match is everything that describes WHAT the archive holds.
+    check(got.pop("seconds", None) is not None,
+          "a healed archive must still carry the scan's seconds")
+    want.pop("seconds", None)
     check(got == want, f"cut state {got}, expected {want}")
     print("ok  ahead: the archive is cut to the resume point, byte for "
           "byte the one a stopped scan would have left")
@@ -605,3 +613,17 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+def test_the_scan_leaves_its_seconds_in_the_header_state(tmp):
+    """The fourth artifact of the co-emission check that lives in
+    test_reveal_archive.py. It is here because a fresh header archive
+    asks to be fed from GENESIS, and only this suite's chain starts
+    there."""
+    blocks, _model = headers_chain()
+    hdir = emit(tmp, blocks, name="hdr_seconds")
+    with open(os.path.join(hdir, hd.STATE_NAME)) as f:
+        st = json.load(f)
+    check("seconds" in st and "scan" in st["seconds"],
+          f"the scan left no seconds in the header state: {list(st)}")
+    print("ok  scan seconds: the header archive records them too")

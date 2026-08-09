@@ -530,6 +530,8 @@ def run_scan(rpc_url, auth, end_height, archive_dir,
     prev_hash = None
 
     state = _load_state(archive_dir, required=False)
+    # Built from the state so a resumed scan continues its own total.
+    clock = WallClock("scan", state)
     if state is not None:
         stats.update(state["stats"])
         runs = state["runs"]
@@ -622,13 +624,21 @@ def run_scan(rpc_url, auth, end_height, archive_dir,
         if nonce_emitter:
             nonce_emitter.checkpoint(height, block_hash_display)
         flush(height)
-        atomic_json(state_path, {
+        st = {
             "format": FORMAT_TAG,
             "last_height": height,
             "last_block_hash": block_hash_display,
             "stats": stats,
             "runs": runs,
-        })
+        }
+        # The pass's own seconds, accumulated across resumes because the
+        # total lives in the state and the state is what survives a kill.
+        # A run split over several sessions therefore reports what it
+        # really cost, not what its last stretch cost; what is lost is
+        # the stretch between this checkpoint and a kill, which makes the
+        # number a FLOOR, and the contract says so.
+        clock.stamp(st)
+        atomic_json(state_path, st)
 
     started = time.monotonic()
     done = 0
