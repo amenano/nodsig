@@ -75,6 +75,40 @@ this code still emits the graph it is not rewriting.
 Resumable: rerun the same command after an interruption and it continues from
 its last checkpoint.
 
+### Running it unattended, and what an interruption costs
+
+A pass over the whole chain is not something most people can watch. Three
+things make the difference between a run you can leave and one you have to
+babysit, and none of them is obvious from the command line.
+
+**Write a durable log, and make the tool unbuffered.** `python3 -u` (or
+`PYTHONUNBUFFERED=1`) matters more than it looks: without it the progress
+lines sit in a buffer, and an interruption takes them with it — you are left
+knowing that it stopped and not where. Put the log outside the artifact
+directory, so a `rewind` or a failed build never takes your record of what
+happened with it.
+
+**Know what an interruption costs, because you choose it.** Work becomes
+durable at each checkpoint, so a kill loses at most the stretch since the last
+one. The default is every 10,000 blocks, which early in the chain is minutes
+and late in the chain can be hours: blocks get heavier, so the same block
+count is a longer wall-clock bet. `--checkpoint-every` moves that trade-off,
+and it is a trade-off rather than a free win — a checkpoint flushes the open
+buffers into run files, and those runs are merged later by a phase that is
+itself expensive. Lower it when the loss you are risking is worth more than
+the extra merge, which is usually deep into the chain rather than at the
+start.
+
+**Read the cost from the artifact, not from your log.** Every manifest carries
+`build.seconds`, keyed by verb, and it accumulates across resumes because the
+running total lives in the state that survives a kill — so a run split over
+five sessions still reports what it really cost. Your log is the second road,
+useful for confronting that figure rather than replacing it. One caution when
+you add them up: a scan co-emits, so the archive, the graph, the header
+archive and the nonce census each record **the same** seconds under `scan`.
+Those four are one pass seen four times. Take it once, then add the phases
+that really did run one after another.
+
 ## 3. Seal what the pass produced
 
 Five separate commands, one per artifact the pass wrote: run the ones whose

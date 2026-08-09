@@ -144,3 +144,37 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+def test_the_total_counts_a_co_emitted_pass_once():
+    """The composed total, and the sum it must not be.
+
+    `report` already refused to add the rows up, which was right and
+    insufficient: a reader left with a table and no total composes one
+    by hand, and the hand-composed one is exactly the wrong sum the
+    note warns against. So the total is offered, and this pins the only
+    rule that makes it correct — a co-emitted verb is counted ONCE
+    across the artifacts that report it, everything else per artifact.
+    """
+    from nodsig.report import _total
+    scan = 8460                      # 2 h 21, the same pass seen 4 times
+    found = [(r, "/d", {"build": {"seconds": {"scan": scan}}})
+             for r in ("archive", "graph", "headers", "nonces")]
+    found += [("index", "/i", {"build": {"seconds": {"build": 89460}}}),
+              ("derived", "/d", {"build": {"seconds": {"build": 52200}}})]
+
+    total, folded = _total(found)
+    assert total == scan + 89460 + 52200, (
+        f"the co-emitted pass must be counted once: got {total}")
+    assert total != scan * 4 + 89460 + 52200, "that is the wrong sum"
+    assert folded == 3, f"three duplicates should have been folded, not {folded}"
+
+    # A co-emission switched on later owes less honestly: the pass is the
+    # largest of them, not a share and not the smallest.
+    uneven = [("archive", "/a", {"build": {"seconds": {"scan": 100}}}),
+              ("nonces", "/n", {"build": {"seconds": {"scan": 60}}})]
+    assert _total(uneven)[0] == 100, "the pass is the longest view of it"
+
+    # Nothing recorded: absent, not zero. Zero would read as "it was free".
+    assert _total([("x", "/x", {"build": {}})]) is None
+    print("ok  report: the total counts one pass once, and says so")

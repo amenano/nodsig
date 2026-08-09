@@ -208,6 +208,43 @@ def _cost_rows(found):
     return rows, shared
 
 
+def _total(found):
+    """What the whole set cost, composed the one way that is correct.
+
+    Refusing to add the rows up is right and was already here; offering
+    nothing in its place was not. The total is the question a reader
+    actually has — "what does having all of this cost me" — and leaving
+    them to compose it by hand invites exactly the sum the note warns
+    against.
+
+    The rule: a co-emitted verb is counted ONCE across all artifacts
+    that report it, because those figures are one pass seen several
+    times. Every other entry is counted per artifact, because those
+    phases really did run one after another.
+
+    Returns (total seconds, how many entries were folded), or None when
+    nothing recorded a duration."""
+    CO_EMESSI = ("scan",)          # one pass, several artifacts
+    once, per_artifact, folded = {}, 0, 0
+    for _role, _directory, manifest in found:
+        if manifest is None:
+            continue
+        for verb, sec in ((manifest.get("build") or {}).get("seconds") or {}).items():
+            if verb in CO_EMESSI:
+                if verb in once:
+                    folded += 1
+                # The largest wins: co-emission can be switched on later
+                # than the host, so one artifact honestly owes less than
+                # another. Taking the max reports the pass, not a share
+                # of it.
+                once[verb] = max(once.get(verb, 0), int(sec))
+            else:
+                per_artifact += int(sec)
+    if not once and not per_artifact:
+        return None
+    return sum(once.values()) + per_artifact, folded
+
+
 def _producer_rows(found):
     rows = []
     for role, _directory, manifest in found:
@@ -280,6 +317,16 @@ def render(found, out=sys.stdout):
               "artifacts, so every row above that names it reports the same "
               "pass. Those figures describe one run and must not be added "
               "together.\n\n")
+        tot = _total(found)
+        if tot is not None:
+            total, folded = tot
+            p(f"**All of it, composed: {_duration(total)}.** ")
+            if folded:
+                p(f"The shared pass is counted once rather than "
+                  f"{folded + 1} times; ")
+            p("the remaining steps really did run one after another. "
+              "Every figure is a floor: a resume records what was "
+              "checkpointed, never the stretch a kill took with it.\n\n")
     else:
         p("No artifact here records a duration. The field is written at "
           "seal time, so artifacts sealed by an earlier version carry "

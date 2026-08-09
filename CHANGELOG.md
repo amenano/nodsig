@@ -43,6 +43,21 @@ fingerprint, never by a tag.
   Nothing about how commands are invoked changes: no flag, no wrapper, no
   special mode.
 
+- **`report` now gives the total, not just the rows.** It already refused to
+  add the durations up, because a `scan` co-emits and those rows are one pass
+  seen several times. That refusal was right and incomplete: a reader left
+  with a table and no total composes one by hand, and the hand-composed one is
+  exactly the wrong sum the note warns against. The total is now printed, with
+  the co-emitted pass counted once and the sequential phases added — and it
+  says which it did.
+
+- **`build-and-query.md` says how to run a pass unattended.** Three things
+  that decide whether a chain-scale run is something you can leave: an
+  unbuffered durable log (without `-u` an interruption takes the progress
+  lines with it, and you know that it stopped but not where), what a kill
+  costs and how `--checkpoint-every` moves that trade-off in both directions,
+  and where to read the cost afterwards.
+
 ### Do your artifacts still work?
 
 **Yes, unchanged.** No format moved, no record width, no fingerprint. An
