@@ -26,4 +26,4 @@ backends. See ``docs/ARCHITECTURE.md`` for the design.
 # either: every manifest records it under `build.producer`, together with
 # whether the tree carried uncommitted edits. A version number is how a
 # release is referred to, not how an artifact is attributed.
-__version__ = "1.3.0"
+__version__ = "1.4.0"

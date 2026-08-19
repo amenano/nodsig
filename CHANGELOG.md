@@ -21,7 +21,7 @@ contract, the **CLI** is convenience, and `reveal-archive-v2` inside a tool
 numbered 1.3.0 is not a discrepancy. Artifacts are identified by their
 fingerprint, never by a tag.
 
-## Unreleased
+## 1.4.0 — the manifest learns to say when
 
 ### Command line
 
@@ -48,13 +48,21 @@ fingerprint, never by a tag.
   from the monotonic clock; the stamps exist because monotonic can
   drift on virtualized hosts, and confronting the two is what makes
   that drift visible without an externally dated log. `build` stays
-  outside the identity, so no fingerprint moves and no artifact needs
-  rebuilding; manifests sealed earlier simply lack the field.
+  outside the identity, so no fingerprint moves; manifests sealed
+  earlier simply lack the field.
 
 ### Formats
 
-- Nothing moves. No fingerprint changes, and artifacts built by 1.3.0
-  verify unchanged.
+- Nothing moves. Every format tag reads and writes exactly as in 1.3.0.
+
+### Do your artifacts still work?
+
+Yes, all of them, with zero rebuild hours. No fingerprint changes, no
+record moves, and nothing new refuses an old artifact: the one new
+refusal (`derive`) is about mismatched INPUTS, not about age, and the
+only inputs it stops are pairs that never belonged together. Resuming,
+growing or resealing an artifact built by 1.3.0 adds the `build.wall`
+field to its manifest and changes nothing else.
 
 ## 1.3.0 — a pass that measures itself
 
