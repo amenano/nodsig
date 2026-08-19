@@ -596,9 +596,13 @@ def run_scan(rpc_url, auth, end_height, archive_dir,
 
     def flush(through_height):
         """Close the open buffers into runs named by the exact height
-        interval they cover — the name IS the format's append story:
-        runs tile the chain, and the watermark says how far the
-        tiling goes."""
+        interval they cover. Runs do NOT tile the chain: an interval
+        with nothing to keep produces no run (empty buffers are
+        skipped below while seg_start advances past them), so a gap
+        between run names is legal and silent. Coverage is declared
+        by the watermark at seal time, never deduced from the names;
+        that is why a missing tile is invisible to merge and verify
+        by design, not by luck."""
         nonlocal buffered, seg_start
         for cat in CAT_ORDER:
             if not buffers[cat]:
