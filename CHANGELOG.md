@@ -21,6 +21,30 @@ contract, the **CLI** is convenience, and `reveal-archive-v2` inside a tool
 numbered 1.3.0 is not a discrepancy. Artifacts are identified by their
 fingerprint, never by a tag.
 
+## Unreleased
+
+### Command line
+
+- **`archive derive` refuses locks photographed at another block.** The
+  reuse table is defined by two moments: the archive's coverage and the
+  block the snapshot's locks were taken at. The locks manifest names its
+  block by hash and the archive checkpoints the hash at its watermark,
+  so the two are confronted offline and exactly; when they differ the
+  command now stops instead of printing a table that silently mixes two
+  moments of the chain and cannot be told from a right one. The new
+  `--allow-base-mismatch` flag crosses the two moments on purpose, and
+  the header prints both hashes either way. A derive that used to pass
+  on misaligned inputs was reporting a number nobody had defined.
+- Progress lines of the three scans print two named rates (the last
+  checkpoint interval and the stretch average) instead of one
+  ambiguous `blk/s`, and the ETA now extrapolates from the interval
+  rate, tagged with the model it assumes.
+
+### Formats
+
+- Nothing moves. No fingerprint changes, and artifacts built by 1.3.0
+  verify unchanged.
+
 ## 1.3.0 — a pass that measures itself
 
 ### Under the hood

@@ -202,13 +202,21 @@ EXPECT_NARROW = {             # --no-faces --no-cosigners
 }
 
 
-def build_snapshot_file(path):
+def build_snapshot_file(path, base_hash_hex=None):
     """A dumptxoutset v2 snapshot holding SNAPSHOT_LOCKS plus two coins
-    of exposed types (P2PK, P2TR) that prepare must skip."""
+    of exposed types (P2PK, P2TR) that prepare must skip.
+
+    `base_hash_hex` is the display hash of the block the snapshot
+    claims to photograph; the default is a fake one, which is fine for
+    prepare's own mechanics but NOT for derive, which refuses locks
+    photographed at a block the archive does not end on."""
     out = bytearray()
     out += b"utxo\xff" + (2).to_bytes(2, "little")
     out += bytes.fromhex("f9beb4d9")
-    out += bytes.fromhex("ab" * 32)                    # fake base hash
+    if base_hash_hex is None:
+        out += bytes.fromhex("ab" * 32)                # fake base hash
+    else:
+        out += bytes.fromhex(base_hash_hex)[::-1]      # display -> file order
     coins = []
     for i, (kind, lock, sat) in enumerate(SNAPSHOT_LOCKS):
         txid = bytes([i + 1]) * 32
@@ -233,10 +241,10 @@ def build_snapshot_file(path):
         f.write(out)
 
 
-def test_prepare(tmp):
+def test_prepare(tmp, base_hash_hex=None):
     snapshot = os.path.join(tmp, "test_utxos.dat")
     locks_dir = os.path.join(tmp, "locks")
-    build_snapshot_file(snapshot)
+    build_snapshot_file(snapshot, base_hash_hex=base_hash_hex)
     # chunk_records=3 forces several sorted runs: the external merge
     # (and its duplicate-summing) is what gets exercised, not bypassed.
     rs.run_prepare(snapshot, locks_dir, chunk_records=3)

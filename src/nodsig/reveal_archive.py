@@ -1363,7 +1363,8 @@ def run_archive_curve(archive_dir, out_path, every=10_000):
 
 
 def run_derive(archive_dir, locks_dir, faces=True, cosigners=True,
-               curve_path=None, curve_every=10_000):
+               curve_path=None, curve_every=10_000,
+               allow_base_mismatch=False):
     """Derive from the archive everything the reuse scan measures:
     the final table AND the per-checkpoint curve, with a fingerprint
     per row.
@@ -1395,7 +1396,23 @@ def run_derive(archive_dir, locks_dir, faces=True, cosigners=True,
     """
     state = _load_state(archive_dir)
     manifest = _load_manifest(archive_dir)
-    locks, _ = _load_locksets(locks_dir)
+    locks, locks_manifest = _load_locksets(locks_dir)
+    # The table is defined by TWO heights: the archive's coverage and
+    # the block the snapshot's locks were photographed at. The manifest
+    # names that block by hash, and the archive checkpoints the hash at
+    # its watermark, so the two can be confronted offline and exactly:
+    # same hash, same block, same height. Deriving an archive against
+    # locks from another block produces a table indistinguishable from
+    # a right one, which is why a mismatch is a refusal and not a note.
+    base_hash = locks_manifest["base_hash"]
+    tip_hash = state["last_block_hash"]
+    if base_hash != tip_hash and not allow_base_mismatch:
+        raise ScanError(
+            f"the locks were photographed at block {base_hash}, but "
+            f"the archive covers through {tip_hash}: these are "
+            "different moments of the chain, and the reuse table "
+            "would silently mix them — pass --allow-base-mismatch "
+            "only if crossing two moments is what you want")
     if curve_path:
         for t in TYPE_ORDER:
             locks[t].track_burn_heights()
@@ -1430,8 +1447,12 @@ def run_derive(archive_dir, locks_dir, faces=True, cosigners=True,
     # revealed in several intervals is counted at each sighting (the
     # burns stay idempotent; only this informational counter differs
     # from crosscheck's, which walks the deduplicated stream).
+    aligned = ("the same block" if base_hash == tip_hash
+               else "A DIFFERENT BLOCK, crossed on purpose")
     print(f"=== Derived from archive (heights 1..{state['last_height']:,}"
           f", {keys_seen:,} key sightings in perimeter) ===")
+    print(f"    archive tip {tip_hash}")
+    print(f"    locks base  {base_hash} ({aligned})")
     _print_lock_table(locks, faces, cosigners, fp)
     return fp
 
@@ -1715,6 +1736,11 @@ def main(argv=None):
                          "(same columns as reuse_scan's curve.csv)")
     pd.add_argument("--curve-every", type=int, default=10_000,
                     help="height grid for curve rows")
+    pd.add_argument("--allow-base-mismatch", action="store_true",
+                    help="derive even when the locks' snapshot block "
+                         "differs from the archive's tip: the table "
+                         "then mixes two moments of the chain, which "
+                         "is refused by default")
 
     pv = sub.add_parser("curve",
                         help="when the chain first revealed each thing, "
@@ -1772,7 +1798,8 @@ def main(argv=None):
                        faces=not args.no_faces,
                        cosigners=not args.no_cosigners,
                        curve_path=args.curve,
-                       curve_every=args.curve_every)
+                       curve_every=args.curve_every,
+                       allow_base_mismatch=args.allow_base_mismatch)
         elif args.cmd == "curve":
             run_archive_curve(args.archive, args.out, every=args.every)
         elif args.cmd == "v1-digests":

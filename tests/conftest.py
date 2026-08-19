@@ -47,12 +47,15 @@ def blocks():
 
 
 @pytest.fixture
-def locks_dir(tmp):
+def locks_dir(tmp, blocks):
     """The synthetic snapshot distilled into sorted lock files.
     `trs.test_prepare` does the work (builds the snapshot, runs
     `run_prepare`, checks dedup/ordering/exclusions) and returns the
-    directory: it is the same line that opens the main()s needing it."""
-    return trs.test_prepare(tmp)
+    directory: it is the same line that opens the main()s needing it.
+    The snapshot claims the chain's tip as its base block, like a real
+    `dumptxoutset` taken at the archive's target height: derive
+    confronts the two hashes and refuses locks from another moment."""
+    return trs.test_prepare(tmp, base_hash_hex=blocks[4][0])
 
 
 def _scan_archive(tmp, blocks, name):

@@ -706,6 +706,34 @@ def test_derive(tmp, blocks, locks_dir):
         server.shutdown()
 
 
+def test_derive_refuses_locks_from_another_block(tmp, blocks):
+    """The reuse table is defined by TWO moments: the archive's tip
+    and the block the snapshot's locks were photographed at. Locks
+    whose base hash is not the archive's tip must be refused, because
+    a table mixing two moments is indistinguishable from a right one;
+    the explicit flag is the only door through."""
+    server, url = trs.serve(blocks)
+    archive = os.path.join(tmp, "arch_base_mismatch")
+    try:
+        ra.run_scan(url, "user:pass", 4, archive,
+                    batch_size=2, checkpoint_every=2, prefetch=False)
+    finally:
+        server.shutdown()
+    snapshot = os.path.join(tmp, "other_moment.dat")
+    foreign = os.path.join(tmp, "locks_other_moment")
+    trs.build_snapshot_file(snapshot)       # default fake base hash
+    rs.run_prepare(snapshot, foreign, chunk_records=3)
+    try:
+        ra.run_derive(archive, foreign)
+        fail("derive accepted locks photographed at another block")
+    except rs.ScanError:
+        print("ok  derive: locks from another block are refused")
+    fp = ra.run_derive(archive, foreign, allow_base_mismatch=True)
+    check(fp is not None, "derive with the explicit flag did not run")
+    print("ok  derive: the explicit flag crosses the two moments, "
+          "and says so in the header")
+
+
 def _curve_rows(path):
     with open(path) as f:
         head, *body = [line.rstrip("\n").split(",") for line in f]
@@ -862,8 +890,8 @@ def test_golden_fingerprint(archive):
 
 def main():
     with tempfile.TemporaryDirectory() as tmp:
-        locks_dir = trs.test_prepare(tmp)
         blocks = trs.build_chain()
+        locks_dir = trs.test_prepare(tmp, base_hash_hex=blocks[4][0])
         archive = test_scan_content(tmp, blocks)
         test_stale_run_cleanup(tmp, blocks)
         test_merge_determinism(tmp, blocks, archive)
@@ -875,6 +903,7 @@ def main():
         test_block_corruption(tmp, blocks)
         test_crosscheck(tmp, blocks, locks_dir, archive)
         test_derive(tmp, blocks, locks_dir)
+        test_derive_refuses_locks_from_another_block(tmp, blocks)
         test_lookup(archive)
         test_golden_fingerprint(archive)
     print("PASS: the archive matches the crafted chain, fuses "
