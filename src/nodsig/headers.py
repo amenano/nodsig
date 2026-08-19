@@ -392,7 +392,8 @@ class HeaderEmitter:
                 with open(path, "ab") as f:
                     f.truncate(committed)
                 print(f"  headers: truncated {file_name} to its committed "
-                      f"{committed} bytes (crash leftover)", file=sys.stderr)
+                      f"{committed} bytes (tail past the last checkpoint)",
+                      file=sys.stderr)
 
     def _cut_back(self, to_height):
         """Drop every record above `to_height` and commit the shorter

@@ -270,7 +270,9 @@ def test_refusals(tmp, blocks, graph_oneshot):
         pass
     print("ok  refusals: fresh-dir mid-resume and a gap are refused")
 
-    # A run file the state does not name is a crash leftover: removed.
+    # A run file the state does not name is not accounted anywhere:
+    # removed on load, and announced by what it is (not named), not by
+    # a guessed cause.
     stale = os.path.join(graph_oneshot, ge.RUNS_DIR, "run_zz_stale.bin")
     with open(stale, "wb") as f:
         f.write(b"junk")

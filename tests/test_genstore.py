@@ -281,9 +281,12 @@ def test_drop_runs_defers_deletion(tmp):
 
 
 def test_truncate_appended(tmp):
-    """Files that grow in place: a tail past the committed size is a
-    crash leftover and is cut; a file SHORTER than committed is
-    corruption and must stop everything."""
+    """Files that grow in place: a tail past the committed size is
+    not accounted by any state and is cut; a file SHORTER than
+    committed is corruption and must stop everything. The message
+    states the fact (past the committed size), not a guessed cause:
+    a wanted TERM and a crash leave the same tail, and the code
+    cannot tell them apart."""
     store = fresh(tmp, "trunc")
     path = store.path("grows.bin")
     with open(path, "wb") as f:

@@ -298,7 +298,8 @@ def test_seal_and_verify(archive, capsys):
 
 def test_resume_equals_oneshot(tmp, chain):
     """Stopped and resumed must equal one-shot, byte for byte — and a
-    crash leftover past the committed sizes must be cut, not kept."""
+    tail past the committed sizes must be cut, not kept, whether the
+    stop was a crash or a wanted TERM."""
     blocks, _model = chain
     one = emit(tmp, blocks, "one")
     part = emit(tmp, blocks, "part", end=3)

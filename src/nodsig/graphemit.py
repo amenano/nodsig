@@ -288,7 +288,7 @@ class GraphEmitter:
             if name not in known:
                 os.remove(os.path.join(self.dir, RUNS_DIR, name))
                 print(f"  graph: removed stale run {name} "
-                      "(crash leftover)", file=sys.stderr)
+                      "(not named by the state)", file=sys.stderr)
 
         # The ahead case: the graph knows heights the host's state does
         # not (the crash window between the two checkpoint writes, or

@@ -541,8 +541,8 @@ def run_scan(rpc_url, auth, end_height, archive_dir,
         for name in os.listdir(os.path.join(archive_dir, RUNS_DIR)):
             if name not in known:
                 os.remove(os.path.join(archive_dir, RUNS_DIR, name))
-                print(f"  removed stale run {name} (crash leftover)",
-                      file=sys.stderr)
+                print(f"  removed stale run {name} (not named by the "
+                      "state)", file=sys.stderr)
         print(f"resuming from height {start_height}", file=sys.stderr)
 
     # Graph co-emission (OFF by default), same contract as in
@@ -743,7 +743,7 @@ def run_merge(archive_dir):
     """
     state = _load_state(archive_dir)
     manifest = _load_manifest(archive_dir)
-    _sweep_unnamed(archive_dir, manifest, "crash leftover")
+    _sweep_unnamed(archive_dir, manifest, "not named by the manifest")
     if not state["runs"] and manifest is not None:
         print("nothing to fuse: no runs since the last merge.")
         return manifest["fingerprint"]

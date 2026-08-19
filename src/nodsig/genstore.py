@@ -596,7 +596,7 @@ class GenStore:
                 if name not in known_runs:
                     os.remove(os.path.join(runs_dir, name))
                     print(f"  {self.label}: removed stale run {name} "
-                          "(crash leftover)", file=sys.stderr)
+                          "(not named by the state)", file=sys.stderr)
         known_top = ({e["file"] for e in self.state["files"].values()}
                      | {e["file"] for e in self.state["caches"].values()}
                      | set(keep))
@@ -605,7 +605,7 @@ class GenStore:
                                          and name not in known_top):
                 os.remove(self.path(name))
                 print(f"  {self.label}: removed stale file {name} "
-                      "(crash leftover)", file=sys.stderr)
+                      "(not named by the state)", file=sys.stderr)
 
     def truncate_appended(self, todo):
         """Files that grow in place are not committed atomically: a
@@ -626,5 +626,5 @@ class GenStore:
                 with open(path, "ab") as f:
                     f.truncate(committed)
                 print(f"  {self.label}: truncated {name} to its "
-                      f"committed {committed} bytes (crash leftover)",
-                      file=sys.stderr)
+                      f"committed {committed} bytes (tail past the "
+                      "last checkpoint)", file=sys.stderr)
