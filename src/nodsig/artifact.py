@@ -366,6 +366,18 @@ class WallClock:
     A command with no state of its own (a fingerprint pass, a one-shot
     derivative) has nothing to carry and simply reports its own seconds.
 
+    THE INSTRUMENT, DECLARED
+    ========================
+    Measured with `time.monotonic` of the producing process: immune to
+    system clock jumps, which is why it was chosen, but on virtualized
+    hosts the monotonic clock itself can drift from real time, and the
+    drift is a property of the boot, not of the machine. Measured on
+    one WSL2 boot: +6.19 percent, enough to inflate a sealed figure by
+    minutes per hour; on another boot of the same machine, 1 second in
+    6,315. A reader who needs the figure to be real time confirms it
+    against an externally dated log; the fingerprint is indifferent
+    either way, since seconds live in `build` and not in the identity.
+
     ONE PASS, SEVERAL ARTIFACTS: THE FIGURES DO NOT ADD UP
     ======================================================
     Every artifact carries its own entry, because an artifact that

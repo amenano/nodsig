@@ -191,6 +191,16 @@ changes what the number means:
   Summing them across artifacts describes a run nobody performed. Only entries
   under different verbs, within one artifact, are costs paid one after another.
 
+And one property of the instrument, stated because the number would otherwise
+claim a precision it does not have: the reference implementation measures with
+the **producing process's monotonic clock**. That choice is immune to system
+clock jumps, but on virtualized hosts the monotonic clock itself can drift
+from real time, and the drift belongs to the boot, not to the machine: one
+WSL2 boot measured +6.19 percent against real time, another boot of the same
+machine 1 second in 6,315. A sealed figure can therefore carry the producer's
+drift. Whoever needs it to be real time confirms it against an externally
+dated log; the fingerprint is indifferent, since seconds live in `build`.
+
 ### The statement: what a signature would be over
 
 Nothing here signs anything, and the project does not ship a key. What it does
