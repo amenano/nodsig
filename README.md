@@ -224,55 +224,60 @@ Everything else is a query over files, so this is the part that needs the node
 and the hours. Pick one height and use it everywhere: an artifact is defined by
 where it stopped, and pieces cut at different heights do not join.
 
-**What each step costs**, so you can decide in advance where to stop. These are
-wall times from one real run to height 957,301, and sizes for that height:
+**What each step costs**, so you can decide in advance where to stop. These
+are wall times measured at height 957,301. Most rows come from one run,
+completed by 1.3.0 in August 2026 with every artifact on one local USB disk;
+the few steps that run did not repeat (`census`, `nonces resolve`, `archive
+curve`, the headers crosscheck) keep their measured times from the earlier
+run on the same machine. Sizes are for that height:
 
 | Step | Time | Writes |
 |---|---|---|
 | `bitcoin-cli dumptxoutset` | minutes to an hour, on the node | the snapshot |
 | `census` | ~18 min | a CSV |
-| `reuse prepare` | ~35 min | `<locks>`, ~1.4 GB (one record per *distinct* lock, not per output) |
-| `archive scan --graph` | **~3 days** | `<archive>` ~87 GB **and** `<graph>` ~301 GB |
-| `archive scan --nonces` | +10% of the scan above | `<nonces>` ~55-60 GB |
-| `archive merge` | ~4 h 20 | seals the archive in place |
-| `nonces merge` | ~2 h 40 | seals the census in place |
+| `reuse prepare` | ~20 min | `<locks>`, ~1.4 GB (one record per *distinct* lock, not per output) |
+| `archive scan --graph` | **~56 h** | `<archive>` ~98 GB **and** `<graph>` ~301 GB |
+| `archive scan --nonces` | included in the 56 h above, which was measured with the census co-emitted | `<nonces>` ~60 GB |
+| `archive merge` | ~5 h | seals the archive in place |
+| `nonces merge` | ~3 h 20 | seals the census in place |
 | `nonces resolve` | ~36 min | ~1 MB: the evidence that resolves each repeated point (**needs the node**, optional) |
-| `graph fingerprint` | ~5 h | nothing: it re-reads and prints |
-| `archive derive` | ~5 h 40 | the reuse table, and its `curve.csv` |
+| `graph fingerprint` | ~1 h 25 | nothing: it re-reads and prints |
+| `archive derive` | ~4 h | the reuse table, and its `curve.csv` |
 | `archive curve` | ~2 h | `revelations.csv`: first revelations per window |
-| `index build` | ~25 h | `<index>` ~229 GB |
-| `derived build` | ~14 h 30 | `<derived>` ~186 GB |
+| `index build` | ~23 h | `<index>` ~230 GB |
+| `derived build` | ~15 h | `<derived>` ~185 GB |
 
 The audits are cheap next to the builds, and that is the point of them. From
-the same run: `archive verify --deep` ~1 h 40, `index verify --graph` ~1 h,
-`headers crosscheck --index` ~1 h, `derived verify --index` ~40 min,
-`nonces witness-verify` seconds. Checking everything you built costs about a
-twentieth of building it, so there is no version of this where verifying is
-the step you skip.
+the same run: `archive verify --deep` ~1 h 20, `nonces verify --deep` ~1 h 10,
+`index verify` ~1 h, `headers crosscheck --index` ~1 h, `derived verify
+--index` ~45 min, `nonces witness-verify` seconds. Checking everything you
+built costs about a twentieth of building it, so there is no version of this
+where verifying is the step you skip.
 
-Every number in that table comes from the slow end of every choice it depends
-on. Read the two paragraphs below before concluding that a use case is out of
-reach.
+Every number in that table is a floor in one stated sense: the builds resume
+from checkpoints, and a resume records what was checkpointed, never the
+stretch a kill took with it. Read the two paragraphs below before concluding
+that a use case is out of reach.
 
-Two of the sizes are **projections, not measurements**, and saying which is the
-point. The last full run was built by 1.1.0 and measured `<index>` at 248 GB and
-`<derived>` at 191; 1.2.0 narrows the spend side and the satoshi fields, which
-takes 18.9 GB off the first and 5.2 off the second by arithmetic on the record
-widths. Nobody has built the v3 pair yet. If you are provisioning a disk, use
-the older, larger figures and be pleasantly surprised.
+Two of the sizes used to be projections, and the run that replaced them is
+worth a sentence because it confronted the arithmetic. 1.1.0 measured
+`<index>` at 248 GB and `<derived>` at 191; narrowing the spend side and the
+satoshi fields predicted 229.1 and 185.8 by arithmetic on the record widths;
+the completed v3 build measured **229.6 and 185.3**. The prediction was
+checkable and it held to within half a percent.
 
-The figures above come from one run to height 957,301, and the mount changed
-partway through it, which is worth stating because the mount matters more than
-anything else here. The fusions ran with the artifacts on a network share
-(45 MB/s reading, 75 writing, measured); the index, the derivatives and their
-audits ran on a local USB disk (75 and 97). A third configuration on the same
-hardware and the same file, a 9p share, managed 14.4 MB/s, and quoting that one
-would have made the same tool look three times slower.
+The figures above come from one configuration, which is worth stating because
+the mount matters more than anything else here: every artifact sat on a local
+USB disk measured at 83 MB/s sequential read, with the node reached over a
+LAN. An earlier run on the same hardware split the same steps across a network
+share (45 MB/s reading, 75 writing) and that USB disk, and a third mount on
+the same hardware and the same file, a 9p share, managed 14.4 MB/s: quoting
+that one would have made the same tool look three times slower.
 
 So the honest reading is not "this is what a network costs". It is that the
-choice of mount moves these rows by a factor of three to five, that the numbers
-here come from the two faster of the three, and that a reader on a local SSD
-should expect better rather than worse.
+choice of mount moves these rows by a factor of three to five, and that a
+reader on a local NVMe disk should expect better than this table rather than
+worse.
 
 Which resource bounds which row is the part worth knowing: the scan is bounded
 by the wire to the node, the fusions and the builds by the disk under the
@@ -283,16 +288,20 @@ have built anything, `nodsig report` prints what **yours** cost beside what they
 are: it reads the durations out of the manifests the builders sealed, so the
 figures are the artifacts' own rather than a transcription.
 
-Roughly **five to six days** and **~861 GB** if you build all of it and keep
-everything. The section below on what to keep is worth reading before you size
-the disk, because the largest artifact is the one no query reads.
+Composed honestly, with the shared pass counted once: **103 h of machine**
+(about four and a half days if run back to back) and **~874 GB** if you build
+all of it and keep everything. The section below on what to keep is worth
+reading before you size the disk, because the largest artifact is the one no
+query reads.
 
-Every row in that table has now been produced by a completed run to 957,301,
-including the two `--nonces` ones, which until that run were arithmetic on a
-measurement over 20,000 real blocks (about two microseconds of CPU per input,
-and 1.02 to 1.09 records per input). What follows is kept for the reader who
-wants to know how a projection was made, and as the record of a projection
-that a run has now replaced.
+Every row in that table has now been produced twice by completed runs to
+957,301: once by the run that first measured the `--nonces` rows (until then
+arithmetic on a measurement over 20,000 real blocks, about two microseconds
+of CPU per input and 1.02 to 1.09 records per input), and again by the 1.3.0
+run the current figures come from, which also reproduced the published
+fingerprints from a fresh walk of the chain. What follows is kept for the
+reader who wants to know how a projection was made, and as the record of a
+projection that a run has now replaced.
 
 The **scan** has a second bottleneck of its own, and it is not your CPU either:
 it is the wire to the node. Ours was an Umbrel on a Raspberry Pi reached through

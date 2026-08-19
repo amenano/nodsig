@@ -224,18 +224,19 @@ file describes the shapes, and shapes do not have fingerprints. `nodsig
 On the 2026 chain through height 957,301, as an order of magnitude for planning.
 Yours will differ with the height and with how much of the chain you cover.
 
-`<index>` and `<derived>` are **projected** for the v3 formats 1.2.0 emits: the
-measured v2 pair was 248 and 191 GB, and the narrower spend side and `u56`
-satoshi fields account for the difference by arithmetic. The v3 pair has not
-been built yet, so provision for the larger numbers.
+`<index>` and `<derived>` were projected here for a while and are now
+**measured**: the v2 pair was 248 and 191 GB, the narrower spend side and
+`u56` satoshi fields predicted 229.1 and 185.8 by arithmetic on the record
+widths, and the completed v3 build measured 229.6 and 185.3. The projection
+held to within half a percent, which is what fixed-width records buy.
 
 | Artifact | Size |
 |---|---|
 | `<graph>/` | ~301 GB |
-| `<index>/` | ~229 GB |
-| `<derived>/` | ~186 GB |
-| `<archive>/` | ~87 GB |
-| `<nonces>/` | ~55-60 GB |
+| `<index>/` | ~230 GB |
+| `<derived>/` | ~185 GB |
+| `<archive>/` | ~98 GB |
+| `<nonces>/` | ~60 GB |
 | `<locks>/`, `<checkpoint>/`, CSVs | small enough not to plan for |
 
 Add headroom on top: a fusion writes a new generation before deleting the old.
