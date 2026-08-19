@@ -9,6 +9,11 @@ file: no block explorer, no third-party index, no network. Each answer names
 the artifact it came from, the height that artifact covers, and a fingerprint
 anyone else can recompute from the same chain.
 
+**Manual:** a hands-on walkthrough with real command outputs and the
+fingerprints to land on lives at
+[liberlume.com](https://liberlume.com/en/bitcoin-and-quantum-computing-manual/)
+([italiano](https://liberlume.com/it/bitcoin-e-quantum-computing-manuale/)).
+
 ## Why it exists
 
 Most questions about the chain get answered out of somebody else's index. That
