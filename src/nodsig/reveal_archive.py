@@ -645,7 +645,13 @@ def run_scan(rpc_url, auth, end_height, archive_dir,
         atomic_json(state_path, st)
 
     started = time.monotonic()
-    done = 0
+    done_since_start = 0
+    # Two rates on purpose. The stretch average restarts from zero at
+    # every resume and, on a chain whose per-block cost only grows, an
+    # average seeded by light blocks stays permanently above the true
+    # pace: two stretches of different length printing one "blk/s" are
+    # not comparable. The last checkpoint interval is what "now" means.
+    mark_t, mark_done = started, 0
     fetcher = BlockFetcher(client, feed_from, end_height, batch_size,
                            prefetch=prefetch, depth=prefetch_depth)
     for window, hashes, raws in fetcher:
@@ -689,7 +695,7 @@ def run_scan(rpc_url, auth, end_height, archive_dir,
                     if nonce_emitter:
                         nonce_emitter.add_input(h, tx_in, pushes)
 
-        done += len(window)
+        done_since_start += len(window)
         if buffered >= flush_records:
             flush(window[-1])
         if nonce_emitter:
@@ -698,12 +704,22 @@ def run_scan(rpc_url, auth, end_height, archive_dir,
         if (window[-1] % checkpoint_every < batch_size
                 or window[-1] == end_height):
             checkpoint(window[-1], blockparse.hash_hex(prev_hash))
-            rate = done / (time.monotonic() - started)
-            eta_h = (end_height - window[-1]) / rate / 3600 if rate else 0
+            now = time.monotonic()
+            step = ((done_since_start - mark_done) / (now - mark_t)
+                    if now > mark_t else 0.0)
+            avg = (done_since_start / (now - started)
+                   if now > started else 0.0)
+            mark_t, mark_done = now, done_since_start
+            # The ETA extrapolates at constant per-block cost, which on
+            # this chain is optimistic by construction; the tag says so
+            # rather than letting the number claim more than it checked.
+            eta_h = ((end_height - window[-1]) / step / 3600
+                     if step else 0)
             print(f"checkpoint @ {window[-1]:>7,}: "
                   f"{stats['revelations']:,} revelations in "
                   f"{len(runs)} runs "
-                  f"| {rate:.1f} blk/s, ~{eta_h:.1f} h left",
+                  f"| {step:.1f} blk/s now, {avg:.1f} avg, "
+                  f"~{eta_h:.1f} h left (flat-cost extrapolation)",
                   file=sys.stderr)
 
     print(f"\narchive covers heights 1..{end_height} "

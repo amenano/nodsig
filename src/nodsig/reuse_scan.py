@@ -1169,6 +1169,10 @@ def run_scan(locks_dir, rpc_url, auth, end_height, checkpoint_dir,
     # --- The loop ---
     started = time.monotonic()
     done_since_start = 0
+    # Two rates, and the ETA from the last interval: see the matching
+    # comment in reveal_archive's scan loop for why the stretch
+    # average alone misleads across resumes.
+    mark_t, mark_done = started, 0
     fetcher = BlockFetcher(client, feed_from, end_height, batch_size,
                            prefetch=prefetch, depth=prefetch_depth)
     for window, hashes, raws in fetcher:
@@ -1213,13 +1217,20 @@ def run_scan(locks_dir, rpc_url, auth, end_height, checkpoint_dir,
         if (window[-1] % checkpoint_every < batch_size
                 or window[-1] == end_height):
             fp = checkpoint(window[-1], blockparse.hash_hex(prev_hash))
-            rate = done_since_start / (time.monotonic() - started)
-            eta_h = (end_height - window[-1]) / rate / 3600 if rate else 0
+            now = time.monotonic()
+            step = ((done_since_start - mark_done) / (now - mark_t)
+                    if now > mark_t else 0.0)
+            avg = (done_since_start / (now - started)
+                   if now > started else 0.0)
+            mark_t, mark_done = now, done_since_start
+            eta_h = ((end_height - window[-1]) / step / 3600
+                     if step else 0)
             burnt = sum(locks[t].hit_sats for t in TYPE_ORDER)
             print(f"checkpoint @ {window[-1]:>7,}: "
                     f"reuse ≥ {burnt / SAT:,.2f} BTC "
                     f"({sum(locks[t].hit_count for t in TYPE_ORDER):,} locks) "
-                    f"| {rate:.1f} blk/s, ~{eta_h:.1f} h left "
+                    f"| {step:.1f} blk/s now, {avg:.1f} avg, "
+                    f"~{eta_h:.1f} h left (flat-cost extrapolation) "
                     f"| {fp[:16]}…", file=sys.stderr)
 
     # --- Final summary: the numbers AND the declared blind spots ---
