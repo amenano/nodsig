@@ -435,6 +435,11 @@ def test_an_archive_ahead_of_its_host_is_cut_to_the_resume_point(tmp, chain):
     check(got.pop("seconds", None) is not None,
           "a healed archive must still carry the scan's seconds")
     want.pop("seconds", None)
+    # Same reasoning for the wall stretches: real timestamps of two
+    # different roads to the same height legitimately differ.
+    check(got.pop("wall", None) is not None,
+          "a healed archive must still carry the scan's wall stretch")
+    want.pop("wall", None)
     check(got == want, f"cut state {got}, expected {want}")
     print("ok  ahead: the archive is cut to the resume point, byte for "
           "byte the one a stopped scan would have left")

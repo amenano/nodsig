@@ -769,6 +769,7 @@ def _phase_seal(store, index):
     manifest = seal_manifest(FORMAT_TAG, identity, {
             "producer": producer(),
             "seconds": store.clock.stamp(state),
+            "wall": store.clock.wall(),
             "parent": declared_parent(oi.FORMAT_TAG, man["fingerprint"]),
             "transactions": ibuild["transactions"],
             "outputs": ibuild["outputs"],

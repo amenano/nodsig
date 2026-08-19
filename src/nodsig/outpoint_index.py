@@ -978,6 +978,7 @@ def _phase_seal(index_dir, state, graph_dir, clock):
     manifest = seal_manifest(FORMAT_TAG, identity, {
             "producer": producer(),
             "seconds": clock.stamp(state),
+            "wall": clock.wall(),
             "parent": (None if source_fp is None
                        else declared_parent(ge.FORMAT_TAG, source_fp)),
             "last_block_hash": state["last_block_hash"],

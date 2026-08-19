@@ -55,6 +55,7 @@ Identity = {
 build.parent   = { format, fingerprint } | null  // DECLARED, not sealed
 build.producer = { version, commit?, dirty? }    // DECLARED, not sealed
 build.seconds  = { <verb>: u32, … }              // DECLARED, not sealed
+build.wall     = { <verb>: [[start, end], …] }   // DECLARED, not sealed
 ```
 
 **The rule, and it is the whole contract:**
@@ -200,6 +201,23 @@ WSL2 boot measured +6.19 percent against real time, another boot of the same
 machine 1 second in 6,315. A sealed figure can therefore carry the producer's
 drift. Whoever needs it to be real time confirms it against an externally
 dated log; the fingerprint is indifferent, since seconds live in `build`.
+
+### The wall stretches: when, so the seconds can be confronted
+
+```
+build.wall = { "build": [["2026-08-18T14:23:09Z", "2026-08-18T23:56:51Z"]] }
+```
+
+The companion `build.wall` carries what monotonic cannot: **when**. For each
+verb, one `[start, end]` pair of whole-second UTC timestamps per process
+stretch that recorded it, in order; a job resumed twice has three pairs. The
+duration still comes only from `build.seconds`, never from these stamps (real
+time can jump under a run, which is the reason monotonic was chosen); the
+stamps exist so a reader can sum the stretches, confront them with the
+seconds, and see the producer's clock drift without hunting for an externally
+dated log. Same accumulation rules as the seconds: it rides in the state, it
+survives resumes, and it is absent where nothing recorded it, which is every
+manifest sealed before this field existed.
 
 ### The statement: what a signature would be over
 

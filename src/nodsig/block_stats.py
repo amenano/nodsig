@@ -175,9 +175,11 @@ def run_build(graph_dir, out_path):
         source_fp = graph_manifest.get("fingerprint")
 
     identity = make_identity(FORMAT_TAG, 1, covered, [("csv", csv_sha256)])
+    clock = WallClock("build")
     meta = seal_manifest(FORMAT_TAG, identity, {
             "producer": producer(),
-            "seconds": WallClock("build").stamp(),
+            "seconds": clock.stamp(),
+            "wall": clock.wall(),
             "parent": (None if source_fp is None
                        else declared_parent(ge.FORMAT_TAG, source_fp)),
             "rows": rows,

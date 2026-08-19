@@ -834,6 +834,7 @@ def run_merge(archive_dir):
     identity = make_identity(FORMAT_TAG, 1, state["last_height"],
                              ((cat, digests[cat]) for cat in CAT_ORDER))
     build["seconds"] = clock.stamp(state)
+    build["wall"] = clock.wall()
     new_manifest = seal_manifest(FORMAT_TAG, identity, build)
 
     # THE COMMIT POINT. Up to here the old generation is still the

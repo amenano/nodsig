@@ -271,6 +271,38 @@ def test_a_command_with_no_state_reports_only_itself():
         {"fingerprint": 5}
 
 
+def test_the_wall_stretches_ride_along_and_do_not_duplicate():
+    """`stamp` writes the real-time stretches under their own key: one
+    [start, end] UTC pair per process stretch. A second clock in the
+    SAME process (an in-process resume) continues its own stretch
+    instead of appending a twin; a stretch from ANOTHER process is
+    carried through untouched, and the new one lands after it."""
+    state = {"wall": {"build": [["2026-01-01T00:00:00Z",
+                                 "2026-01-01T02:00:00Z"]]}}
+    WallClock("build", state, started=_ago(30)).stamp(state)
+    stretches = state["wall"]["build"]
+    assert stretches[0] == ["2026-01-01T00:00:00Z",
+                            "2026-01-01T02:00:00Z"]
+    assert len(stretches) == 2
+    start, end = stretches[1]
+    assert start.endswith("Z") and end.endswith("Z") and start <= end
+    # The same process stamps again: still two stretches, its own one
+    # continued, the foreign one untouched.
+    WallClock("build", state, started=_ago(12)).stamp(state)
+    assert len(state["wall"]["build"]) == 2
+    assert state["wall"]["build"][0][0] == "2026-01-01T00:00:00Z"
+
+
+def test_the_wall_carries_other_verbs_untouched():
+    """Like the seconds: a clock owns its verb's stretches and hands
+    every other verb's through by copy, not by reference."""
+    scan = [["2026-01-01T00:00:00Z", "2026-01-03T10:00:00Z"]]
+    state = {"wall": {"scan": [list(scan[0])]}}
+    WallClock("merge", state, started=_ago(600)).stamp(state)
+    assert state["wall"]["scan"] == scan
+    assert len(state["wall"]["merge"]) == 1
+
+
 def test_the_clock_moves_neither_the_fingerprint_nor_the_statement():
     """Two honest builds of identical bytes take different times, so a
     duration inside the identity would give the same content two names.

@@ -873,10 +873,12 @@ def run_fingerprint(graph_dir, reseal=False):
     totals = {k: sum(r[k] for r in state["runs"])
               for k in ("blocks", "transactions", "inputs", "outputs",
                         "bytes")}
+    clock = WallClock("fingerprint", state)
     manifest = seal_manifest(
         FORMAT_TAG, identity,
         {"producer": producer(),
-         "seconds": WallClock("fingerprint", state).stamp(),
+         "seconds": clock.stamp(),
+         "wall": clock.wall(),
          "totals": totals, "runs": len(state["runs"]),
          "files": {"stream": {"file": RUNS_DIR}}, "caches": {}})
     atomic_json(os.path.join(graph_dir, MANIFEST_NAME), manifest)

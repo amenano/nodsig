@@ -721,9 +721,11 @@ def run_fingerprint(headers_dir):
                              ((name, files[name]["sha256"])
                               for name, _ in FILES))
     fingerprint = identity_fingerprint(identity)
+    clock = WallClock("fingerprint", state)
     manifest = seal_manifest(FORMAT_TAG, identity, {
             "producer": producer(),
-            "seconds": WallClock("fingerprint", state).stamp(),
+            "seconds": clock.stamp(),
+            "wall": clock.wall(),
             "last_block_hash": blockparse.hash_hex(last_id),
             "blocks": records,
             "coinbase_bytes": state["sizes"]["coinbase"],

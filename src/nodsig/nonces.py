@@ -1010,6 +1010,7 @@ def _seal(nonces_dir, state, tallies, clock):
     manifest = seal_manifest(FORMAT_TAG, identity, {
             "producer": producer(),
             "seconds": clock.stamp(state),
+            "wall": clock.wall(),
             "generation": state["generation"],
             "last_block_hash": state["last_block_hash"],
             "files": files,

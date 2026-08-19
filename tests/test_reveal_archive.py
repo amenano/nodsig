@@ -1196,6 +1196,12 @@ def test_the_scan_records_its_seconds_in_every_artifact_it_emits(tmp, blocks):
             check("seconds" in st and "scan" in st["seconds"],
                   f"{name}: the scan left no seconds in its state: {st.keys()}")
             first[name] = st["seconds"]["scan"]
+            stretches = st.get("wall", {}).get("scan")
+            check(stretches and len(stretches) == 1,
+                  f"{name}: expected one wall stretch, got {stretches}")
+            check(stretches[0][0] <= stretches[0][1]
+                  and stretches[0][1].endswith("Z"),
+                  f"{name}: malformed wall stretch {stretches[0]}")
 
         # RESUME. The total lives in the state, so a second stretch adds
         # to the first instead of replacing it. This is the property the
@@ -1212,6 +1218,11 @@ def test_the_scan_records_its_seconds_in_every_artifact_it_emits(tmp, blocks):
                   f"{name}: seconds went BACKWARDS across a resume "
                   f"({st['seconds']['scan']} < {first[name]}): the total "
                   "restarted instead of accumulating")
+            # An IN-PROCESS resume continues its own wall stretch: one
+            # pair still, not a duplicate twin per run_scan call.
+            check(len(st["wall"]["scan"]) == 1,
+                  f"{name}: an in-process resume duplicated the wall "
+                  f"stretch: {st['wall']['scan']}")
     finally:
         server.shutdown()
     print("ok  scan seconds: recorded in all four artifacts, and they "

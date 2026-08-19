@@ -275,6 +275,18 @@ _PRODUCER = _read_producer()
 # negative or add an hour that nobody waited.
 _PROCESS_STARTED = time.monotonic()
 
+# And, next to it, WHEN this process began in real (UTC) time: the anchor of
+# the `wall` stretches. Real time can jump under a run, which is exactly why
+# durations do not come from it; but a start and an end that are roughly
+# right are what lets a reader confront the monotonic seconds with the
+# calendar and notice a producer whose monotonic clock drifted.
+_PROCESS_STARTED_REAL = time.time()
+
+
+def _iso_utc(t):
+    """Whole-second UTC timestamp in the RFC 3339 shape."""
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(t))
+
 
 def producer():
     """The `build.producer` entry: who wrote THIS manifest.
@@ -377,6 +389,9 @@ class WallClock:
     6,315. A reader who needs the figure to be real time confirms it
     against an externally dated log; the fingerprint is indifferent
     either way, since seconds live in `build` and not in the identity.
+    The `wall` stretches (see `wall()`) are that log, carried in the
+    manifest itself: real UTC start and end per process stretch, so
+    the confrontation no longer depends on a file somebody kept.
 
     ONE PASS, SEVERAL ARTIFACTS: THE FIGURES DO NOT ADD UP
     ======================================================
@@ -404,6 +419,7 @@ class WallClock:
     """
 
     KEY = "seconds"
+    KEY_WALL = "wall"
 
     def __init__(self, verb, state=None, started=None):
         self.verb = verb
@@ -412,15 +428,46 @@ class WallClock:
                                 if k != verb}
         self._carried = int(carried.get(verb, 0))
         self._started = _PROCESS_STARTED if started is None else started
+        wall = (state or {}).get(self.KEY_WALL) or {}
+        self._wall_others = {k: [list(p) for p in v]
+                             for k, v in wall.items() if k != verb}
+        self._wall_carried = [list(p) for p in wall.get(verb, [])]
+        self._stretch_start = _iso_utc(_PROCESS_STARTED_REAL)
+        # An in-process resume reads back a state this same process has
+        # stamped: its own stretch is already the last entry there, and
+        # must be continued rather than duplicated. Same start, same
+        # stretch — the start is the process's, so the match is exact.
+        if (self._wall_carried
+                and self._wall_carried[-1][0] == self._stretch_start):
+            self._wall_carried.pop()
 
     def seconds(self):
         """This verb's total: what earlier segments recorded, plus what
         this process has spent so far."""
         return self._carried + round(time.monotonic() - self._started)
 
+    def wall(self):
+        """The whole `wall` mapping: for each verb, one [start, end]
+        pair in real UTC time per process stretch that recorded it,
+        the current stretch included.
+
+        The companion of `seconds`, carrying what monotonic cannot:
+        WHEN. Durations still come only from the monotonic clock; these
+        stamps exist so that a reader can confront the two and see a
+        producer whose monotonic drifted, without hunting for an
+        externally dated log. Real time can jump under a run, so a
+        stretch is honest to the second, not to the jump."""
+        total = {k: [list(p) for p in v]
+                 for k, v in self._wall_others.items()}
+        total[self.verb] = ([list(p) for p in self._wall_carried]
+                            + [[self._stretch_start,
+                                _iso_utc(time.time())]])
+        return total
+
     def stamp(self, state=None):
         """The whole `seconds` mapping, written into `state` when
-        there is one to write it into.
+        there is one to write it into (the `wall` stretches ride along
+        under their own key).
 
         Called at every checkpoint (so a kill loses at most the last
         stretch) and once more at seal time, where the returned mapping
@@ -429,6 +476,7 @@ class WallClock:
         total[self.verb] = self.seconds()
         if state is not None:
             state[self.KEY] = total
+            state[self.KEY_WALL] = self.wall()
         return total
 
 

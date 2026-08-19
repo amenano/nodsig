@@ -40,6 +40,17 @@ fingerprint, never by a tag.
   ambiguous `blk/s`, and the ETA now extrapolates from the interval
   rate, tagged with the model it assumes.
 
+### Manifests
+
+- **`build.wall`: when, beside how long.** Every seal now records, next
+  to `build.seconds`, one `[start, end]` pair of UTC timestamps per
+  process stretch that worked on the verb. Durations still come only
+  from the monotonic clock; the stamps exist because monotonic can
+  drift on virtualized hosts, and confronting the two is what makes
+  that drift visible without an externally dated log. `build` stays
+  outside the identity, so no fingerprint moves and no artifact needs
+  rebuilding; manifests sealed earlier simply lack the field.
+
 ### Formats
 
 - Nothing moves. No fingerprint changes, and artifacts built by 1.3.0

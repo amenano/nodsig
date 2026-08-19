@@ -441,6 +441,7 @@ def _seal(witness_dir, parent, groups, rows, clock, out):
     manifest = seal_manifest(FORMAT_TAG, identity, {
         "producer": producer(),
         "seconds": clock.stamp(),
+        "wall": clock.wall(),
         # The parent's OWN tag, read from its manifest, never this code's
         # constant: a table can be resolved over a census in the previous
         # format, and writing the tag we happen to emit would file it
