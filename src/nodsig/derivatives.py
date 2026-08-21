@@ -150,6 +150,8 @@ Subcommands:
     history   one lock's whole story: events in time order + balance
     fee       TXID → its fee (or "coinbase")
     cospends  TXID or TXID:VOUT → what was spent together, with locks
+    supply    the issuance identity checked on every block, and the
+              fee / subsidy / coinbase series per epoch
 
 Standard library only; the shared machinery is one implementation each:
 record I/O and the slab budget in recio, the run writer and the
@@ -164,6 +166,7 @@ import hashlib
 import heapq
 import json
 import os
+import struct
 import sys
 import time
 from datetime import datetime, timezone
@@ -1435,6 +1438,157 @@ def run_cospends(derived_dir, index_dir, arg, out=sys.stdout):
 # Command line
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# supply: the issuance identity, checked on every block
+# ---------------------------------------------------------------------------
+#
+# Consensus lets a coinbase claim AT MOST the subsidy of its height plus
+# the fees of its block; it may claim less, and what it leaves is gone.
+# The index holds the coinbase values, the derivatives hold every fee, and
+# the subsidy is a formula: three sources that no other command confronts.
+# One sequential pass over fees.bin plus one small read per block, and the
+# same totals re-add per epoch: the fee series `blockstats` declares out
+# of its reach, because a fee is a join it never makes.
+
+SUBSIDY_HALVING = 210_000            # blocks between halvings (consensus)
+INITIAL_SUBSIDY = 50 * SAT
+
+
+def subsidy_at(height):
+    """The subsidy consensus allows at `height`, in satoshis: 50 BTC,
+    halved every 210,000 blocks, zero after the 64th halving (the shift
+    would otherwise wrap the rule, not the coins)."""
+    halvings = height // SUBSIDY_HALVING
+    return INITIAL_SUBSIDY >> halvings if halvings < 64 else 0
+
+
+def _fees_by_height(derived, index):
+    """Yield the fee sum of every height, 1..watermark, from ONE
+    sequential pass over fees.bin: the tx boundaries come from the
+    resident first_tx array, so no record is ever looked up."""
+    entry = derived.build["files"]["fees"]
+    path = os.path.join(derived.dir, entry["file"])
+    rec = derived.fee_rec
+    fmt = ">IHB" if rec == 7 else ">Q"    # u56 (v3) or u64 (v2)
+    first_tx = index.first_tx
+    heights = len(first_tx)
+    h = 0
+    nxt = first_tx[1] if heights > 1 else index.n_tx
+    acc = 0
+    ord_ = 0
+    for slab in read_slabs(path, rec, error=OutpointError):
+        for parts in struct.iter_unpack(fmt, slab):
+            while ord_ >= nxt:            # crossed into the next height
+                yield acc
+                acc = 0
+                h += 1
+                nxt = first_tx[h + 1] if h + 1 < heights else index.n_tx
+            acc += ((parts[0] << 24) | (parts[1] << 8) | parts[2]) \
+                if rec == 7 else parts[0]
+            ord_ += 1
+    yield acc
+    for _ in range(h + 1, heights):     # cannot happen (every block has
+        yield 0                          # a coinbase), kept total
+
+
+def run_supply(derived_dir, index_dir, epoch_blocks=SUBSIDY_HALVING,
+               csv_path=None, out=sys.stdout):
+    """Check coinbase(h) <= subsidy(h) + fees(h) on every height and
+    print the issuance series per epoch. A violation is an error exit:
+    it would mean the index or the derivatives disagree with consensus,
+    and no total below could be trusted."""
+    derived, index = _open_pair(derived_dir, index_dir)
+    csv = open(csv_path, "w") if csv_path else None
+    try:
+        heights = len(index.first_tx)
+        tot = {"blocks": 0, "tx": 0, "fees": 0, "coinbase": 0,
+               "subsidy": 0, "unclaimed": 0, "short": 0}
+        buckets = {}
+        violations = []
+        if csv:
+            csv.write("height,time,n_tx,coinbase_sats,fees_sats,"
+                      "subsidy_sats\n")
+        fees = _fees_by_height(derived, index)
+        for i in range(heights):
+            h = i + 1
+            first_tx = index.first_tx[i]
+            next_tx = index.first_tx[i + 1] if i + 1 < heights \
+                else index.n_tx
+            coinbase = sum(v for v, _ in index.outputs_of_tx(first_tx))
+            fee = next(fees)
+            subsidy = subsidy_at(h)
+            allowed = subsidy + fee
+            if coinbase > allowed:
+                violations.append((h, coinbase, allowed))
+            elif coinbase < allowed:
+                tot["unclaimed"] += allowed - coinbase
+                tot["short"] += 1
+            tot["blocks"] += 1
+            tot["tx"] += next_tx - first_tx
+            tot["fees"] += fee
+            tot["coinbase"] += coinbase
+            tot["subsidy"] += subsidy
+            b = buckets.setdefault(h // epoch_blocks, {
+                "blocks": 0, "tx": 0, "fees": 0, "coinbase": 0,
+                "subsidy": 0, "unclaimed": 0})
+            b["blocks"] += 1
+            b["tx"] += next_tx - first_tx
+            b["fees"] += fee
+            b["coinbase"] += coinbase
+            b["subsidy"] += subsidy
+            b["unclaimed"] += max(allowed - coinbase, 0)
+            if csv:
+                csv.write(f"{h},{index.times[i]},{next_tx - first_tx},"
+                          f"{coinbase},{fee},{subsidy}\n")
+
+        print(f"supply identity over heights 1..{heights:,} "
+              f"(genesis is not in the index: its 50 BTC are outside "
+              f"every total here)", file=out)
+        print(f"  coinbase   {tot['coinbase'] / SAT:>20,.8f} BTC", file=out)
+        print(f"  subsidy    {tot['subsidy'] / SAT:>20,.8f} BTC", file=out)
+        print(f"  fees       {tot['fees'] / SAT:>20,.8f} BTC", file=out)
+        print(f"  unclaimed  {tot['unclaimed'] / SAT:>20,.8f} BTC in "
+              f"{tot['short']:,} block(s) that claimed less than "
+              f"subsidy + fees", file=out)
+        if violations:
+            print(f"  VIOLATED in {len(violations):,} block(s): coinbase "
+                  f"above subsidy + fees", file=out)
+            for h, cb, allowed in violations[:10]:
+                print(f"    height {h:,}: coinbase {cb:,} sat, allowed "
+                      f"{allowed:,}", file=out)
+        else:
+            print("  ok  coinbase <= subsidy + fees on every block",
+                  file=out)
+        label = ("halving epoch" if epoch_blocks == SUBSIDY_HALVING
+                 else f"{epoch_blocks:,}-block bucket")
+        print(f"\nper {label}:", file=out)
+        print(f"  {'heights':>19}  {'blocks':>9}  {'tx':>13}  "
+              f"{'fees BTC':>16}  {'coinbase BTC':>16}  "
+              f"{'subsidy BTC':>16}  {'unclaimed BTC':>14}  fees/coinbase",
+              file=out)
+        for k in sorted(buckets):
+            b = buckets[k]
+            lo = max(k * epoch_blocks, 1)
+            hi = (k + 1) * epoch_blocks - 1
+            share = b["fees"] / b["coinbase"] if b["coinbase"] else 0.0
+            print(f"  {lo:>9,}–{hi:<9,}  {b['blocks']:>9,}  {b['tx']:>13,}  "
+                  f"{b['fees'] / SAT:>16,.2f}  {b['coinbase'] / SAT:>16,.2f}  "
+                  f"{b['subsidy'] / SAT:>16,.2f}  "
+                  f"{b['unclaimed'] / SAT:>14,.8f}  {share:.4f}", file=out)
+        if csv:
+            print(f"\nper-block series written to {csv_path}", file=out)
+        if violations:
+            raise OutpointError(
+                f"supply identity violated at {len(violations):,} "
+                "height(s): the index and the derivatives disagree with "
+                "consensus; do not trust these artifacts")
+    finally:
+        if csv:
+            csv.close()
+        derived.close()
+        index.close()
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(
         description="History per lock, fee per transaction and "
@@ -1495,6 +1649,18 @@ def main(argv=None):
     pc.add_argument("--index", required=True)
     pc.add_argument("target", metavar="TXID[:VOUT]")
 
+    psu = sub.add_parser("supply", help="check coinbase <= subsidy + "
+                                        "fees on every block; fees, "
+                                        "subsidy and coinbase per epoch")
+    psu.add_argument("--derived", required=True)
+    psu.add_argument("--index", required=True)
+    psu.add_argument("--epoch", type=int, default=SUBSIDY_HALVING,
+                     help="blocks per bucket (default: the halving "
+                          "epoch, 210,000)")
+    psu.add_argument("--csv", metavar="PATH",
+                     help="also write the per-block series: height, "
+                          "time, n_tx, coinbase, fees, subsidy")
+
     args = p.parse_args(argv)
     try:
         if args.cmd == "build":
@@ -1512,6 +1678,11 @@ def main(argv=None):
                         _lock_from_args(args), limit=args.limit)
         elif args.cmd == "fee":
             run_fee(args.derived, args.index, args.txids)
+        elif args.cmd == "supply":
+            if args.epoch < 1:
+                p.error("--epoch must be at least 1 block")
+            run_supply(args.derived, args.index, epoch_blocks=args.epoch,
+                       csv_path=args.csv)
         else:
             run_cospends(args.derived, args.index, args.target)
     except OutpointError as e:

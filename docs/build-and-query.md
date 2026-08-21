@@ -236,6 +236,7 @@ nodsig check --archive <archive> --index <index> --derived <derived> \
 nodsig derived history  --derived <derived> --index <index> --lock <hash160>
 nodsig derived fee      --derived <derived> --index <index> <txid>
 nodsig derived cospends --derived <derived> --index <index> <txid>:<vout>
+nodsig derived supply   --derived <derived> --index <index> [--csv series.csv]
 nodsig archive lookup   --archive <archive> <digest>
 nodsig nonces  groups   --nonces  <nonces>
 nodsig nonces  address  --index <index> --derived <derived> --nonces <nonces> \
@@ -248,6 +249,15 @@ nodsig blockstats summary block-stats.csv
 `derived history` takes the lock, not the address: `--lock <hash160 of the
 scriptPubKey>` or `--spk <raw scriptPubKey>`. `nodsig check` is the one command
 that decodes addresses for you.
+
+`derived supply` is the one command above that reads whole files: one
+sequential pass over `fees.bin` plus one small read per block of the index's
+`outputs.bin`, so it takes minutes on a local disk and up to an hour on a slow
+mount. It confronts three things nothing else confronts: the coinbase values
+the index holds, the fees the derivatives hold, and the subsidy schedule. A
+coinbase above its allowance is an error exit; one below it is counted as
+unclaimed and reported. `--csv` writes the per-block series (height, time,
+transactions, coinbase, fees, subsidy) for whatever comes next.
 
 Everything above is a local lookup except `nonces address`, which fetches the
 few blocks the index names, by height, from your own node.
@@ -417,6 +427,7 @@ they read, time or explain something you already have.
 | `derived history` | a lock's events in order, each with height and date | 6 |
 | `derived fee` | what a transaction paid | 6 |
 | `derived cospends` | what was spent together with an outpoint | 6 |
+| `derived supply` | coinbase <= subsidy + fees checked on every block; fees, subsidy and coinbase per epoch | 6 |
 | `firstspend build` | when each lock was first spent from, ordered by time | 4 |
 | `firstspend rewind` | back to a height already covered | rewind |
 | `firstspend verify` | re-read it against its manifest, and confirm its parent | 5 |

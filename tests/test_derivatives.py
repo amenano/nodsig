@@ -830,6 +830,57 @@ def test_cli_windows(dbuilt):
           "with their caveats")
 
 
+def test_supply(dbuilt):
+    """The issuance identity on the fixture: every coinbase claims the
+    bare 50 BTC and leaves its fees on the table, so the identity holds
+    with nothing violated and exactly the fees unclaimed."""
+    tmp, _graph, index, derived, _txids, _locks = dbuilt
+    csv_path = os.path.join(tmp, "supply.csv")
+    buf = io.StringIO()
+    dv.run_supply(derived, index, csv_path=csv_path, out=buf)
+    text = buf.getvalue()
+    fees_total = sum(FEES)
+    check("ok  coinbase <= subsidy + fees on every block" in text,
+          "the fixture must satisfy the identity")
+    check(f"unclaimed  {fees_total / dv.SAT:>20,.8f} BTC in 4 block(s)"
+          in text, "unclaimed must be exactly the fees left behind, "
+          "in the four blocks that had any")
+    check(f"coinbase   {5 * S / dv.SAT:>20,.8f} BTC" in text,
+          "five coinbases of 50 BTC")
+    rows = open(csv_path).read().splitlines()
+    check(rows[0] == "height,time,n_tx,coinbase_sats,fees_sats,"
+          "subsidy_sats", "csv header")
+    check(len(rows) == 6, "one row per height")
+    cols = [r.split(",") for r in rows[1:]]
+    check([c[0] for c in cols] == ["1", "2", "3", "4", "5"], "heights")
+    check(all(int(c[3]) == S and int(c[5]) == S for c in cols),
+          "coinbase and subsidy are 50 BTC on every fixture block")
+    check(sum(int(c[4]) for c in cols) == fees_total
+          and sum(int(c[2]) for c in cols) == len(FEES),
+          "the per-block fees and tx counts re-add to the model")
+    check(dv.subsidy_at(1) == 50 * dv.SAT
+          and dv.subsidy_at(209_999) == 50 * dv.SAT
+          and dv.subsidy_at(210_000) == 25 * dv.SAT
+          and dv.subsidy_at(840_000) == 312_500_000
+          and dv.subsidy_at(64 * 210_000) == 0,
+          "subsidy schedule")
+    # A coinbase above the allowance is the one state that must not pass:
+    # forge it by lying about the subsidy for one height.
+    real = dv.subsidy_at
+    dv.subsidy_at = lambda h: 0 if h == 3 else real(h)
+    try:
+        buf = io.StringIO()
+        with pytest.raises(dv.OutpointError):
+            dv.run_supply(derived, index, out=buf)
+        check("VIOLATED in 1 block(s)" in buf.getvalue()
+              and "height 3:" in buf.getvalue(),
+              "a coinbase above subsidy + fees must be named and fatal")
+    finally:
+        dv.subsidy_at = real
+    print("ok  supply: the identity holds on the fixture, the fees left "
+          "behind are counted, a violation is fatal")
+
+
 def test_verify_catches_corruption(dbuilt):
     tmp, _graph, index, _derived, _txids, _locks = dbuilt
     victim = os.path.join(tmp, "derived_victim")

@@ -464,6 +464,7 @@ offline and take seconds:
 | What is this lock's history, event by event, with heights and dates? | `derived history --lock <hash160>` |
 | What fee did this transaction pay? | `derived fee TXID` |
 | What was spent together with this? (the common-input hint) | `derived cospends TXID[:VOUT]` |
+| Does every coinbase respect subsidy + fees, and how much was left unclaimed? Fees per epoch? | `derived supply` |
 | Was this raw digest ever revealed, and seen where? | `archive lookup <digest>` |
 | How did reuse grow over time? | `curve deltas curve.csv` |
 | …and on what real dates? | `curve dates`: block times are not in the curve, so the join is a declared step rather than a smuggled one. Offline with `--headers`, which is what that archive is for; only without it does it ask the node |

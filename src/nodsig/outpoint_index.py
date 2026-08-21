@@ -1513,6 +1513,28 @@ class Index:
         v = self.out_rec - 20
         return int.from_bytes(rec[0:v], "big"), rec[v:]
 
+    def outputs_of_tx(self, tx_ord):
+        """Every output a transaction created, in vout order, as
+        (value_sats, lock): one positional read for the boundary, one
+        for the records. The coinbase of height h is
+        `outputs_of_tx(first_tx[h - 1])`, which is how a reader gets a
+        block's reward without decoding a single script."""
+        first = int.from_bytes(
+            self._pread("tx_first_out.bin", tx_ord * TFO_REC, TFO_REC),
+            "big")
+        if tx_ord + 1 < self.n_tx:
+            end = int.from_bytes(
+                self._pread("tx_first_out.bin", (tx_ord + 1) * TFO_REC,
+                            TFO_REC), "big")
+        else:
+            end = self.n_out
+        blob = self._pread("outputs.bin", first * self.out_rec,
+                           (end - first) * self.out_rec)
+        v = self.out_rec - 20
+        return [(int.from_bytes(blob[o:o + v], "big"),
+                 blob[o + v:o + self.out_rec])
+                for o in range(0, len(blob), self.out_rec)]
+
     def spenders(self, out_ord):
         """tx ordinals that spent this output: [] if unspent, one
         entry under consensus (more would echo a duplicate_spends

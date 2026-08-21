@@ -21,6 +21,29 @@ contract, the **CLI** is convenience, and `reveal-archive-v2` inside a tool
 numbered 1.3.0 is not a discrepancy. Artifacts are identified by their
 fingerprint, never by a tag.
 
+## Unreleased
+
+### Command line
+
+- **`nodsig derived supply`**: the issuance identity, coinbase <= subsidy
+  + fees, checked on every block, with fees, subsidy, coinbase and the
+  unclaimed remainder per halving epoch (or any `--epoch`), and `--csv`
+  for the per-block series. It confronts three things no other command
+  confronts: the coinbase values in the index, the fees in the
+  derivatives, the subsidy schedule. A coinbase above its allowance is
+  an error exit.
+- `Index.outputs_of_tx(tx_ord)`: a transaction's outputs in vout order,
+  the reader the coinbase of a height needed.
+
+### Formats
+
+- None moved. No artifact needs rebuilding.
+
+### Cost
+
+- `derived supply` reads `fees.bin` once and one coinbase per block:
+  minutes on a local disk, up to an hour on a slow mount.
+
 ## 1.5.0 — a fifth artifact: when each lock was first spent
 
 ### Command line

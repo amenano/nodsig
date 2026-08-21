@@ -48,7 +48,7 @@ PUBLIC_SURFACE = {
     "graph": ("stats", "fingerprint", "show", "digest"),
     "index": ("build", "rewind", "stats", "verify", "lookup"),
     "derived": ("build", "rewind", "stats", "verify", "history", "fee",
-                "cospends"),
+                "cospends", "supply"),
     "firstspend": ("build", "stats", "verify", "between", "rewind"),
     "blockstats": ("build", "summary"),
     "curve": ("deltas", "dates"),
