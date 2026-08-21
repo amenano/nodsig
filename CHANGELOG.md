@@ -21,7 +21,7 @@ contract, the **CLI** is convenience, and `reveal-archive-v2` inside a tool
 numbered 1.3.0 is not a discrepancy. Artifacts are identified by their
 fingerprint, never by a tag.
 
-## Unreleased
+## 1.6.0 — a price per block, as an external input
 
 ### Command line
 
@@ -65,6 +65,15 @@ fingerprint, never by a tag.
   minutes on a local disk, up to an hour on a slow mount.
 - `price build` reads the index's block table and the series: seconds,
   and 9 bytes per block on disk (about 8 MB at today's height).
+
+### Do your artifacts still work?
+
+Yes, all of them, with zero rebuild hours. Nothing here touches an
+artifact: the price layer reads the index's block table and writes its
+own files beside it, and no fingerprint moves whether or not a series
+is present. What you cannot inherit from anyone is the series itself:
+fetch it under the publisher's terms, import it, and the digest names
+exactly what you used.
 
 ## 1.5.0 — a fifth artifact: when each lock was first spent
 
