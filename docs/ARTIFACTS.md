@@ -23,6 +23,7 @@ placeholders: every one of them is a path you choose on the command line.
 | nonce witness table | `nonces-witness-v1` | — |
 | outpoint index | `outpoint-index-v3` | `outpoint-index-v2` |
 | outpoint derivatives | `outpoint-derived-v3` | `outpoint-derived-v2` |
+| first-spend table | `firstspend-v1` | — |
 | block stats | `block-stats-v2` | — |
 | address book (input) | `address-book-v2` | — |
 | check report (output) | `check-report-v2` | — |
@@ -164,7 +165,9 @@ published with this project were produced: run once, agreed, reported.
 | ├ `history_gNNNN.bin` | records | One row per output carrying both events, receipt and spend | `derived build` | `derived history`, `check` |
 | ├ `tx_inputs.bin`, `fees.bin` | records | Inputs per transaction, and each transaction's fee | `derived build` | `derived fee/cospends`, `check` |
 | └ `manifest.json` | `outpoint-derived-v3` | Fingerprint and coverage; the parent index is declared in `build`, and a stale pairing is refused | `derived build` | verification |
-| `*.lad` (inside index and derived) | ladders | Search caches: one sample every few thousand keys. **Outside the fingerprint**; without them a search falls back to a blind bisection, slower and with the same answer | the builders | the readers, when present |
+| `<firstspend>/` | `firstspend-v1` | The first spend of every lock, ordered by that moment (25 B: `spender_tx` \| `lock`) | `firstspend build` | `firstspend between` |
+| └ `firstspend_gNNNN.bin`, `manifest.json` | records / `firstspend-v1` | One row per lock ever spent from; the parent derivatives are **declared** in `build` | `firstspend build` | `firstspend between/verify` |
+| `*.lad` (inside index, derived and firstspend) | ladders | Search caches: one sample every few thousand keys. **Outside the fingerprint**; without them a search falls back to a blind bisection, slower and with the same answer | the builders | the readers, when present |
 | `<checkpoint>/` | `reuse-scan-v1` | *Second road only.* The direct reuse scan's state: a `hits_<type>.bin` bitmap of which locks history has opened, plus `state.json` and its own `curve.csv` | `reuse scan` | itself (resume), `archive crosscheck` |
 
 ## What the scan checks while it reads
@@ -237,6 +240,7 @@ held to within half a percent, which is what fixed-width records buy.
 | `<derived>/` | ~185 GB |
 | `<archive>/` | ~98 GB |
 | `<nonces>/` | ~60 GB |
+| `<firstspend>/` | ~37 GB (optional; 1.48 G locks ever spent from × 25 B) |
 | `<locks>/`, `<checkpoint>/`, CSVs | small enough not to plan for |
 
 Add headroom on top: a fusion writes a new generation before deleting the old.

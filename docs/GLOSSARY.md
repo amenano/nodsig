@@ -96,9 +96,19 @@ Outputs consumed together by one transaction usually share an owner — a **hint
 never proof: CoinJoin and collaborative spends break the assumption. The caveat is
 part of the co-spend contract and MUST be shown with every answer.
 
+### first spend (FirstSpend-v1)
+When a lock was **first spent from**, ordered by that moment. The derivatives
+answer it one lock at a time; this fifth artifact materialises the order the
+collection lacks, so "which locks were first spent between H1 and H2" becomes a
+contiguous read (`firstspend between`) rather than a scan. Its perimeter is the
+derivatives': "first spent from", **not** "first exposed": a key seen inside a
+revealed script (the co-signer case) is out, the same line the reveal archive
+draws. A lock never spent from has no row.
+
 ### ancestry
-`graph → outpoint index → derivatives` (and the reveal archive), each sealed
-artifact **declaring its parent's fingerprint** in `build`. The declaration sits
+`graph → outpoint index → derivatives` (and the reveal archive; `firstspend`
+hangs off the derivatives), each sealed artifact **declaring its parent's
+fingerprint** in `build`. The declaration sits
 outside the fingerprint on purpose, so that the same content always takes the
 same name; a reader holding both artifacts confirms the link, and `verify` says
 so when it could not. Same chain + same height ⇒ the same bytes and the same

@@ -417,6 +417,11 @@ they read, time or explain something you already have.
 | `derived history` | a lock's events in order, each with height and date | 6 |
 | `derived fee` | what a transaction paid | 6 |
 | `derived cospends` | what was spent together with an outpoint | 6 |
+| `firstspend build` | when each lock was first spent from, ordered by time | 4 |
+| `firstspend rewind` | back to a height already covered | rewind |
+| `firstspend verify` | re-read it against its manifest, and confirm its parent | 5 |
+| `firstspend stats` | coverage, row count and fingerprint, instant | - |
+| `firstspend between` | which locks were first spent in a height window | 6 |
 | `blockstats build` | per-block series out of the graph | 4 |
 | `blockstats summary` | the same series read per epoch | 6 |
 | `curve deltas` | how reuse grew, interval by interval | 6 |

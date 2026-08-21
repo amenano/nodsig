@@ -121,6 +121,7 @@ FORMAT_MATRIX = [
     ("nodsig.witness", "nonce witness table"),
     ("nodsig.outpoint_index", "outpoint index"),
     ("nodsig.derivatives", "outpoint derivatives"),
+    ("nodsig.firstspend", "first-spend table"),
     ("nodsig.block_stats", "block stats"),
     ("nodsig.address_book", "address book (input)"),
     ("nodsig.check_report", "check report (output)"),

@@ -49,6 +49,7 @@ PUBLIC_SURFACE = {
     "index": ("build", "rewind", "stats", "verify", "lookup"),
     "derived": ("build", "rewind", "stats", "verify", "history", "fee",
                 "cospends"),
+    "firstspend": ("build", "stats", "verify", "between", "rewind"),
     "blockstats": ("build", "summary"),
     "curve": ("deltas", "dates"),
     "check": None,

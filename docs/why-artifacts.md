@@ -53,6 +53,7 @@ everything. What a given question needs is smaller, sometimes zero:
 | Exposure, single-key addresses (`1…`, 20-byte `bc1q…`) | `archive_keys.bin` | **33.9 GB** |
 | Exposure, any address kind | the whole archive | **86.9 GB** |
 | …plus dated history, fees, co-spends | the index and its derivatives | +439 GB |
+| Which locks were first spent in a height window | `<firstspend>` (from the derivatives) | +37 GB |
 
 The largest artifact, `<graph>` at ~301 GB, answers none of the questions above:
 it is the material the index is built from, read only by `blockstats` and by a

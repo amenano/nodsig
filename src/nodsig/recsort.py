@@ -161,3 +161,29 @@ class SortedFile:
 
     def find(self, key):
         return list(self.scan(key))
+
+    def scan_range(self, lo_key, hi_key):
+        """Yield every record whose key is in [lo_key, hi_key), in file
+        order: the half-open range read a contiguous artifact wants (a
+        window of heights turned into a window of ordinals). Same entry
+        rule as `scan` (rightmost sample strictly below `lo_key`), then a
+        forward walk that skips below `lo_key` and stops at `hi_key`."""
+        if len(lo_key) != self.key_len or len(hi_key) != self.key_len:
+            raise ValueError(f"keys must be {self.key_len} bytes")
+        i = bisect_blob(self.blob, self.key_len, lo_key, strict=True)
+        start = max(i, 0) * self.every
+        while start < self.records:
+            count = min(self.every, self.records - start)
+            data = os.pread(self._fdesc(), count * self.rec,
+                            start * self.rec)
+            if len(data) != count * self.rec:
+                raise self.error(f"{self.path}: short read — "
+                                 "truncated file")
+            for off in range(0, count * self.rec, self.rec):
+                key = data[off:off + self.key_len]
+                if key < lo_key:
+                    continue
+                if key >= hi_key:
+                    return
+                yield data[off:off + self.rec]
+            start += count
