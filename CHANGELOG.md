@@ -21,6 +21,43 @@ contract, the **CLI** is convenience, and `reveal-archive-v2` inside a tool
 numbered 1.3.0 is not a discrepancy. Artifacts are identified by their
 fingerprint, never by a tag.
 
+## 1.5.0 — a fifth artifact: when each lock was first spent
+
+### Command line
+
+- **`nodsig firstspend`**, a new artifact and command group: the first
+  spend of every lock, ordered by that moment. The derivatives answer
+  "when was this lock first spent" one lock at a time; nothing enumerated
+  "which locks were first spent between H1 and H2", because `history.bin`
+  is ordered by lock, not by time. `firstspend build` materialises that
+  order from the sealed derivatives alone (no node, no graph), and
+  `firstspend between --from H1 --to H2` reads a height window as a
+  contiguous scan. Also `stats`, `verify` (a shared audit plus a sampled
+  second road that re-derives each first spend from the parent's history),
+  and `rewind` (follows the derivatives back, dropping rows never
+  rewriting them). Its perimeter is history's: first **spent from**, not
+  first exposed. Optional; ~37 GB at height 957,301 (the 95.2% of locks
+  ever spent from, at 25 bytes each).
+
+### Formats
+
+- **New: `firstspend-v1`.** A 25-byte record, `spender_tx | lock`, sorted
+  by the ordinal. No existing format, tag or fingerprint moves; the six
+  earlier artifacts verify unchanged.
+
+### Documentation
+
+- The scan's bottleneck is now stated as the slower of two walls, the
+  wire to the node or single-core block parsing (~25-30 MB/s, measured),
+  with the crossover: a local node is single-core-bound, not
+  network-bound. The old line named one regime as the rule.
+
+### Do your artifacts still work?
+
+Yes, all of them, with zero rebuild hours. `firstspend` is purely
+additive: a new optional artifact built from derivatives you already
+have. Nothing you hold changes, and no fingerprint moves.
+
 ## 1.4.0 — the manifest learns to say when
 
 ### Command line
