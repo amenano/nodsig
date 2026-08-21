@@ -83,6 +83,15 @@ none of this is worth building.
 - **How did key reuse grow over time?** As a series, block by block, and on
   real calendar dates.
 
+- **What was all that worth, in a currency?** Only if you bring a price
+  series: nothing on the chain holds a price, so the toolkit never fetches
+  one. `nodsig price` converts a publisher's file into one canonical shape,
+  identified by a digest, and derives **one price per block** from it (the
+  header time is the only clock the chain certifies, to within hours). It is
+  the one family of figures here that a stranger cannot reproduce from the
+  chain alone, and it says so beside every number: see
+  [`docs/external-inputs.md`](docs/external-inputs.md).
+
 Answering one address is a small enough job that it deserves its own page:
 [`docs/exposure-check.md`](docs/exposure-check.md) walks the exposure question
 end to end, including how little you actually have to keep on disk and how to
@@ -553,6 +562,7 @@ One entry point, one verb per artifact:
 | `nodsig index` | build and query the outpoint index |
 | `nodsig derived` | build and query history, fees and co-spends |
 | `nodsig blockstats` | per-block statistics derived from a graph |
+| `nodsig price` | an external price series, and one price per block from it (requires a price series) |
 | `nodsig curve` | read the reuse curve: deltas over time, real block dates |
 | `nodsig check` | check addresses against every backend you have plugged in |
 | `nodsig report` | one page: what your artifacts are, what they cost, what built them |

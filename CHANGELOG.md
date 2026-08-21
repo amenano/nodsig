@@ -34,15 +34,37 @@ fingerprint, never by a tag.
   an error exit.
 - `Index.outputs_of_tx(tx_ord)`: a transaction's outputs in vout order,
   the reader the coinbase of a height needed.
+- **`nodsig price`**, a new command group for the one thing the chain
+  does not hold: a price. `price import` converts a publisher's CSV or
+  JSON (a `--preset` for the CoinMetrics community file, or any field
+  mapping) into a canonical series identified by a digest; `price build`
+  derives **one price per block** from a sealed index's header times and
+  the series in order; `price at`, `price daily` (the per-day
+  aggregation, each row with its kind: measured, carried, none),
+  `price stats`, `price verify` (with the parents, the table is
+  recomputed byte for byte) and `price series-verify`. The toolkit
+  fetches nothing: you bring the file, under the publisher's terms.
+- **`derived supply --price <blockprice>`**: the fees of each epoch in
+  the series' currency, computed block by block (fee times the price of
+  the block) and never through a day price; blocks without a price are
+  counted apart, and the digests the figures rest on are printed under
+  the table.
 
 ### Formats
 
-- None moved. No artifact needs rebuilding.
+- Two new formats, both **external inputs and not artifacts**:
+  `price-series-v1` and `blockprice-v1`. They carry a digest, never a
+  fingerprint, because nobody can rebuild them from the chain; what that
+  means is in `docs/external-inputs.md`. No existing format moved. No
+  artifact needs rebuilding, and no fingerprint changes whether or not a
+  series is present.
 
 ### Cost
 
 - `derived supply` reads `fees.bin` once and one coinbase per block:
   minutes on a local disk, up to an hour on a slow mount.
+- `price build` reads the index's block table and the series: seconds,
+  and 9 bytes per block on disk (about 8 MB at today's height).
 
 ## 1.5.0 — a fifth artifact: when each lock was first spent
 

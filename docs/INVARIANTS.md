@@ -97,6 +97,21 @@ A `build` **refuses** a partial source: derivatives reject an index with
 over holes would be numbers that *look* true. Only complete, sealed artifacts back
 published claims.
 
+## External inputs
+
+A **price is not a function of the chain**, and neither is anything else a
+reader brings from outside (an address book, a publisher's series). Such a file
+enters only as an **external input** with a format of its own, identified by a
+**digest** and never by a fingerprint, and every figure that rests on it says
+so. The guarantee is exactly this: *given the same file, identified by digest,
+the same figures*; a file fetched later may differ where its publisher
+corrected the past, and the toolkit cannot tell whose the difference is because
+it never saw the other file. Consumers print that limit beside the numbers and
+record, in their own metadata, the digest and origin of every series they
+asked. Nothing about an artifact, its fingerprint or its verification changes
+when an external input is present or absent. See
+[external-inputs](external-inputs.md).
+
 ## Non-goals (deliberate — not gaps)
 
 - **Consensus validation.** The node is trusted **once**, at scan time, with byte

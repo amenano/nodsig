@@ -1492,22 +1492,47 @@ def _fees_by_height(derived, index):
 
 
 def run_supply(derived_dir, index_dir, epoch_blocks=SUBSIDY_HALVING,
-               csv_path=None, out=sys.stdout):
+               csv_path=None, price_dir=None, out=None):
     """Check coinbase(h) <= subsidy(h) + fees(h) on every height and
     print the issuance series per epoch. A violation is an error exit:
     it would mean the index or the derivatives disagree with consensus,
-    and no total below could be trusted."""
+    and no total below could be trusted.
+
+    `price_dir`, a blockprice table built on THIS index, adds the fees
+    in its currency: computed block by block (fee(h) times price(h)),
+    summed per epoch, with the blocks that had no price counted apart.
+    It is the one figure here that rests on an external input, and the
+    output says so; see docs/external-inputs.md."""
+    from decimal import Decimal
+    out = out or sys.stdout
     derived, index = _open_pair(derived_dir, index_dir)
+    prices = None
+    if price_dir is not None:
+        from nodsig import blockprice as bpm
+        try:
+            table = bpm.BlockPrice(price_dir)
+        except bpm.BlockPriceError as e:
+            raise OutpointError(f"price table: {e}")
+        if table.meta["parents"]["index"]["fingerprint"] \
+                != index.manifest["fingerprint"]:
+            raise OutpointError("the price table was built on another "
+                                "index (parent fingerprint differs)")
+        prices = list(table.rows())
+        cur = table.currency
+        col = cur.lower()
     csv = open(csv_path, "w") if csv_path else None
     try:
         heights = len(index.first_tx)
         tot = {"blocks": 0, "tx": 0, "fees": 0, "coinbase": 0,
-               "subsidy": 0, "unclaimed": 0, "short": 0}
+               "subsidy": 0, "unclaimed": 0, "short": 0,
+               "fees_fiat": Decimal(0), "priced": 0, "fees_unpriced": 0}
         buckets = {}
         violations = []
         if csv:
             csv.write("height,time,n_tx,coinbase_sats,fees_sats,"
-                      "subsidy_sats\n")
+                      "subsidy_sats"
+                      + (f",price_{col},fees_{col}" if prices else "")
+                      + "\n")
         fees = _fees_by_height(derived, index)
         for i in range(heights):
             h = i + 1
@@ -1530,16 +1555,31 @@ def run_supply(derived_dir, index_dir, epoch_blocks=SUBSIDY_HALVING,
             tot["subsidy"] += subsidy
             b = buckets.setdefault(h // epoch_blocks, {
                 "blocks": 0, "tx": 0, "fees": 0, "coinbase": 0,
-                "subsidy": 0, "unclaimed": 0})
+                "subsidy": 0, "unclaimed": 0, "fees_fiat": Decimal(0),
+                "priced": 0, "fees_unpriced": 0})
             b["blocks"] += 1
             b["tx"] += next_tx - first_tx
             b["fees"] += fee
             b["coinbase"] += coinbase
             b["subsidy"] += subsidy
             b["unclaimed"] += max(allowed - coinbase, 0)
+            fiat_cols = ""
+            if prices:
+                price = prices[i][0] if i < len(prices) else None
+                if price is None:
+                    b["fees_unpriced"] += fee
+                    tot["fees_unpriced"] += fee
+                    fiat_cols = ",,"
+                else:
+                    fee_fiat = Decimal(fee) * price / SAT
+                    b["fees_fiat"] += fee_fiat
+                    b["priced"] += 1
+                    tot["fees_fiat"] += fee_fiat
+                    tot["priced"] += 1
+                    fiat_cols = f",{price:f},{fee_fiat:.6f}"
             if csv:
                 csv.write(f"{h},{index.times[i]},{next_tx - first_tx},"
-                          f"{coinbase},{fee},{subsidy}\n")
+                          f"{coinbase},{fee},{subsidy}{fiat_cols}\n")
 
         print(f"supply identity over heights 1..{heights:,} "
               f"(genesis is not in the index: its 50 BTC are outside "
@@ -1559,12 +1599,19 @@ def run_supply(derived_dir, index_dir, epoch_blocks=SUBSIDY_HALVING,
         else:
             print("  ok  coinbase <= subsidy + fees on every block",
                   file=out)
+        if prices:
+            print(f"  fees       {tot['fees_fiat']:>20,.2f} {cur} over "
+                  f"{tot['priced']:,} priced block(s), block by block; "
+                  f"{tot['blocks'] - tot['priced']:,} block(s) had no "
+                  f"price ({tot['fees_unpriced'] / SAT:,.8f} BTC of fees "
+                  "not converted)", file=out)
         label = ("halving epoch" if epoch_blocks == SUBSIDY_HALVING
                  else f"{epoch_blocks:,}-block bucket")
         print(f"\nper {label}:", file=out)
         print(f"  {'heights':>19}  {'blocks':>9}  {'tx':>13}  "
               f"{'fees BTC':>16}  {'coinbase BTC':>16}  "
-              f"{'subsidy BTC':>16}  {'unclaimed BTC':>14}  fees/coinbase",
+              f"{'subsidy BTC':>16}  {'unclaimed BTC':>14}  fees/coinbase"
+              + (f"  {'fees ' + cur:>18}  {'priced':>9}" if prices else ""),
               file=out)
         for k in sorted(buckets):
             b = buckets[k]
@@ -1574,7 +1621,16 @@ def run_supply(derived_dir, index_dir, epoch_blocks=SUBSIDY_HALVING,
             print(f"  {lo:>9,}–{hi:<9,}  {b['blocks']:>9,}  {b['tx']:>13,}  "
                   f"{b['fees'] / SAT:>16,.2f}  {b['coinbase'] / SAT:>16,.2f}  "
                   f"{b['subsidy'] / SAT:>16,.2f}  "
-                  f"{b['unclaimed'] / SAT:>14,.8f}  {share:.4f}", file=out)
+                  f"{b['unclaimed'] / SAT:>14,.8f}  {share:.4f}"
+                  + (f"  {b['fees_fiat']:>18,.2f}  {b['priced']:>9,}"
+                     if prices else ""), file=out)
+        if prices:
+            print(f"\n{cur} figures rest on an external input: blockprice "
+                  f"digest {table.meta['digest']}, series "
+                  + ", ".join(f"{s['publisher']} {s['digest'][:16]}..."
+                              for s in table.meta["parents"]["series"])
+                  + ". A series fetched later may differ where its "
+                  "publisher corrected the past.", file=out)
         if csv:
             print(f"\nper-block series written to {csv_path}", file=out)
         if violations:
@@ -1660,6 +1716,10 @@ def main(argv=None):
     psu.add_argument("--csv", metavar="PATH",
                      help="also write the per-block series: height, "
                           "time, n_tx, coinbase, fees, subsidy")
+    psu.add_argument("--price", metavar="DIR",
+                     help="a blockprice table built on this index: adds "
+                          "the fees in its currency, block by block "
+                          "(requires a price series; an external input)")
 
     args = p.parse_args(argv)
     try:
@@ -1682,7 +1742,7 @@ def main(argv=None):
             if args.epoch < 1:
                 p.error("--epoch must be at least 1 block")
             run_supply(args.derived, args.index, epoch_blocks=args.epoch,
-                       csv_path=args.csv)
+                       csv_path=args.csv, price_dir=args.price)
         else:
             run_cospends(args.derived, args.index, args.target)
     except OutpointError as e:

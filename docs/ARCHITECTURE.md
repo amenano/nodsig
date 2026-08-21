@@ -74,12 +74,16 @@ the contract.
 record layout + ordering rule + canonical fingerprint + ancestry (every
 manifest names its parent).
 
-Two documents in that directory are **not artifacts** and say so in their first
-line: [`AddressBook-v2`](formats/AddressBook-v2.md), the input of `check`, and
-[`CheckReport-v2`](formats/CheckReport-v2.md), its complete output. Nobody
-seals them and no nodsig command reads them back; they sit there because that
-directory is *the formats we promise stability on*, which is what a third-party
-tool needs.
+Four documents in that directory are **not artifacts** and say so in their
+first line: [`AddressBook-v2`](formats/AddressBook-v2.md), the input of
+`check`; [`CheckReport-v2`](formats/CheckReport-v2.md), its complete output;
+[`PriceSeries-v1`](formats/PriceSeries-v1.md), a publisher's price series in
+one canonical shape; and [`BlockPrice-v1`](formats/BlockPrice-v1.md), one
+price per block derived from it and from the index. None is a function of the
+chain, so each carries a **digest** and never a fingerprint
+([external-inputs](external-inputs.md)). They sit there because that directory
+is *the formats we promise stability on*, which is what a third-party tool
+needs.
 
 ### L1 — capability contracts (one question = one contract)
 
@@ -100,6 +104,8 @@ and only *readers* speak the `Result<T>` envelope.
 - [`LinkageBackend`](contracts/LinkageBackend.md) — which of the addresses you gave can an outsider already tie together, in three classes that are three different claims.
 
 **Builders** — write sealed, appendable, fingerprinted artifacts; not readers: [`Artifact`](contracts/Artifact.md) (build / verify / stats) — the shared lifecycle of graph / index / derivatives / archive / nonce census — one fingerprint, one audit, one append-and-fuse store; a new derivative is a thin application of it.
+
+**External inputs**: not a question about the chain, so no `Result<T>` and no `Source`; a digest and an origin instead. [`PriceSource`](contracts/PriceSource.md): the price valid at a time, from a series the reader brought, under one reading rule; the only door a price enters through.
 
 **Live seams** — real-time, non-reproducible; extension points: [`LiveSource`](contracts/LiveSource.md), [`Matcher`](contracts/Matcher.md).
 

@@ -66,6 +66,7 @@ NO_CLI = {
     "genstore.py",         # the append-and-fuse store
     "hashing.py",
     "linkage.py",
+    "priceseries.py",   # reads and writes a format, not a command line
     "recio.py",
     "recsort.py",
 }

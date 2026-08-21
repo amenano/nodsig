@@ -257,10 +257,49 @@ mount. It confronts three things nothing else confronts: the coinbase values
 the index holds, the fees the derivatives hold, and the subsidy schedule. A
 coinbase above its allowance is an error exit; one below it is counted as
 unclaimed and reported. `--csv` writes the per-block series (height, time,
-transactions, coinbase, fees, subsidy) for whatever comes next.
+transactions, coinbase, fees, subsidy) for whatever comes next. With
+`--price <blockprice>` (section 6b; requires a price series) it adds the fees
+in the series' currency, computed block by block and summed per epoch, with
+the blocks that had no price counted apart and the digests it rests on
+printed under the table.
 
 Everything above is a local lookup except `nonces address`, which fetches the
 few blocks the index names, by height, from your own node.
+
+## 6b. A price per block (optional, requires a price series)
+
+Nothing above needs a price, and nothing on the chain holds one. If you
+want fiat figures, you bring a series a publisher made available, convert
+it into the one shape every consumer here reads, and derive one price per
+block from it. The series is an **external input**, identified by a
+digest and never by a fingerprint; what that means for what you can and
+cannot reproduce is in [`external-inputs.md`](external-inputs.md).
+
+```sh
+nodsig price import --from btc.csv --out <series> --preset coinmetrics \
+                    --fetched-at 2026-08-21            # any CSV/JSON: see -h
+nodsig price series-verify --series <series>
+nodsig price build  --index <index> --out <blockprice> --series <series>
+nodsig price verify --blockprice <blockprice> --index <index> --series <series>
+nodsig price at     --blockprice <blockprice> 840000
+nodsig price daily  --blockprice <blockprice> --index <index> [--csv daily.csv]
+```
+
+`derived supply --price <blockprice>` is the first consumer: the fees of
+each epoch in the series' currency, block by block.
+
+`price build` reads the index's block table and the series, and takes
+seconds; `--series` repeats, finest first, and the table records which
+one answered at each height. It is rebuilt whole, and a rebuild compares
+itself with the file it replaces: a publisher that corrected its past
+shows up as a count of changed heights in `blockprice.json`, never as a
+silent change. `price daily` is an aggregation of the block prices, one
+weight per block, each row carrying its kind (`measured`, `carried`,
+`none`); it is not an exchange close and does not try to be.
+
+The toolkit fetches nothing: the node is its only network peer. You
+obtain the publisher's file under its terms, and the digest then names
+exactly what you used.
 
 ## The second road (optional, and a full extra pass)
 
@@ -427,12 +466,19 @@ they read, time or explain something you already have.
 | `derived history` | a lock's events in order, each with height and date | 6 |
 | `derived fee` | what a transaction paid | 6 |
 | `derived cospends` | what was spent together with an outpoint | 6 |
-| `derived supply` | coinbase <= subsidy + fees checked on every block; fees, subsidy and coinbase per epoch | 6 |
+| `derived supply` | coinbase <= subsidy + fees checked on every block; fees, subsidy and coinbase per epoch; `--price` adds them in a currency | 6 |
 | `firstspend build` | when each lock was first spent from, ordered by time | 4 |
 | `firstspend rewind` | back to a height already covered | rewind |
 | `firstspend verify` | re-read it against its manifest, and confirm its parent | 5 |
 | `firstspend stats` | coverage, row count and fingerprint, instant | - |
 | `firstspend between` | which locks were first spent in a height window | 6 |
+| `price import` | a publisher's CSV or JSON into a sealed price series (**external input**) | 6b |
+| `price series-verify` | a series against its `series.json` | 6b |
+| `price build` | one price per block, from the index's header times and the series in order | 6b |
+| `price verify` | the table against its metadata; with the parents, recomputed byte for byte | 6b |
+| `price stats` | rule, parents, what the last rebuild changed, instant | - |
+| `price at` | the price of one block, and which series gave it | 6b |
+| `price daily` | the per-day aggregation, dense, each value with its kind | 6b |
 | `blockstats build` | per-block series out of the graph | 4 |
 | `blockstats summary` | the same series read per epoch | 6 |
 | `curve deltas` | how reuse grew, interval by interval | 6 |

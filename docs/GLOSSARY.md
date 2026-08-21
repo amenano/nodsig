@@ -114,6 +114,30 @@ same name; a reader holding both artifacts confirms the link, and `verify` says
 so when it could not. Same chain + same height ⇒ the same bytes and the same
 fingerprint on anyone's machine.
 
+### external input (price series, block price)
+A file with a format this project promises stability on that **nobody can
+rebuild from the chain**: the address book (`check`'s input), the check report
+(its output), and a **price series** (`price-series-v1`), a publisher's file in
+one canonical shape. The **block price** table (`blockprice-v1`) is derived
+from the index and from series, so it is an external input too. They carry a
+**digest**, never a fingerprint: see the next entry and
+[external-inputs](external-inputs.md).
+
+### digest vs fingerprint
+A **fingerprint** names an artifact: the same chain at the same height gives the
+same bytes and the same fingerprint on anyone's machine, and `verify` recomputes
+it. A **digest** is the sha256 of a file that only its holder can produce: two
+matching digests mean "the same file", two different ones mean "different
+files", and nothing here can say why. Fiat figures rest on digests, and say so.
+
+### price of the block
+The one price the chain can honestly carry: the last observation of a series at
+or before the **header time** of the block, shared by every transaction in it.
+The header time is miner-declared and held by consensus only to within hours,
+so the precision is hours and a transaction has no finer instant. `price daily`
+averages the block prices of a UTC day, one weight per block; it is **not** an
+exchange close.
+
 ### canonical fingerprint
 A deterministic digest of an artifact's content, defined by its format. It is how
 **two strangers compare a string** instead of trusting each other. Sidecar caches

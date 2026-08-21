@@ -51,6 +51,8 @@ PUBLIC_SURFACE = {
                 "cospends", "supply"),
     "firstspend": ("build", "stats", "verify", "between", "rewind"),
     "blockstats": ("build", "summary"),
+    "price": ("import", "series-verify", "build", "stats", "verify", "at",
+              "daily"),
     "curve": ("deltas", "dates"),
     "check": None,
     "report": None,

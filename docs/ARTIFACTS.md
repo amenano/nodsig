@@ -25,6 +25,8 @@ placeholders: every one of them is a path you choose on the command line.
 | outpoint derivatives | `outpoint-derived-v3` | `outpoint-derived-v2` |
 | first-spend table | `firstspend-v1` | — |
 | block stats | `block-stats-v2` | — |
+| price series (external input) | `price-series-v1` | — |
+| block price (external input, derived) | `blockprice-v1` | — |
 | address book (input) | `address-book-v2` | — |
 | check report (output) | `check-report-v2` | — |
 
@@ -110,6 +112,7 @@ Not all of it. Pick by the question you came for.
 | to repeat the scan's checks later, or to put real dates on a curve | `archive scan --headers` → `headers fingerprint` |
 | whether a signing key ever gave itself away by repeating a nonce | `archive scan --nonces` → `nonces merge` → `nonces groups` |
 | the same, for one of your addresses | `index build` → `derived build`, then `nonces address` (needs a node) |
+| fiat figures, one price per block | `index build`, then a publisher's series you fetched → `price import` → `price build` (an external input, not an artifact: [external-inputs](external-inputs.md)) |
 
 ### The second road, and why it is not in the list
 
