@@ -257,7 +257,14 @@ mount. It confronts three things nothing else confronts: the coinbase values
 the index holds, the fees the derivatives hold, and the subsidy schedule. A
 coinbase above its allowance is an error exit; one below it is counted as
 unclaimed and reported. `--csv` writes the per-block series (height, time,
-transactions, coinbase, fees, subsidy) for whatever comes next. With
+transactions, coinbase, fees, subsidy, outputs, and the coinbase's outputs,
+first spender and value spent) for whatever comes next. The rule for a
+column there: what the index's block table and the block's one coinbase
+transaction give with positional reads, plus the fee; never a scan of the
+block's transactions, which is `blockstats`' job. Transactions and outputs
+per block are therefore printed by both commands from two different
+artifacts, and must agree. The coinbase's first spender is the first spend
+of an *output*; FirstSpend records the first spend of a *lock*. With
 `--price <blockprice>` (section 6b; requires a price series) it adds the fees
 in the series' currency, computed block by block and summed per epoch, with
 the blocks that had no price counted apart and the digests it rests on

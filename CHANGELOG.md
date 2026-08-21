@@ -23,6 +23,17 @@ fingerprint, never by a tag.
 
 ## Unreleased
 
+### Command line
+
+- `derived supply --csv` gains four columns, appended after `subsidy_sats`
+  and before the price columns: `n_out`, `cb_n_out`, `cb_first_spend_ord`
+  (the lowest ordinal among the transactions that spent an output of the
+  coinbase; 0 when none has) and `cb_spent_sats`. All four are positional
+  reads off the index, one coinbase per block; the rule that decides what
+  belongs in that CSV is now written in the command's docstring. Readers
+  of the price columns by position must move two columns to the right;
+  readers by header are unaffected.
+
 ### Documentation
 
 - `docs/gallery.md` gains a section on the price layer, read from the v3

@@ -1502,7 +1502,25 @@ def run_supply(derived_dir, index_dir, epoch_blocks=SUBSIDY_HALVING,
     in its currency: computed block by block (fee(h) times price(h)),
     summed per epoch, with the blocks that had no price counted apart.
     It is the one figure here that rests on an external input, and the
-    output says so; see docs/external-inputs.md."""
+    output says so; see docs/external-inputs.md.
+
+    THE RULE FOR A COLUMN OF THE CSV. A column is in `--csv` when the
+    index's block table and the block's ONE coinbase transaction give
+    it with positional reads, plus the fee from the derivatives: never
+    a scan of the block's transactions or outputs. So n_tx and n_out
+    (differences of two block records), the coinbase's outputs, value,
+    first spender and value spent (one transaction, one slot per
+    output) are in; the number of inputs, the value moved, sizes and
+    signatures are not, and belong to `blockstats`, which reads the
+    graph in one pass. n_tx and n_out are therefore reported by both
+    commands, from two different artifacts, and are expected to agree:
+    a disagreement means one of the two artifacts is broken.
+
+    `cb_first_spend_ord` is the lowest ordinal among the transactions
+    that spent an output of the coinbase, 0 when none has (a coinbase
+    cannot be a spender, so 0 is free). It is the first spend of an
+    OUTPUT; FirstSpend-v1 records the first spend of a LOCK, which is
+    a different question under the same words."""
     from decimal import Decimal
     out = out or sys.stdout
     derived, index = _open_pair(derived_dir, index_dir)
@@ -1530,7 +1548,8 @@ def run_supply(derived_dir, index_dir, epoch_blocks=SUBSIDY_HALVING,
         violations = []
         if csv:
             csv.write("height,time,n_tx,coinbase_sats,fees_sats,"
-                      "subsidy_sats"
+                      "subsidy_sats,n_out,cb_n_out,cb_first_spend_ord,"
+                      "cb_spent_sats"
                       + (f",price_{col},fees_{col}" if prices else "")
                       + "\n")
         fees = _fees_by_height(derived, index)
@@ -1539,8 +1558,22 @@ def run_supply(derived_dir, index_dir, epoch_blocks=SUBSIDY_HALVING,
             first_tx = index.first_tx[i]
             next_tx = index.first_tx[i + 1] if i + 1 < heights \
                 else index.n_tx
-            coinbase = sum(v for v, _ in index.outputs_of_tx(first_tx))
+            cb_outputs = index.outputs_of_tx(first_tx)
+            coinbase = sum(v for v, _ in cb_outputs)
             fee = next(fees)
+            if csv:
+                first_out = index.first_out[i]
+                next_out = index.first_out[i + 1] if i + 1 < heights \
+                    else index.n_out
+                cb_first_spend = 0
+                cb_spent = 0
+                for k, (v, _lock) in enumerate(cb_outputs):
+                    spenders = index.spenders(first_out + k)
+                    if spenders:
+                        cb_spent += v
+                        lowest = min(spenders)
+                        if cb_first_spend == 0 or lowest < cb_first_spend:
+                            cb_first_spend = lowest
             subsidy = subsidy_at(h)
             allowed = subsidy + fee
             if coinbase > allowed:
@@ -1579,7 +1612,9 @@ def run_supply(derived_dir, index_dir, epoch_blocks=SUBSIDY_HALVING,
                     fiat_cols = f",{price:f},{fee_fiat:.6f}"
             if csv:
                 csv.write(f"{h},{index.times[i]},{next_tx - first_tx},"
-                          f"{coinbase},{fee},{subsidy}{fiat_cols}\n")
+                          f"{coinbase},{fee},{subsidy},"
+                          f"{next_out - first_out},{len(cb_outputs)},"
+                          f"{cb_first_spend},{cb_spent}{fiat_cols}\n")
 
         print(f"supply identity over heights 1..{heights:,} "
               f"(genesis is not in the index: its 50 BTC are outside "
@@ -1715,7 +1750,9 @@ def main(argv=None):
                           "epoch, 210,000)")
     psu.add_argument("--csv", metavar="PATH",
                      help="also write the per-block series: height, "
-                          "time, n_tx, coinbase, fees, subsidy")
+                          "time, n_tx, coinbase, fees, subsidy, n_out, "
+                          "and the coinbase's outputs, first spender "
+                          "and value spent")
     psu.add_argument("--price", metavar="DIR",
                      help="a blockprice table built on this index: adds "
                           "the fees in its currency, block by block "

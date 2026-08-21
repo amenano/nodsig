@@ -849,7 +849,8 @@ def test_supply(dbuilt):
           "five coinbases of 50 BTC")
     rows = open(csv_path).read().splitlines()
     check(rows[0] == "height,time,n_tx,coinbase_sats,fees_sats,"
-          "subsidy_sats", "csv header")
+          "subsidy_sats,n_out,cb_n_out,cb_first_spend_ord,cb_spent_sats",
+          "csv header")
     check(len(rows) == 6, "one row per height")
     cols = [r.split(",") for r in rows[1:]]
     check([c[0] for c in cols] == ["1", "2", "3", "4", "5"], "heights")
@@ -858,6 +859,24 @@ def test_supply(dbuilt):
     check(sum(int(c[4]) for c in cols) == fees_total
           and sum(int(c[2]) for c in cols) == len(FEES),
           "the per-block fees and tx counts re-add to the model")
+    # The coinbase columns against the model: only cbB's output (out 1)
+    # is ever spent, by t1 (tx 2); every other coinbase is untouched.
+    check([int(c[6]) for c in cols] == [1, 3, 2, 2, 2], "n_out per block")
+    check(all(int(c[7]) == 1 for c in cols), "one output per coinbase")
+    check([int(c[8]) for c in cols] == [0, 2, 0, 0, 0],
+          "first spend of the coinbase: only height 2, by tx 2")
+    check([int(c[9]) for c in cols] == [0, S, 0, 0, 0],
+          "value of the coinbase spent: only height 2")
+    # n_tx and n_out are the two roads: blockstats counts them off the
+    # graph, supply subtracts them off the index, and they must agree.
+    from nodsig import block_stats as bs
+    stats = os.path.join(tmp, "block-stats.csv")
+    bs.run_build(_graph, stats)
+    by_graph = [(r[2], r[4]) for r in bs.read_series(stats)]
+    by_index = [(int(c[2]), int(c[6])) for c in cols]
+    check(by_graph == by_index,
+          f"blockstats and supply disagree on n_tx/n_out: "
+          f"{by_graph} vs {by_index}")
     check(dv.subsidy_at(1) == 50 * dv.SAT
           and dv.subsidy_at(209_999) == 50 * dv.SAT
           and dv.subsidy_at(210_000) == 25 * dv.SAT
