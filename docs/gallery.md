@@ -16,7 +16,7 @@ nothing here contacted a node: these are lookups in files.
 
 The output is text and CSV. The figures further down are what a plotting
 script makes of those CSVs; nodsig does not draw, it counts. The two on the
-nonce census come with the script that drew them.
+nonce census and the two on prices come with the script that drew them.
 
 ## An outpoint, from creation to spend
 
@@ -273,6 +273,108 @@ reads those two CSVs and writes the SVG with nothing but python3. No number in
 either figure is typed in: they are the artifacts' own output, which is the
 only footing on which a picture belongs in a repository that asks to be
 checked rather than believed.
+
+## What it was worth, block by block (requires a price series)
+
+Nothing on the chain holds a price, so nothing above needed one. This
+section is the exception, and it is built differently from the rest of the
+page in two ways that are worth stating before the numbers.
+
+First, the **artifacts**: these were read from the **v3 index and
+derivatives at height 957,301**, not from the v2 set the transcripts above
+were shot on. Same chain, same height, different formats; the fees and
+coinbase values are the same facts either way.
+
+Second, the **external inputs**. Two price series were fetched on
+2026-08-21, imported with `price import`, and combined by `price build`,
+hourly first and daily to fill the years before it:
+
+- **Bitstamp**, hourly OHLC (the candle's close), public API, *non-commercial
+  use*, digest `938d0b100866c3d79238fe87f7ac35359d84f9c3a1e78a5f78ddcad881a211a8`;
+- **CoinMetrics community data**, daily `PriceUSD`, licensed *CC BY-NC 4.0*,
+  digest `fc97f61f72694fe6a5fc8554ebb230147d01a48a41a72563a69c7afb0f6d7a3c`;
+- the block price table built from them, digest
+  `102029b44ea8e002c03d07277f8f793d70b02a11a43dc520804b5cdd0f80e10e`.
+
+These are **digests, not fingerprints**: they name a file, and nobody can
+rebuild that file from the chain. They are quoted here for the one reason a
+digest is worth quoting: so that a reader who fetches the same series can
+tell in one line whether they are holding the same input. The figures and
+the USD columns below are derived from those publishers' data and are
+published under **their** terms, not under this repository's license; a
+series fetched later may differ where its publisher corrected the past, and
+nothing here can say whose the difference is. The rule and its limit are in
+[`external-inputs.md`](external-inputs.md).
+
+```console
+$ nodsig derived supply --derived <derived> --index <index> --price <blockprice>
+
+supply identity over heights 1..957,301 (genesis is not in the index: its 50 BTC are outside every total here)
+  coinbase    20,354,467.43715143 BTC
+  subsidy     20,054,018.75000000 BTC
+  fees           300,477.64560047 BTC
+  unclaimed           28.95844904 BTC in 1,124 block(s) that claimed less than subsidy + fees
+  ok  coinbase <= subsidy + fees on every block
+  fees           4,423,826,946.87 USD over 888,522 priced block(s), block by block; 68,779 block(s) had no price (16.53000000 BTC of fees not converted)
+
+per halving epoch:
+              heights     blocks             tx          fees BTC      coinbase BTC       subsidy BTC   unclaimed BTC  fees/coinbase            fees USD     priced
+          1–209,999      209,999      9,344,204          8,918.06     10,508,858.01     10,499,950.00     10.05648817  0.0008           81,675.10    141,220
+    210,000–419,999      210,000    132,046,965         38,448.49      5,288,448.34      5,250,000.00      0.14820867  0.0073       11,448,207.35    210,000
+    420,000–629,999      210,000    387,700,343        163,370.98      2,788,352.23      2,625,000.00     18.75033220  0.0586    1,028,884,642.10    210,000
+    630,000–839,999      210,000    461,937,631         79,511.40      1,392,011.40      1,312,500.00      0.00000000  0.0571    2,628,276,915.29    210,000
+    840,000–1,049,999    117,302    402,469,330         10,228.71        376,797.46        366,568.75      0.00342000  0.0271      755,135,507.02    117,302
+
+USD figures rest on an external input: blockprice digest 102029b44ea8e002c03d07277f8f793d70b02a11a43dc520804b5cdd0f80e10e, series bitstamp-ohlc 938d0b100866c3d7..., coinmetrics-community fc97f61f72694fe6.... A series fetched later may differ where its publisher corrected the past.
+```
+
+The left of that table is the issuance identity, checked on every block
+and needing no price. The two columns on the right are what a price adds:
+the same fees, converted **block by block** (each block's fee at that
+block's price) and summed. The epoch that paid the most coins in fees is
+the third; the epoch that paid the most money is the fourth, with half the
+coins. The first epoch is mostly unpriced: the earliest series starts in
+July 2010, at height 68,780, and the 68,779 blocks before it are counted
+apart rather than priced at anything.
+
+![Dots on a log scale, one per difficulty period, rising from a few cents
+at height 68,780 to around one hundred thousand USD near the tip; the era
+before is shaded as having no price, the halvings are dashed verticals,
+and the first year of dots is a different hue because a daily series
+answered there](figures/price-by-height.svg)
+
+*From `derived supply --price --csv` and the block price table. The x-axis
+is the **height**, not the date: the chain's clock is the height, and the
+header time is only how a price was attached to each block, to within
+hours. The halvings are drawn because they are heights. The hue says which
+series answered, which is a fact about the input and not about the chain.*
+
+![Two panels of five bars each, one per halving epoch: fees in BTC peak in
+the third epoch, fees in USD peak in the fourth](figures/fees-by-epoch.svg)
+
+*The same fees in two units. Nothing is typed in: the USD bars are the
+per-epoch sums of the `fees_usd` column the command writes.*
+
+Both were drawn by [`tools/plot_price.py`](../tools/plot_price.py), which
+also prints the one measurement behind the second figure: what each
+epoch's total would be if its fees were multiplied by the epoch's **mean**
+price instead of being priced block by block.
+
+```console
+  epoch      priced/blocks        fees BTC    block by block     by mean price  difference
+      0   141,220/209,999         8,918.06            81,675            47,376     -41.99%
+      1   210,000/210,000        38,448.49        11,448,207        13,162,372     +14.97%
+      2   210,000/210,000       163,370.98     1,028,884,642       944,901,413      -8.16%
+      3   210,000/210,000        79,511.40     2,628,276,915     2,617,315,811      -0.42%
+      4   117,302/117,302        10,228.71       755,135,507       871,929,974     +15.47%
+```
+
+That column is why the table exists. Fees and prices move together inside
+an epoch, so a total taken through an average price is off by an amount
+that depends on *how* they moved: 42% in the first epoch, 15% in the last
+one, under half a percent in the third. None of those is an error in the
+series; they are the difference between a number computed where the chain
+puts it and a number computed afterwards.
 
 ## Reproducing any of it
 

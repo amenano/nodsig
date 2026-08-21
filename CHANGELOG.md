@@ -21,6 +21,20 @@ contract, the **CLI** is convenience, and `reveal-archive-v2` inside a tool
 numbered 1.3.0 is not a discrepancy. Artifacts are identified by their
 fingerprint, never by a tag.
 
+## Unreleased
+
+### Documentation
+
+- `docs/gallery.md` gains a section on the price layer, read from the v3
+  artifacts at height 957,301: the `derived supply --price` transcript,
+  the price of a block over the whole chain against height, the fees of
+  each halving epoch in BTC and in USD, and the measurement behind the
+  table (a total taken through an epoch's mean price is off by up to 42%
+  against the block-by-block sum). Drawn by `tools/plot_price.py` from
+  the command's CSV; the series, their licenses and their digests are
+  named beside the figures, which are published under the publishers'
+  terms.
+
 ## 1.6.0 — a price per block, as an external input
 
 ### Command line
