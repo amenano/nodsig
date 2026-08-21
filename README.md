@@ -286,8 +286,10 @@ reader on a local NVMe disk should expect better than this table rather than
 worse.
 
 Which resource bounds which row is the part worth knowing: the scan is bounded
-by the wire to the node, the fusions and the builds by the disk under the
-artifacts, and only the nonce census by CPU. None of those is fixed by the tool.
+by whichever is slower, the wire to the node or parsing a block on a single
+core (~25-30 MB/s on this machine, measured, and it does not thread); the
+fusions and the builds by the disk under the artifacts, and only the nonce
+census by CPU across cores. None of those is fixed by the tool.
 A reader whose node runs on the same machine, with the artifacts on a local
 disk, is looking at two handicaps in this table that they do not have. Once you
 have built anything, `nodsig report` prints what **yours** cost beside what they
@@ -309,12 +311,16 @@ fingerprints from a fresh walk of the chain. What follows is kept for the
 reader who wants to know how a projection was made, and as the record of a
 projection that a run has now replaced.
 
-The **scan** has a second bottleneck of its own, and it is not your CPU either:
-it is the wire to the node. Ours was an Umbrel on a Raspberry Pi reached through
-an SSH tunnel, which is roughly the slowest reasonable setup, over JSON-RPC,
-which is the more expensive of the node's two ways of handing over a block (see
-`--rest` below); a node on the same machine is much faster. Treat the table as
-orders of magnitude, not as a forecast.
+The **scan**'s bottleneck is one of two things, and which one depends on where
+your node is. Ours was an Umbrel on a Raspberry Pi reached through an SSH
+tunnel, which is roughly the slowest reasonable setup, over JSON-RPC, the more
+expensive of the node's two ways of handing over a block (see `--rest` below):
+there the wire was the wall, at a few MB/s. With the node on the same machine
+over `--rest`, fetching several blocks at once climbs past 40 MB/s, and the
+wall becomes the other one: a block is parsed on a single core at ~25-30 MB/s,
+and that does not thread, so more prefetch cannot lift it. Both were measured
+here; treat the table as orders of magnitude, not a forecast, and expect a
+local node to be single-core-bound rather than network-bound.
 
 All of it is resumable, and none of it needs watching: every long command
 writes checkpoints and continues from them when re-run.
