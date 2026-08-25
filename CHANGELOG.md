@@ -21,7 +21,7 @@ contract, the **CLI** is convenience, and `reveal-archive-v2` inside a tool
 numbered 1.3.0 is not a discrepancy. Artifacts are identified by their
 fingerprint, never by a tag.
 
-## Unreleased
+## 1.7.0 — the coinbase's fate, four columns per block
 
 ### Command line
 
@@ -49,8 +49,17 @@ fingerprint, never by a tag.
   USD number stands on one publisher and one stated license. What that
   moved, both ways: per-epoch USD totals shift by at most 1.2% (+0.03%
   over the whole chain), and 6,255 blocks at the tip lose their price
-  because the daily copy ends earlier than the hourly one did — the
+  because the daily copy ends earlier than the hourly one did; the
   first figure now shades the unpriced era at both edges instead of one.
+
+### Do your artifacts still work?
+
+Yes, all of them, with zero rebuild hours. No format moved and no
+fingerprint changes: the four columns are positional reads off the index
+at query time, the CSV is an output rather than an artifact, and the
+figures are documentation. The one thing to check is downstream of you,
+not of the artifacts: a script that reads the supply CSV's price columns
+by position must move two columns to the right.
 
 ## 1.6.0 — a price per block, as an external input
 
