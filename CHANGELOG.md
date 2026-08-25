@@ -42,9 +42,15 @@ fingerprint, never by a tag.
   each halving epoch in BTC and in USD, and the measurement behind the
   table (a total taken through an epoch's mean price is off by up to 42%
   against the block-by-block sum). Drawn by `tools/plot_price.py` from
-  the command's CSV; the series, their licenses and their digests are
-  named beside the figures, which are published under the publishers'
-  terms.
+  the command's CSV; the series, its license and the digests are named
+  beside the figures, which are published under the publisher's terms.
+  The section was first shot on an hourly-plus-daily pair of series and
+  then re-shot on the CoinMetrics community daily series alone, so every
+  USD number stands on one publisher and one stated license. What that
+  moved, both ways: per-epoch USD totals shift by at most 1.2% (+0.03%
+  over the whole chain), and 6,255 blocks at the tip lose their price
+  because the daily copy ends earlier than the hourly one did — the
+  first figure now shades the unpriced era at both edges instead of one.
 
 ## 1.6.0 — a price per block, as an external input
 

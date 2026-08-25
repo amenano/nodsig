@@ -100,8 +100,9 @@ def price_figure(rows, series, meta, currency):
     prices, on a log scale, against HEIGHT. The x-axis is the point:
     the chain's clock is the height, the header time is only how a
     price was attached to it. The halvings are drawn because they are
-    heights, not dates; the era before the first observation is shaded,
-    because no price is invented there; and the hue says which series
+    heights, not dates; the eras before the first observation and after
+    the last are shaded, because no price is invented at either edge; and
+    the hue says which series
     answered, because that is a fact about the input and not the chain."""
     n = len(rows)
     pts = []
@@ -115,6 +116,7 @@ def price_figure(rows, series, meta, currency):
         k = max(set(ks), key=ks.count)
         pts.append((chunk[0][0], float(mean), k))
     first_priced = next(h for h, _f, p, _ in rows if p is not None)
+    last_priced = next(h for h, _f, p, _ in reversed(rows) if p is not None)
 
     left, right, top, base = 64, 744, 60, 350
     width, height = right + 36, base + 86
@@ -144,6 +146,16 @@ def price_figure(rows, series, meta, currency):
              f'height="{base - top}" fill="{RULE}" opacity="0.6"/>\n')
     body += _text(x_of(first_priced) + 6, top + 14,
                   f"no price before height {first_priced:,}", size=10)
+    # ...and the era after the series' last observation, if the table ends
+    # before the chain does: the same exclusion, at the other edge
+    if last_priced < n:
+        body += (f'<rect x="{x_of(last_priced):.1f}" y="{top}" '
+                 f'width="{right - x_of(last_priced):.1f}" '
+                 f'height="{base - top}" fill="{RULE}" opacity="0.6"/>\n')
+        # the label sits low: the late dots crowd the top-right corner
+        body += _text(x_of(last_priced) - 6, base - 10,
+                      f"no price after height {last_priced:,}", size=10,
+                      anchor="end")
     # the halvings
     h = HALVING
     while h < n:
@@ -258,15 +270,24 @@ def fees_figure(per_epoch, currency):
     body += panel(left + panel_w + gap, f"fees, {currency} (priced blocks)",
                   fiat, lambda v: f"{v / 10 ** 6:,.0f} M" if v >= 10 ** 7
                   else f"{v / 10 ** 6:,.2f} M")
+    y = base + 56
     e0 = per_epoch[keys[0]]
-    body += _text(left - 40, base + 56,
-                  f"epoch 0: {e0['blocks'] - e0['priced']:,} of "
+    body += _text(left - 40, y,
+                  f"epoch {keys[0]}: {e0['blocks'] - e0['priced']:,} of "
                   f"{e0['blocks']:,} blocks precede the first observation "
                   "and are not converted", size=10)
-    body += _text(left - 40, base + 72,
+    el = per_epoch[keys[-1]]
+    if el["priced"] < el["blocks"]:
+        y += 16
+        body += _text(left - 40, y,
+                      f"epoch {keys[-1]}: {el['blocks'] - el['priced']:,} of "
+                      f"{el['blocks']:,} blocks follow the last observation "
+                      "and are not converted", size=10)
+    y += 16
+    body += _text(left - 40, y,
                   "external input: price series identified by digest, "
                   "see the caption", size=10)
-    return _svg(width, base + 88, body)
+    return _svg(width, y + 16, body)
 
 
 def main(argv=None):

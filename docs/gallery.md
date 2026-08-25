@@ -285,23 +285,30 @@ derivatives at height 957,301**, not from the v2 set the transcripts above
 were shot on. Same chain, same height, different formats; the fees and
 coinbase values are the same facts either way.
 
-Second, the **external inputs**. Two price series were fetched on
-2026-08-21, imported with `price import`, and combined by `price build`,
-hourly first and daily to fill the years before it:
+Second, the **external input**. One price series was fetched on
+2026-08-21, imported with `price import`, and turned into a block price
+table by `price build`:
 
-- **Bitstamp**, hourly OHLC (the candle's close), public API, *non-commercial
-  use*, digest `938d0b100866c3d79238fe87f7ac35359d84f9c3a1e78a5f78ddcad881a211a8`;
-- **CoinMetrics community data**, daily `PriceUSD`, licensed *CC BY-NC 4.0*,
-  digest `fc97f61f72694fe6a5fc8554ebb230147d01a48a41a72563a69c7afb0f6d7a3c`;
-- the block price table built from them, digest
-  `102029b44ea8e002c03d07277f8f793d70b02a11a43dc520804b5cdd0f80e10e`.
+- **CoinMetrics community data**, daily `PriceUSD`, licensed *CC BY-NC
+  4.0*, fetched 2026-08-21, digest
+  `fc97f61f72694fe6a5fc8554ebb230147d01a48a41a72563a69c7afb0f6d7a3c`;
+- the block price table built from it, digest
+  `11b8a0241deef68827fcce4ca73d57c32c4adaccb8cc4429d96fa1a2f6247589`.
+
+An earlier revision of this page combined an hourly exchange series with
+this one. The figures now rest on the daily series alone, so that every
+USD number below stands on one publisher's data under one stated license;
+what that costs is granularity (a block's price is its UTC day's, never
+finer) and coverage (the blocks after the series' last day are unpriced
+rather than guessed), and both costs are visible in the output rather
+than smoothed over.
 
 These are **digests, not fingerprints**: they name a file, and nobody can
 rebuild that file from the chain. They are quoted here for the one reason a
 digest is worth quoting: so that a reader who fetches the same series can
 tell in one line whether they are holding the same input. The figures and
-the USD columns below are derived from those publishers' data and are
-published under **their** terms, not under this repository's license; a
+the USD columns below are derived from that publisher's data and are
+published under **its** terms, not under this repository's license; a
 series fetched later may differ where its publisher corrected the past, and
 nothing here can say whose the difference is. The rule and its limit are in
 [`external-inputs.md`](external-inputs.md).
@@ -315,17 +322,17 @@ supply identity over heights 1..957,301 (genesis is not in the index: its 50 BTC
   fees           300,477.64560047 BTC
   unclaimed           28.95844904 BTC in 1,124 block(s) that claimed less than subsidy + fees
   ok  coinbase <= subsidy + fees on every block
-  fees           4,423,826,946.87 USD over 888,522 priced block(s), block by block; 68,779 block(s) had no price (16.53000000 BTC of fees not converted)
+  fees           4,425,115,735.65 USD over 882,267 priced block(s), block by block; 75,034 block(s) had no price (161.67056235 BTC of fees not converted)
 
 per halving epoch:
               heights     blocks             tx          fees BTC      coinbase BTC       subsidy BTC   unclaimed BTC  fees/coinbase            fees USD     priced
-          1–209,999      209,999      9,344,204          8,918.06     10,508,858.01     10,499,950.00     10.05648817  0.0008           81,675.10    141,220
-    210,000–419,999      210,000    132,046,965         38,448.49      5,288,448.34      5,250,000.00      0.14820867  0.0073       11,448,207.35    210,000
-    420,000–629,999      210,000    387,700,343        163,370.98      2,788,352.23      2,625,000.00     18.75033220  0.0586    1,028,884,642.10    210,000
-    630,000–839,999      210,000    461,937,631         79,511.40      1,392,011.40      1,312,500.00      0.00000000  0.0571    2,628,276,915.29    210,000
-    840,000–1,049,999    117,302    402,469,330         10,228.71        376,797.46        366,568.75      0.00342000  0.0271      755,135,507.02    117,302
+          1–209,999      209,999      9,344,204          8,918.06     10,508,858.01     10,499,950.00     10.05648817  0.0008           81,714.31    141,220
+    210,000–419,999      210,000    132,046,965         38,448.49      5,288,448.34      5,250,000.00      0.14820867  0.0073       11,485,664.83    210,000
+    420,000–629,999      210,000    387,700,343        163,370.98      2,788,352.23      2,625,000.00     18.75033220  0.0586    1,036,308,705.11    210,000
+    630,000–839,999      210,000    461,937,631         79,511.40      1,392,011.40      1,312,500.00      0.00000000  0.0571    2,630,963,262.18    210,000
+    840,000–1,049,999    117,302    402,469,330         10,228.71        376,797.46        366,568.75      0.00342000  0.0271      746,276,389.22    111,047
 
-USD figures rest on an external input: blockprice digest 102029b44ea8e002c03d07277f8f793d70b02a11a43dc520804b5cdd0f80e10e, series bitstamp-ohlc 938d0b100866c3d7..., coinmetrics-community fc97f61f72694fe6.... A series fetched later may differ where its publisher corrected the past.
+USD figures rest on an external input: blockprice digest 11b8a0241deef68827fcce4ca73d57c32c4adaccb8cc4429d96fa1a2f6247589, series coinmetrics-community fc97f61f72694fe6.... A series fetched later may differ where its publisher corrected the past.
 ```
 
 The left of that table is the issuance identity, checked on every block
@@ -333,21 +340,23 @@ and needing no price. The two columns on the right are what a price adds:
 the same fees, converted **block by block** (each block's fee at that
 block's price) and summed. The epoch that paid the most coins in fees is
 the third; the epoch that paid the most money is the fourth, with half the
-coins. The first epoch is mostly unpriced: the earliest series starts in
-July 2010, at height 68,780, and the 68,779 blocks before it are counted
-apart rather than priced at anything.
+coins. The first epoch is mostly unpriced: the series starts in July
+2010, at height 68,780, and the 68,779 blocks before it are counted apart
+rather than priced at anything. The same exclusion holds at the other
+edge: the series' copy ends on 2026-05-23, and the 6,255 blocks after its
+last answering observation are counted, not converted.
 
 ![Dots on a log scale, one per difficulty period, rising from a few cents
-at height 68,780 to around one hundred thousand USD near the tip; the era
-before is shaded as having no price, the halvings are dashed verticals,
-and the first year of dots is a different hue because a daily series
-answered there](figures/price-by-height.svg)
+at height 68,780 to around one hundred thousand USD; the eras before the
+first observation and after the last are shaded as having no price, and
+the halvings are dashed verticals](figures/price-by-height.svg)
 
 *From `derived supply --price --csv` and the block price table. The x-axis
 is the **height**, not the date: the chain's clock is the height, and the
-header time is only how a price was attached to each block, to within
-hours. The halvings are drawn because they are heights. The hue says which
-series answered, which is a fact about the input and not about the chain.*
+header time is only how a price was attached to each block, to within a
+day. The halvings are drawn because they are heights. The shaded edges are
+exclusions, not zeros: where the series has no observation at or before a
+block's header time, the block has no price.*
 
 ![Two panels of five bars each, one per halving epoch: fees in BTC peak in
 the third epoch, fees in USD peak in the fourth](figures/fees-by-epoch.svg)
@@ -362,16 +371,16 @@ price instead of being priced block by block.
 
 ```console
   epoch      priced/blocks        fees BTC    block by block     by mean price  difference
-      0   141,220/209,999         8,918.06            81,675            47,376     -41.99%
-      1   210,000/210,000        38,448.49        11,448,207        13,162,372     +14.97%
-      2   210,000/210,000       163,370.98     1,028,884,642       944,901,413      -8.16%
-      3   210,000/210,000        79,511.40     2,628,276,915     2,617,315,811      -0.42%
-      4   117,302/117,302        10,228.71       755,135,507       871,929,974     +15.47%
+      0   141,220/209,999         8,918.06            81,714            47,113     -42.34%
+      1   210,000/210,000        38,448.49        11,485,665        13,192,538     +14.86%
+      2   210,000/210,000       163,370.98     1,036,308,705       947,602,306      -8.56%
+      3   210,000/210,000        79,511.40     2,630,963,262     2,620,547,976      -0.40%
+      4   111,047/117,302        10,228.71       746,276,389       871,460,435     +16.77%
 ```
 
 That column is why the table exists. Fees and prices move together inside
 an epoch, so a total taken through an average price is off by an amount
-that depends on *how* they moved: 42% in the first epoch, 15% in the last
+that depends on *how* they moved: 42% in the first epoch, 17% in the last
 one, under half a percent in the third. None of those is an error in the
 series; they are the difference between a number computed where the chain
 puts it and a number computed afterwards.
