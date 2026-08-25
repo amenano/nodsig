@@ -21,6 +21,30 @@ contract, the **CLI** is convenience, and `reveal-archive-v2` inside a tool
 numbered 1.3.0 is not a discrepancy. Artifacts are identified by their
 fingerprint, never by a tag.
 
+## Unreleased
+
+### Command line
+
+- **`report` gains a seat for every artifact the collection has**: three
+  new directory flags — `--witness`, `--firstspend`, `--firstreveal` —
+  beside the six it started with. The page reads every role the same
+  generic way (a sealed manifest, the bytes under the directory) and the
+  ancestry section matches parents by fingerprint, so the whole change
+  is the role list; a firstspend table reported beside its derivatives
+  now shows its link as confirmed.
+
+### Documentation
+
+- A sweep after 1.8.0 seated the two follower tables everywhere the
+  page's own checklists enumerate: the audit list in *Check what you
+  built* (`firstspend verify` had been missing since 1.5.0), the growing
+  sequence (re-running the builds realigns the tables, and a re-run
+  against an unchanged seal costs nothing), the rewind list
+  (`firstspend rewind` was absent; firstreveal is named as following the
+  archive's no-rewind exception), the glossary, the keep-what-you-need
+  table, and a cross-reference from the ExposureLookup contract to the
+  time-ordered restatement of its first-reveal claim.
+
 ## 1.8.0 — a sixth artifact: when each key was first revealed
 
 ### Command line

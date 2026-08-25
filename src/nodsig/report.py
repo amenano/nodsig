@@ -5,7 +5,7 @@ what they cost, and on what machine.
 
 Why this is a command and not a habit: the figures that end up in a
 README, in a manual or in a message to somebody else are today copied by
-hand out of six manifests. A fingerprint is sixty-four hexadecimal
+hand out of the manifests. A fingerprint is sixty-four hexadecimal
 characters, and a transcription error in one of them is invisible
 exactly where it matters most, because the number's whole job is to be
 compared. Reading the manifests and printing the table is the antidote,
@@ -14,9 +14,9 @@ and it costs nothing that was not already on disk.
 WHAT IT REFUSES TO PRINT
 ========================
 Paths. This command takes directories as arguments and never names one:
-an artifact appears under the role its flag gave it (`archive`, `index`,
-`derived`, `graph`, `headers`, `nonces`), which is what a reader outside
-this machine can use. The same rule governs the machine block below,
+an artifact appears under the role its flag gave it (`graph`, `headers`,
+`archive`, `nonces`, `witness`, `index`, `derived`, `firstspend`,
+`firstreveal`), which is what a reader outside this machine can use. The same rule governs the machine block below,
 which reports the CPU, the memory and the operating system and asks the
 host for nothing that identifies it: no host name, no user name, no
 environment. A page meant to be published must not be able to leak the
@@ -48,9 +48,13 @@ from nodsig import __version__
 MANIFEST_NAME = "manifest.json"
 
 # The roles this page can describe, in the order the work produces them.
+# Every role is read the same generic way (a sealed manifest and the
+# bytes under the directory), so adding one here is the whole change:
+# the ancestry section matches parents by fingerprint, not by name.
 # Each is a flag, and the name of the flag is the name in the table: no
 # directory ever reaches the output.
-ROLES = ("graph", "headers", "archive", "nonces", "index", "derived")
+ROLES = ("graph", "headers", "archive", "nonces", "witness", "index",
+         "derived", "firstspend", "firstreveal")
 
 
 class ReportError(RuntimeError):

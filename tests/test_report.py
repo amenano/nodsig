@@ -90,6 +90,20 @@ def test_it_reports_identity_cost_and_a_confirmed_ancestry(pair):
     assert "declared and not confirmed" not in page
 
 
+def test_the_follower_tables_have_a_seat(tmp, pair):
+    """The roles added after the first six: a table built off the pair's
+    derivatives appears under its own role, and the ancestry section
+    confirms it against the parent reported beside it — the generic
+    fingerprint match, no per-role code."""
+    from nodsig import firstspend as fs
+    _graph, _index, derived = pair
+    table = os.path.join(tmp, "fs_role")
+    fs.run_build(derived, table)
+    page = _page(derived=derived, firstspend=table)
+    assert "firstspend-v1" in page
+    assert "**firstspend** ← **derived**" in page
+
+
 def test_an_unsealed_artifact_is_named_not_skipped(tmp, pair):
     """A report silent about what it could not read reads as a report
     that read everything."""
