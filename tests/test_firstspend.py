@@ -256,6 +256,34 @@ def test_between_refuses_bad_range(tmp):
           "and a window past the watermark")
 
 
+def test_append_equals_rebuild(tmp):
+    # A table sealed over height-4 derivatives, then the parent grows to
+    # the full chain: re-running build must equal a fresh build over the
+    # grown parent, byte for byte. This is the path where the pass
+    # re-emits every row the previous generation already holds, and the
+    # fusion must collapse the exact duplicates rather than keep both.
+    d4 = build_pipeline(tmp, name="ap4", end=4)
+    out = os.path.join(tmp, "fs_appended")
+    fs.run_build(d4, out)
+
+    d5 = build_pipeline(tmp, name="ap5")
+    fp_append = fs.run_build(d5, out)
+    fresh = os.path.join(tmp, "fs_fresh5")
+    fp_fresh = fs.run_build(d5, fresh)
+    check(fp_append == fp_fresh,
+          f"append fp {fp_append} != fresh-build fp {fp_fresh}")
+    _, a = _read_firstspend(out)
+    _, b = _read_firstspend(fresh)
+    check(a == b, "appended bytes differ from a fresh build")
+    # And the appended table still passes the full audit, both roads.
+    fs.run_verify(out, derived_dir=d5, out=open(os.devnull, "w"))
+
+    fp_again = fs.run_build(d5, out)
+    check(fp_again == fp_append, "a no-op re-run moved the fingerprint")
+    print("ok  firstspend: append equals a fresh build over the grown "
+          "parent, and a same-seal re-run is a no-op")
+
+
 def test_rewind_equals_rebuild(tmp):
     # Full-coverage table, then a target: derivatives at height 4.
     d5 = build_pipeline(tmp, name="rw5")
@@ -304,6 +332,8 @@ def main():
         test_between_window(tmp)
     with tempfile.TemporaryDirectory() as tmp:
         test_between_refuses_bad_range(tmp)
+    with tempfile.TemporaryDirectory() as tmp:
+        test_append_equals_rebuild(tmp)
     with tempfile.TemporaryDirectory() as tmp:
         test_rewind_equals_rebuild(tmp)
     with tempfile.TemporaryDirectory() as tmp:

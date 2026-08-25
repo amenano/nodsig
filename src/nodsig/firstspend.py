@@ -166,8 +166,14 @@ def run_build(derived_dir, out_dir, flush_records=8_000_000):
         state["phase"] = "merge"
         store.write_state()
     if state["phase"] == "merge":
+        # dedup="last" over the WHOLE record: only exact duplicates
+        # collapse. The append path relies on it — the pass re-emits
+        # every row the previous generation already holds — and
+        # dedup=None would keep both copies (it counts equal keys, it
+        # does not collapse them), which the structural verify would
+        # then refuse as an out-of-order file.
         _, delete = store.fuse(LOGICAL, (FS_REC, FS_KEY, FS_EVERY),
-                               LOGICAL, dedup=None, dedup_len=FS_REC)
+                               LOGICAL, dedup="last", dedup_len=FS_REC)
         state["phase"] = "seal"
         store.commit(delete)
     if state["phase"] == "seal":
