@@ -21,7 +21,7 @@ contract, the **CLI** is convenience, and `reveal-archive-v2` inside a tool
 numbered 1.3.0 is not a discrepancy. Artifacts are identified by their
 fingerprint, never by a tag.
 
-## Unreleased
+## 1.8.0 — a sixth artifact: when each key was first revealed
 
 ### Command line
 
@@ -85,6 +85,19 @@ fingerprint, never by a tag.
   not MIT. The gallery's closing credit is scoped the same way: four
   figures are reproduced from the July 2026 write-up, and the two price
   figures were drawn for the page itself.
+
+### Do your artifacts still work?
+
+Yes, all of them, with zero rebuild hours. No existing format, tag or
+fingerprint moves: `firstreveal-v1` is a new, optional artifact (a one-hour
+read of the merged archive whenever you want it — no node, no graph), and
+`check --key` is a query-time expansion. The firstspend fix changes no
+sealed bytes either: it repairs the append path, which no published table
+had ever taken — a table built in one shot has no duplicates to collapse,
+so its bytes and fingerprint are exactly what they were. If you had grown
+a firstspend table over a grown derivatives directory with an earlier
+1.x, its `verify` would already have refused the file; rebuild it once
+with this version and the audit holds.
 
 ## 1.7.0 — the coinbase's fate, four columns per block
 
