@@ -41,6 +41,13 @@ fingerprint, never by a tag.
   (33/65 B, two forms of one point are two digests), scripts and taproot
   out. Optional; ~37 GB at height 957,301 (1.61 G revealed keys at 23
   bytes each).
+- **`check --key`**: a public key (33/65-byte hex, or its bare hash160)
+  checked as its three standard address forms — P2PKH, P2SH-P2WPKH,
+  native P2WPKH — expanded into their canonical texts and sent through
+  the same per-address pipeline; the report notes the expansion. An
+  expansion, not a fourth answering road: no reader changed, and the
+  three forms keep their per-category semantics (the key-hash forms ask
+  the keys partition, the wrapper form asks `scripts20`).
 
 ### Formats
 

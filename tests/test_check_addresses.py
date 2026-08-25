@@ -175,6 +175,55 @@ def test_rejections():
           "rejected")
 
 
+def test_key_addresses_vectors():
+    """The key entry point, pinned the same two ways as decoding:
+    frozen public vectors for the constants, round-trip through the
+    decoders for the shape."""
+    # BIP-173's P2WPKH example is the generator point's compressed key.
+    gen = ("0279BE667EF9DCBBAC55A06295CE870B07029BFCDB2DCE28D959F2815B16"
+           "F81798")
+    d20, forms = ca.key_addresses(gen)
+    p2pkh, p2sh, p2wpkh = forms
+    check(p2wpkh == "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4",
+          f"p2wpkh form differs from the BIP-173 vector: {p2wpkh}")
+    # The wiki's classic pubkey → address worked example.
+    wiki = ("0250863AD64A87AE8A2FE83C1AF1A8403CB53F53E486D8511DAD8A04887E"
+            "5B2352")
+    _, wforms = ca.key_addresses(wiki)
+    check(wforms[0] == "1PMycacnJaSqwwJqjawXBErnLsZ7RkXUAs",
+          f"p2pkh form differs from the public vector: {wforms[0]}")
+    # Round-trip: each form decodes to its kind, and to the digests the
+    # capabilities will look up.
+    a = ca.decode_address(p2pkh)
+    check((a.kind, a.digest) == ("p2pkh", d20), "p2pkh round-trip")
+    a = ca.decode_address(p2wpkh)
+    check((a.kind, a.digest) == ("p2wpkh", d20), "p2wpkh round-trip")
+    a = ca.decode_address(p2sh)
+    check((a.kind, a.digest) ==
+          ("p2sh", rs.hash160(b"\x00\x14" + d20)),
+          "p2sh-p2wpkh round-trip: digest is not hash160 of the wrapper")
+    # A bare hash160 asks about the same three forms.
+    d2, forms2 = ca.key_addresses(d20.hex())
+    check(d2 == d20 and forms2 == forms,
+          "a bare digest does not expand to the same forms")
+    print("ok  key entry: public vectors hold, all three forms "
+          "round-trip to the right digests")
+
+
+def test_key_addresses_rejections():
+    for bad, why in [("zz", "not hex"),
+                     ("ab" * 16, "32 bytes is no key and no digest"),
+                     ("05" + "00" * 32, "33 bytes but not 02/03"),
+                     ("02" + "00" * 64, "65 bytes but starts 02")]:
+        try:
+            ca.key_addresses(bad)
+        except ca.AddressError:
+            continue
+        fail(f"key_addresses accepted {why}: {bad}")
+    print("ok  key entry: bad hex, wrong lengths and wrong prefixes "
+          "rejected")
+
+
 # ---------------------------------------------------------------------------
 # 2. Capabilities
 # ---------------------------------------------------------------------------
@@ -230,6 +279,28 @@ def test_exposure(archive):
           f"a script hash never signed anywhere itself: {d}")
     print("ok  exposure: reuse hit w/ source, protected w/ watermark, "
           "script hit w/ its key count")
+
+
+def test_key_entry_answers_per_form(archive):
+    """--key's expansion, through the real exposure backend: the two
+    key-hash forms of a revealed key answer EXPOSED from the keys
+    partition, while its p2sh-p2wpkh form asks about the WRAPPER script,
+    which this chain never revealed — three forms, two different
+    questions, each answered from its own category."""
+    backends = {"exposure": ca.RevealArchiveExposure(archive)}
+    _, forms = ca.key_addresses(trs.PUB1.hex())
+    got = {}
+    for text in forms:
+        a = ca.decode_address(text)
+        got[a.kind] = ca.answer(a, backends).text
+    check(got["p2pkh"] == "EXPOSED (by reuse)",
+          f"p2pkh form of a revealed key: {got['p2pkh']}")
+    check(got["p2wpkh"] == "EXPOSED (by reuse)",
+          f"p2wpkh form of a revealed key: {got['p2wpkh']}")
+    check(got["p2sh"] == "PROTECTED until first spend",
+          f"p2sh form asks about the unrevealed wrapper: {got['p2sh']}")
+    print("ok  key entry: revealed key EXPOSED under both key-hash "
+          "forms, its unrevealed p2sh wrapper stays protected")
 
 
 def test_by_construction_skips_archive(archive):
@@ -715,10 +786,13 @@ def main():
     test_public_vectors()
     test_roundtrip_all_kinds()
     test_rejections()
+    test_key_addresses_vectors()
+    test_key_addresses_rejections()
     test_script_pubkey()
     with tempfile.TemporaryDirectory() as tmp:
         archive = build_archive(tmp)
         test_exposure(archive)
+        test_key_entry_answers_per_form(archive)
         test_by_construction_skips_archive(archive)
         test_undetermined_without_backend()
         test_balance_injected()

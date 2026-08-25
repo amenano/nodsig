@@ -30,6 +30,18 @@ Measured on the real artifact at height 957,301:
 | `archive_scripts32.bin` | 986,793,535 | 32.6 GB | 32-byte `bc1q…` (P2WSH) |
 | **whole archive** | **3.58 billion** | **86.9 GB** | |
 
+**A public key is not an address, and `--key` says so.** Given a key
+(33/65-byte hex) or its bare hash160, `check --key` expands it into the three
+standard forms that wrap it — P2PKH, P2SH-P2WPKH, native P2WPKH — as their
+canonical address texts, and each form then goes through the pipeline below
+like any address you had typed. Three forms are two different questions: the
+two key-hash forms consult the keys partition for the key's own digest, the
+wrapped form consults `scripts20` for its wrapper script. The serialization
+you pass is a statement, not a detail: the two serializations of one point
+hash to different digests, so pass the key bytes your wallet actually uses.
+A key inside a multisig has no address of its own; the flags the keys
+partition answers with already cover that cosigner case at the key level.
+
 **An address kind consults exactly one partition.** That is the mapping in
 `check_addresses.KINDS`, and it has a consequence worth knowing before you size
 a disk: if the addresses you care about are single-key ones, which is what a

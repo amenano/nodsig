@@ -214,6 +214,88 @@ def _convertbits(data, frombits, tobits):
     return bytes(out)
 
 
+# ---------------------------------------------------------------------------
+# Address encoding — the reverse road, for the key entry point
+#
+# A public key is not an address: it is the thing three standard address
+# forms wrap. `--key` takes the key (or its hash160) and expands it into
+# those forms' canonical text encodings, and everything downstream —
+# decoding, categories, capabilities, the report — treats them as the
+# addresses they are. That is the whole design: the key entry point adds
+# an expansion, never a second answering road. Correctness is pinned two
+# ways in the tests: round-trip through the decoders above (which carry
+# the BIP vectors), and frozen public vectors (the BIP-173 P2WPKH
+# example, the wiki's P2PKH example).
+# ---------------------------------------------------------------------------
+
+def _b58check_encode(payload):
+    """payload bytes (version byte included) → base58check string."""
+    data = payload + sha256d(payload)[:4]
+    n = int.from_bytes(data, "big")
+    s = ""
+    while n:
+        n, r = divmod(n, 58)
+        s = B58_ALPHABET[r] + s
+    # each leading zero byte becomes a leading '1' the bigint would lose
+    return "1" * (len(data) - len(data.lstrip(b"\x00"))) + s
+
+
+def _bech32_encode(hrp, version, program):
+    """segwit v0 (hrp, witness program) → bech32 string."""
+    acc = bits = 0
+    data = [version]
+    for b in program:
+        acc = (acc << 8) | b
+        bits += 8
+        while bits >= 5:
+            bits -= 5
+            data.append((acc >> bits) & 31)
+    if bits:
+        data.append((acc << (5 - bits)) & 31)
+    expanded = ([ord(c) >> 5 for c in hrp] + [0]
+                + [ord(c) & 31 for c in hrp])
+    polymod = _bech32_polymod(expanded + data + [0] * 6) ^ 1
+    checksum = [(polymod >> 5 * (5 - i)) & 31 for i in range(6)]
+    return hrp + "1" + "".join(BECH32_CHARSET[d] for d in data + checksum)
+
+
+def key_addresses(text):
+    """A public key, as hex, expanded into its standard address forms:
+    → (hash160 of the key, [p2pkh, p2sh-p2wpkh, p2wpkh address texts]).
+
+    Accepts the serialized key itself (33 bytes starting 02/03, or 65
+    starting 04) or its bare hash160 (20 bytes). The serialization
+    matters and is the caller's statement: the two serializations of one
+    point hash to different digests, so each is its own set of addresses
+    (and its own archive record) — passing the key bytes your wallet
+    uses asks about the addresses your wallet derives.
+
+    The perimeter is the three single-key STANDARD forms. A key inside a
+    multisig or any custom script has no address of its own: what the
+    chain sees there is the script, and the archive's flags on the key's
+    digest (which the p2pkh/p2wpkh rows consult) already cover the
+    cosigner case at the key level."""
+    try:
+        raw = bytes.fromhex(text)
+    except ValueError:
+        raise AddressError(f"not hex: {text!r}")
+    if len(raw) == 20:
+        d20 = raw
+    elif (len(raw) == 33 and raw[0] in (2, 3)) or \
+            (len(raw) == 65 and raw[0] == 4):
+        d20 = hash160(raw)
+    else:
+        raise AddressError(
+            f"{len(raw)} bytes is neither a serialized public key "
+            "(33 starting 02/03, 65 starting 04) nor a hash160 (20)")
+    redeem = b"\x00\x14" + d20                  # the p2sh-p2wpkh wrapper
+    return d20, [
+        _b58check_encode(b"\x00" + d20),
+        _b58check_encode(b"\x05" + hash160(redeem)),
+        _bech32_encode("bc", 0, d20),
+    ]
+
+
 # What decoding yields: enough to route the capabilities. `category`
 # names the archive category holding the preimage for hash-guarded
 # kinds (None when the address exposes the key by construction).
@@ -1281,6 +1363,13 @@ def main(argv=None):
     p = argparse.ArgumentParser(
         description="per-address exposure answers, self-hosted only")
     p.add_argument("addresses", nargs="*", help="addresses to check")
+    p.add_argument("--key", action="append", metavar="HEX",
+                   help="a public key (33/65-byte hex) or its hash160 "
+                        "(20-byte hex), checked as its three standard "
+                        "address forms (p2pkh, p2sh-p2wpkh, p2wpkh). "
+                        "Repeatable. An expansion, not a fourth answer "
+                        "road: the forms go through the same pipeline "
+                        "as any address")
     p.add_argument("--file", help="text file, one address per line, "
                                   "# comments allowed")
     p.add_argument("--address-book",
@@ -1334,6 +1423,15 @@ def main(argv=None):
     args = p.parse_args(argv)
 
     todo = list(args.addresses)
+    key_notes = []
+    for k in (args.key or []):
+        try:
+            d20, forms = key_addresses(k)
+        except AddressError as e:
+            sys.exit(f"ERROR: --key {k}: {e}")
+        todo.extend(forms)
+        key_notes.append(f"# key {d20.hex()} checked as its standard "
+                         f"forms: {', '.join(forms)}")
     if args.file:
         with open(args.file) as f:
             for line in f:
@@ -1351,7 +1449,7 @@ def main(argv=None):
             sys.exit(f"ERROR: {args.address_book}: {e}")
         todo.extend(book.addresses)
     if not todo:
-        p.error("no addresses given (positional, --file or "
+        p.error("no addresses given (positional, --key, --file or "
                 "--address-book)")
 
     if bool(args.index) != bool(args.derived):
@@ -1367,12 +1465,16 @@ def main(argv=None):
     try:
         backends = _backends_from_args(args)
         if args.stdout:
+            for note in key_notes:
+                print(note)
             run(todo, backends, args.csv, book=book,
                 json_path=args.json, depth=args.linkage_depth)
         else:
             with _private_file(args.out, encoding="utf-8") as f:
                 print("# this file lists YOUR addresses and their "
                       "answers: treat it as sensitive.", file=f)
+                for note in key_notes:
+                    print(note, file=f)
                 run(todo, backends, args.csv, out=f, book=book,
                     json_path=args.json, depth=args.linkage_depth)
             # The pointer goes to stderr: it names the file, never a
