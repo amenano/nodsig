@@ -21,6 +21,22 @@ contract, the **CLI** is convenience, and `reveal-archive-v2` inside a tool
 numbered 1.3.0 is not a discrepancy. Artifacts are identified by their
 fingerprint, never by a tag.
 
+## Unreleased
+
+### Documentation
+
+- The README no longer opens with a link labeled a manual. The
+  walkthrough at liberlume.com is presented beside *Stability* as what
+  it is: a worked application of release 1.0.0, pinned at height
+  957,301, that does not track this repository; the same link, without
+  the expectation that it follows the latest release. The price bullet
+  now points at the gallery's price section, and the *License* section
+  states the exception the price figures already lived under: they are
+  derived from a publisher's series and carry that publisher's terms,
+  not MIT. The gallery's closing credit is scoped the same way: four
+  figures are reproduced from the July 2026 write-up, and the two price
+  figures were drawn for the page itself.
+
 ## 1.7.0 — the coinbase's fate, four columns per block
 
 ### Command line

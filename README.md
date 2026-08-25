@@ -9,11 +9,6 @@ file: no block explorer, no third-party index, no network. Each answer names
 the artifact it came from, the height that artifact covers, and a fingerprint
 anyone else can recompute from the same chain.
 
-**Manual:** a hands-on walkthrough with real command outputs and the
-fingerprints to land on lives at
-[liberlume.com](https://liberlume.com/en/bitcoin-and-quantum-computing-manual/)
-([italiano](https://liberlume.com/it/bitcoin-e-quantum-computing-manuale/)).
-
 ## Why it exists
 
 Most questions about the chain get answered out of somebody else's index. That
@@ -90,7 +85,10 @@ none of this is worth building.
   header time is the only clock the chain certifies, to within hours). It is
   the one family of figures here that a stranger cannot reproduce from the
   chain alone, and it says so beside every number: see
-  [`docs/external-inputs.md`](docs/external-inputs.md).
+  [`docs/external-inputs.md`](docs/external-inputs.md). What it yields on
+  the real chain is in [the gallery's price
+  section](docs/gallery.md#what-it-was-worth-block-by-block-requires-a-price-series):
+  the same fees, per epoch, in BTC and in USD, and the two shapes disagree.
 
 Answering one address is a small enough job that it deserves its own page:
 [`docs/exposure-check.md`](docs/exposure-check.md) walks the exposure question
@@ -613,6 +611,18 @@ tool is not a discrepancy: the reveal archive really is at its second format,
 and the tool is at its first release. Internal module names carry no promise at
 all: they are free to move, and they have.
 
+**A worked application of one release.** A hands-on walkthrough of release
+1.0.0 (the real command outputs, the timings, and the published fingerprints
+to land on, at height 957,301) lives at
+[liberlume.com](https://liberlume.com/en/bitcoin-and-quantum-computing-manual/)
+([italiano](https://liberlume.com/it/bitcoin-e-quantum-computing-manuale/)).
+It is a worked example of the release it names, not a document that tracks
+this repository: what it shows keeps working within this major, exactly by
+the promise above, but the artifacts and verbs added since appear here
+first, in [`docs/`](docs/). Read it for the use cases and for what the
+toolkit feels like at chain scale; read `docs/` for what the current
+release does.
+
 **Credentials never travel on the command line.** The node is contacted only
 with `--rpc`, authenticating from the cookie file (`--cookie-file`) or from
 `NODSIG_RPC_AUTH` in the environment. No flag accepts a secret: a process's
@@ -741,5 +751,8 @@ does, since `rewind` is what makes an append reversible.
 ## License
 
 Code under the **MIT** license (see [`LICENSE`](LICENSE)). The figures in
-`docs/figures/` are ours too, under the same license; they first appeared in
-the write-up linked from [`docs/gallery.md`](docs/gallery.md).
+`docs/figures/` are ours too, under the same license, with one exception:
+the two price figures are derived from a publisher's series and are
+published under that publisher's terms, named beside them in
+[`docs/gallery.md`](docs/gallery.md). The other four first appeared in
+the write-up linked from that page.

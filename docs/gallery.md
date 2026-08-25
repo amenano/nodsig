@@ -444,7 +444,11 @@ and admit it can never cover everything. There is no such document yet.
 
 ---
 
-The figures first appeared, with the analysis they belong to, in
+Four of the figures (the ledger map, the reuse curve and the two nonce
+figures) first appeared, with the analysis they belong to, in
 [*Bitcoin and quantum computing: the data, July
 2026*](https://liberlume.com/en/bitcoin-and-quantum-computing-data-july-2026/).
-They are reproduced here under this repository's license.
+They are reproduced here under this repository's license. The two price
+figures were drawn for this page, and their terms are stated in their own
+section: they rest on a publisher's series and are published under that
+publisher's terms.

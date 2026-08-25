@@ -121,7 +121,7 @@ to prevent:
 
 - **an address typed on the command line is in `argv`**, which every other local
   account can read for as long as the run lasts, and in your shell's history
-  afterwards. That is the same argument the manual makes about credentials, and
+  afterwards. That is the same argument the README makes about credentials, and
   it applies to the questions as much as to the secrets. `--file <path>` takes
   one address per line and keeps them out of both.
 - **`--rpc` tells your node which addresses you asked about.** The balance comes
