@@ -88,7 +88,10 @@ RevealWhere = {                 // meaningful only for category KEY; all false o
   as flags is the mistake the format names explicitly: it would tell a multisig
   owner their key had signed when only the script surfaced.
 - `first_height` is the **lowest** height the digest was ever seen at (sightings
-  merge by `min`). It is a first-reveal claim and nothing more.
+  merge by `min`). It is a first-reveal claim and nothing more. (The same claim
+  restated in time order, for window reads, is the
+  [`FirstReveal-v1`](../formats/FirstReveal-v1.md) artifact; this lookup stays
+  the one road for a single digest.)
 - `revealed = false` ⇒ not present up to the watermark (definite negative, with
   the off-chain/mempool qualification above).
 - Width/category mismatch ⇒ `INVALID_DIGEST` (error), distinct from a negative.

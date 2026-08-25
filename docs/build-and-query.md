@@ -198,6 +198,8 @@ nodsig index   verify --index   <index>   [--graph <graph>]
 nodsig derived verify --derived <derived> [--index <index>]
 nodsig headers verify --headers <headers>
 nodsig nonces  witness-verify --witness <witness> [--nonces <nonces>] [--csv OUT]
+nodsig firstspend  verify --firstspend  <firstspend>  [--derived <derived>]
+nodsig firstreveal verify --firstreveal <firstreveal> [--archive <archive>]
 ```
 
 Without `--deep` an audit re-reads every byte against the manifest and rebuilds
@@ -366,6 +368,13 @@ nodsig headers fingerprint --headers <headers>
 # 2. then the offline side, in the same order as a first build
 nodsig index   build --graph <graph> --index <index> --end <H2>
 nodsig derived build --index <index> --out <derived>
+
+# 3. the tables that follow a parent, by re-running the same build:
+#    each re-emits its rows against the grown parent and the fusion
+#    collapses what was already there (a re-run against an unchanged
+#    seal says "nothing to do" and costs nothing)
+nodsig firstspend  build --derived <derived> --out <firstspend>
+nodsig firstreveal build --archive <archive> --out <firstreveal>
 ```
 
 Note what this costs beyond the new blocks. **`--graph` replaces
@@ -414,13 +423,14 @@ exercised on real artifacts and what has not.
 
 ## Rewinding instead of rebuilding
 
-The mirror of the section above, and three separate commands: run them in this
-order, because the derivatives take their new watermark from the index.
+The mirror of the section above, and four separate commands: run them in this
+order, because each follower takes its new watermark from its parent.
 
 ```sh
-nodsig index   rewind --index <index> --graph <graph> --to-height <H>
-nodsig derived rewind --derived <derived> --index <index>
-nodsig nonces  rewind --nonces <nonces> --to-height <H>
+nodsig index      rewind --index <index> --graph <graph> --to-height <H>
+nodsig derived    rewind --derived <derived> --index <index>
+nodsig firstspend rewind --firstspend <firstspend> --derived <derived>
+nodsig nonces     rewind --nonces <nonces> --to-height <H>
 ```
 
 A rewind takes a sealed artifact back to a height it already covers, into the
@@ -430,6 +440,10 @@ the last command; it is a different, cheaper road to the same artifact, and it
 is what makes growing them a two-way street rather than a one-way one. The
 reveal archive is the exception with a reason: its fusion folds many sightings
 into one record, so it cannot restore what it folded, and its format says so.
+The first-reveal table follows that exception rather than escaping it — its
+parent cannot go back, so it has no rewind verb — while the first-spend table
+follows its derivatives down, the cleanest rewind here (rows are dropped,
+never rewritten).
 
 ## Every command, in one list
 

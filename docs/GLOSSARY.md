@@ -105,9 +105,19 @@ derivatives': "first spent from", **not** "first exposed": a key seen inside a
 revealed script (the co-signer case) is out, the same line the reveal archive
 draws. A lock never spent from has no row.
 
+### first reveal (FirstReveal-v1)
+When a public key was **first revealed**, ordered by that moment: the reveal
+archive's keys partition restated in time order, one 23-byte row per revealed
+key. The temporal twin of the entry above, on the exposure side: the archive
+answers it one digest at a time, this sixth artifact makes "which keys were
+first revealed between H1 and H2" a contiguous read (`firstreveal between`).
+Its perimeter is the keys partition's: serialized keys (the two serializations
+of one point are two digests), revealed scripts and taproot out.
+
 ### ancestry
 `graph → outpoint index → derivatives` (and the reveal archive; `firstspend`
-hangs off the derivatives), each sealed artifact **declaring its parent's
+hangs off the derivatives, `firstreveal` off the archive), each sealed
+artifact **declaring its parent's
 fingerprint** in `build`. The declaration sits
 outside the fingerprint on purpose, so that the same content always takes the
 same name; a reader holding both artifacts confirms the link, and `verify` says
