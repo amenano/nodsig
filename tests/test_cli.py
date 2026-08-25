@@ -50,6 +50,7 @@ PUBLIC_SURFACE = {
     "derived": ("build", "rewind", "stats", "verify", "history", "fee",
                 "cospends", "supply"),
     "firstspend": ("build", "stats", "verify", "between", "rewind"),
+    "firstreveal": ("build", "stats", "verify", "between"),
     "blockstats": ("build", "summary"),
     "price": ("import", "series-verify", "build", "stats", "verify", "at",
               "daily"),

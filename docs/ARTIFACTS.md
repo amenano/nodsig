@@ -24,6 +24,7 @@ placeholders: every one of them is a path you choose on the command line.
 | outpoint index | `outpoint-index-v3` | `outpoint-index-v2` |
 | outpoint derivatives | `outpoint-derived-v3` | `outpoint-derived-v2` |
 | first-spend table | `firstspend-v1` | — |
+| first-reveal table | `firstreveal-v1` | — |
 | block stats | `block-stats-v2` | — |
 | price series (external input) | `price-series-v1` | — |
 | block price (external input, derived) | `blockprice-v1` | — |
@@ -58,6 +59,8 @@ the header chain that lets the pass's own checks be repeated later.
      --nonces             │      ├ runs/…_scripts20.bin   fingerprint) ├─► reuse table
                           │      ├ runs/…_scripts32.bin                └─► curve.csv ──► curve deltas
                           │      └ state.json → manifest.json
+                          │            (merged) ──► firstreveal build ──► <firstreveal>/
+                          │                                (keys by first-reveal time)
                           │
                           ├──► <headers>/ ──► headers fingerprint (seal)
                           │         │
@@ -110,6 +113,7 @@ Not all of it. Pick by the question you came for.
 | fees, a lock's history, co-spends | `archive scan --graph` → `index build` → `derived build` |
 | per-block statistics | `archive scan --graph` → `blockstats build` |
 | to repeat the scan's checks later, or to put real dates on a curve | `archive scan --headers` → `headers fingerprint` |
+| which keys were first revealed in a height window, as a contiguous read | the archive above, then `firstreveal build` |
 | whether a signing key ever gave itself away by repeating a nonce | `archive scan --nonces` → `nonces merge` → `nonces groups` |
 | the same, for one of your addresses | `index build` → `derived build`, then `nonces address` (needs a node) |
 | fiat figures, one price per block | `index build`, then a publisher's series you fetched → `price import` → `price build` (an external input, not an artifact: [external-inputs](external-inputs.md)) |
@@ -170,7 +174,9 @@ published with this project were produced: run once, agreed, reported.
 | └ `manifest.json` | `outpoint-derived-v3` | Fingerprint and coverage; the parent index is declared in `build`, and a stale pairing is refused | `derived build` | verification |
 | `<firstspend>/` | `firstspend-v1` | The first spend of every lock, ordered by that moment (25 B: `spender_tx` \| `lock`) | `firstspend build` | `firstspend between` |
 | └ `firstspend_gNNNN.bin`, `manifest.json` | records / `firstspend-v1` | One row per lock ever spent from; the parent derivatives are **declared** in `build` | `firstspend build` | `firstspend between/verify` |
-| `*.lad` (inside index, derived and firstspend) | ladders | Search caches: one sample every few thousand keys. **Outside the fingerprint**; without them a search falls back to a blind bisection, slower and with the same answer | the builders | the readers, when present |
+| `<firstreveal>/` | `firstreveal-v1` | The first revelation of every key, ordered by that moment (23 B: `first_height` \| `key`) | `firstreveal build` | `firstreveal between` |
+| └ `firstreveal_gNNNN.bin`, `manifest.json` | records / `firstreveal-v1` | One row per revealed key, a 1:1 restatement of the archive's keys partition; the parent archive is **declared** in `build` | `firstreveal build` | `firstreveal between/verify` |
+| `*.lad` (inside index, derived, firstspend and firstreveal) | ladders | Search caches: one sample every few thousand keys. **Outside the fingerprint**; without them a search falls back to a blind bisection, slower and with the same answer | the builders | the readers, when present |
 | `<checkpoint>/` | `reuse-scan-v1` | *Second road only.* The direct reuse scan's state: a `hits_<type>.bin` bitmap of which locks history has opened, plus `state.json` and its own `curve.csv` | `reuse scan` | itself (resume), `archive crosscheck` |
 
 ## What the scan checks while it reads
@@ -244,6 +250,7 @@ held to within half a percent, which is what fixed-width records buy.
 | `<archive>/` | ~98 GB |
 | `<nonces>/` | ~60 GB |
 | `<firstspend>/` | ~37 GB (optional; 1.48 G locks ever spent from × 25 B) |
+| `<firstreveal>/` | ~37 GB (optional; 1.61 G revealed keys × 23 B) |
 | `<locks>/`, `<checkpoint>/`, CSVs | small enough not to plan for |
 
 Add headroom on top: a fusion writes a new generation before deleting the old.

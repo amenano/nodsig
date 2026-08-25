@@ -259,6 +259,7 @@ run on the same machine. Sizes are for that height:
 | `index build` | ~23 h | `<index>` ~230 GB |
 | `derived build` | ~15 h | `<derived>` ~185 GB |
 | `firstspend build` | ~2-3 h | `<firstspend>` ~37 GB: the first spend of every lock, ordered by time (optional, from `<derived>` alone) |
+| `firstreveal build` | ~1-2 h (projected: a 39 GB read of the archive's keys plus the fusion) | `<firstreveal>` ~37 GB: the first revelation of every key, ordered by time (optional, from the merged `<archive>` alone) |
 
 The audits are cheap next to the builds, and that is the point of them. From
 the same run: `archive verify --deep` ~1 h 20, `nonces verify --deep` ~1 h 10,

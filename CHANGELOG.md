@@ -23,6 +23,48 @@ fingerprint, never by a tag.
 
 ## Unreleased
 
+### Command line
+
+- **`nodsig firstreveal`**, a new artifact and command group: the first
+  revelation of every public key, ordered by that moment. The archive
+  answers "was this key ever revealed, and when" one digest at a time;
+  nothing enumerated "which keys were first revealed between H1 and H2",
+  because its records are ordered by digest, not by time. `firstreveal
+  build` materialises that order from the sealed, merged archive alone
+  (no node, no graph, no index), and `firstreveal between --from H1 --to
+  H2` reads a height window as a contiguous scan — no other artifact in
+  the loop, since the rows are keyed by the height itself. Also `stats`
+  and `verify` (the shared audit plus two second roads: the 1:1 row
+  count against the parent's keys records, and a sampled confrontation
+  with the archive's own lookup). No `rewind`, because the parent has
+  none. The perimeter is the archive's keys partition: serialized keys
+  (33/65 B, two forms of one point are two digests), scripts and taproot
+  out. Optional; ~37 GB at height 957,301 (1.61 G revealed keys at 23
+  bytes each).
+
+### Formats
+
+- **New: `firstreveal-v1`.** A 23-byte record, `first_height | key`,
+  sorted by (height, key), a 1:1 restatement of the archive's keys
+  partition with the flags deliberately left in the archive (they can
+  gain bits on an append; the first height cannot move). No existing
+  format, tag or fingerprint moves.
+
+### Fixed
+
+- **`firstspend build` on a grown parent no longer duplicates rows.**
+  The append path re-reads the whole history and re-emits every row the
+  previous generation already holds, relying on the fusion to collapse
+  the exact duplicates — but it passed the fusion a mode that counts
+  equal keys without collapsing them, so an append would have sealed
+  every pre-existing row twice (and `verify` would then have refused the
+  file as out of order). Found by the new artifact's differential append
+  test, mirrored onto firstspend; both builders now collapse exact
+  duplicates, and both suites pin append ≡ rebuild byte for byte. No
+  sealed artifact is affected: every published firstspend table was
+  built in one shot, and a fresh build has no duplicates to collapse, so
+  its bytes and fingerprint are unchanged.
+
 ### Documentation
 
 - The README no longer opens with a link labeled a manual. The

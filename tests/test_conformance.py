@@ -122,6 +122,7 @@ FORMAT_MATRIX = [
     ("nodsig.outpoint_index", "outpoint index"),
     ("nodsig.derivatives", "outpoint derivatives"),
     ("nodsig.firstspend", "first-spend table"),
+    ("nodsig.firstreveal", "first-reveal table"),
     ("nodsig.block_stats", "block stats"),
     ("nodsig.priceseries", "price series (external input)"),
     ("nodsig.blockprice", "block price (external input, derived)"),

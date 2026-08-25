@@ -128,6 +128,14 @@ without a second pass over the chain. Either side of `merge` gives the same
 answer; after it is cheaper, because the fused base holds each digest once
 instead of once per sighting.
 
+Optional, from the merged archive — the keys partition restated in time
+order, so "which keys were first revealed in this height window" becomes a
+contiguous read:
+
+```sh
+nodsig firstreveal build --archive <archive> --out <firstreveal>
+```
+
 The archive's own curve is a separate verb, because it needs no locks and so no
 snapshot and no node:
 
@@ -479,6 +487,10 @@ they read, time or explain something you already have.
 | `firstspend verify` | re-read it against its manifest, and confirm its parent | 5 |
 | `firstspend stats` | coverage, row count and fingerprint, instant | - |
 | `firstspend between` | which locks were first spent in a height window | 6 |
+| `firstreveal build` | when each key was first revealed, ordered by time | 3 |
+| `firstreveal verify` | re-read it against its manifest, and confirm its parent | 5 |
+| `firstreveal stats` | coverage, row count and fingerprint, instant | - |
+| `firstreveal between` | which keys were first revealed in a height window | 6 |
 | `price import` | a publisher's CSV or JSON into a sealed price series (**external input**) | 6b |
 | `price series-verify` | a series against its `series.json` | 6b |
 | `price build` | one price per block, from the index's header times and the series in order | 6b |
