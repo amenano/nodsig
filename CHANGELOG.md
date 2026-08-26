@@ -25,6 +25,30 @@ fingerprint, never by a tag.
 
 ### Command line
 
+- **`nodsig derived timeline`**: the statistical scan `history.bin` was
+  laid out for, delivered as one command. One sequential pass over every
+  row folds the file into two small CSVs of aggregates: balance bands
+  per checkpoint (every `--grid` heights, default 10,000, plus the tip;
+  one row per balance decade with lock count and satoshis) and the
+  (creation window, spend window | unspent) table with output count,
+  satoshis and the two weights Σ value·create_height and
+  Σ value·spend_height — the primitives that coin-age destroyed,
+  dormancy waves and the mean age of the unspent are formulas over
+  (the formulas are in `build-and-query.md`). `--price <blockprice>`
+  adds the satoshis priced at creation and the at-creation cost per
+  cell, with the table's digest declared in the meta (an external
+  input, as everywhere). The meta beside the CSVs is sealed as
+  `derived-timeline-v1` and declares the parent derivatives
+  fingerprint; the pass re-meets the manifest's identities (row count,
+  spent satoshis, distinct locks) and the two tables must agree on the
+  unspent satoshis at the tip before anything is written.
+
+  **What it costs**: a full read of `history.bin` — the collection's
+  largest file, 141 GB at height 957,301 — CPU-bound in pure Python;
+  profiled on a real slice at 0.3–0.5M rows/s, so plan for the same
+  hours class as a `blockstats build`. It writes nothing into any
+  artifact; the output is two CSVs of at most a few MB.
+
 - **`report` gains a seat for every artifact the collection has**: three
   new directory flags — `--witness`, `--firstspend`, `--firstreveal` —
   beside the six it started with. The page reads every role the same

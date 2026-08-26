@@ -900,6 +900,80 @@ def test_supply(dbuilt):
           "behind are counted, a violation is fatal")
 
 
+def test_timeline_matches_model(dbuilt):
+    """The two timeline tables against a hand-worked model.
+
+    The model, independent of every reader: heights by ordinal (out 0
+    is h1; 1,2,3 are h2; 4,5 h3; 6,7 h4; 8,9 h5; spenders tx2 h2, tx4
+    h3, tx6 h4, tx8 h5), balances per lock at the checkpoints of
+    --grid 2 (cps 2, 4, 5):
+
+        A: S @2, 3S+2 @4, 4S @5   (S = 50 BTC: decades 1e9, then 1e10)
+        B: 7 @2,    6 @4,  0 @5   (decade 1, then gone)
+        C: 3 @2,    0 @4,  5 @5   (decade 1)
+
+    and the six (creation window, spend window) cells with their
+    Σ value*height weights, spelled out below."""
+    tmp, _graph, index, derived, _txids, _locks = dbuilt
+    out_dir = os.path.join(tmp, "timeline")
+    buf = io.StringIO()
+    dv.run_timeline(derived, index, out_dir, grid=2, out=buf)
+    bands = open(os.path.join(out_dir, dv.BANDS_CSV)).read().splitlines()
+    check(bands == [
+        "checkpoint,band_floor_sats,locks,sats",
+        "2,1,2,10",                          # B(7) + C(3)
+        f"2,1000000000,1,{S}",               # A: 50 BTC
+        "4,1,1,6",                           # B
+        f"4,10000000000,1,{3 * S + 2}",      # A: 150 BTC + t2's 2 sat
+        "5,1,1,5",                           # C
+        f"5,10000000000,1,{4 * S}",          # A: 200 BTC, the 2 sat spent
+    ], f"bands differ from the hand model:\n{bands}")
+    windows = open(os.path.join(out_dir,
+                                dv.WINDOWS_CSV)).read().splitlines()
+    check(windows == [
+        "create_from,spend_from,outputs,sats,"
+        "sat_heights_created,sat_heights_spent",
+        f"0,,1,{S},{S},0",                       # out0, h1, unspent
+        f"2,,1,{S},{3 * S},0",                   # out4, h3, unspent
+        f"2,2,2,{S + 3},{2 * S + 6},{2 * S + 9}",  # out1 h2→h2, out3 h2→h3
+        "2,4,2,9,20,38",                         # out2 h2→h4, out5 h3→h5
+        f"4,,3,{2 * S + 5},{9 * S + 25},0",      # out6, out8, out9 unspent
+        "4,4,1,6,24,30",                         # out7 h4→h5
+    ], f"windows differ from the hand model:\n{windows}")
+    meta = json.load(open(os.path.join(out_dir, dv.TIMELINE_META)))
+    dmanifest = json.load(open(os.path.join(derived, dv.MANIFEST_NAME)))
+    check(meta["build"]["parent"]["fingerprint"]
+          == dmanifest["fingerprint"],
+          "ancestry: the derived fingerprint must be carried")
+    check(meta["build"]["rows"] == 10
+          and meta["build"]["totals"]["distinct_locks"] == 3
+          and meta["build"]["totals"]["unspent_sats"] == 4 * S + 5
+          and meta["build"]["totals"]["coinage_destroyed_sat_heights"]
+          == 27,       # S*0 + 3*1 + 7*2 + 2*2 + 6*1
+          "timeline totals differ from the hand model")
+    declared = {e["name"]: e["sha256"]
+                for e in meta["identity"]["files"]}
+    for name, csv_name in (("bands", dv.BANDS_CSV),
+                           ("windows", dv.WINDOWS_CSV)):
+        with open(os.path.join(out_dir, csv_name), "rb") as f:
+            sha = hashlib.sha256(f.read()).hexdigest()
+        check(declared[name] == sha,
+              f"{name}: the meta's digest must be the file's")
+    # The default grid on a five-block chain has one checkpoint: the
+    # tip. Everything folds into window 0 and the totals must not move.
+    tip_dir = os.path.join(tmp, "timeline_tip")
+    dv.run_timeline(derived, index, tip_dir, out=io.StringIO())
+    tip = open(os.path.join(tip_dir, dv.WINDOWS_CSV)).read().splitlines()
+    check(tip == [
+        "create_from,spend_from,outputs,sats,"
+        "sat_heights_created,sat_heights_spent",
+        f"0,,5,{4 * S + 5},{13 * S + 25},0",
+        f"0,0,5,{S + 18},{2 * S + 50},{2 * S + 77}",
+    ], f"tip-only windows differ from the hand model:\n{tip}")
+    print("ok  timeline: bands and windows byte-equal the hand model, "
+          "totals and ancestry exact, the tip-only fold agrees")
+
+
 def test_verify_catches_corruption(dbuilt):
     tmp, _graph, index, _derived, _txids, _locks = dbuilt
     victim = os.path.join(tmp, "derived_victim")

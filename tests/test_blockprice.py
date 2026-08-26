@@ -363,6 +363,70 @@ def test_supply_with_a_price(built):
                       out=io.StringIO())
 
 
+def test_timeline_with_a_price(built):
+    """The timeline's price channel against the hand model: every
+    fixture height has a price (1,2 at 100.50; 3,4,5 at 200), so
+    sats_priced equals sats in every cell and the at-creation cost is
+    Σ value*price(create_height), spelled out per cell below. The
+    price-free columns must be byte-identical to the unpriced run."""
+    from nodsig import derivatives as dv
+    tmp, index = built
+    derived = os.path.join(tmp, "derived")
+    dv.run_build(index, derived)
+    a = series_a(tmp)
+    table = os.path.join(tmp, "bp")
+    bp.run_build(index, table, [a], out=io.StringIO())
+    out_dir = os.path.join(tmp, "timeline_priced")
+    log = io.StringIO()
+    dv.run_timeline(derived, index, out_dir, grid=2, price_dir=table,
+                    out=log)
+    S = td.S
+    windows = open(os.path.join(out_dir,
+                                dv.WINDOWS_CSV)).read().splitlines()
+    check(windows == [
+        "create_from,spend_from,outputs,sats,"
+        "sat_heights_created,sat_heights_spent,"
+        "sats_priced,cost_at_creation",
+        # 50 BTC at 100.50 = 5025; at 200 = 10000
+        f"0,,1,{S},{S},0,{S},5025.000000",
+        f"2,,1,{S},{3 * S},0,{S},10000.000000",
+        # out1 (S) and out3 (3 sat) both created at h2, price 100.50
+        f"2,2,2,{S + 3},{2 * S + 6},{2 * S + 9},{S + 3},5025.000003",
+        # out2: 7 sat at 100.50, out5: 2 sat at 200
+        "2,4,2,9,20,38,9,0.000011",
+        # out6, out8 (50 BTC each) and out9 (5 sat), all at 200
+        f"4,,3,{2 * S + 5},{9 * S + 25},0,{2 * S + 5},20000.000010",
+        # out7: 6 sat at 200
+        "4,4,1,6,24,30,6,0.000012",
+    ], f"priced windows differ from the hand model:\n{windows}")
+    meta = json.load(open(os.path.join(out_dir, dv.TIMELINE_META)))
+    check(meta["build"]["price"]["currency"] == "USD"
+          and meta["build"]["price"]["digest"],
+          "the external input must be declared in the meta")
+    check("external input" in log.getvalue(),
+          "the summary must say what the cost figures rest on")
+    # The price-free columns must not move: same pass, same folds.
+    plain_dir = os.path.join(tmp, "timeline_plain")
+    dv.run_timeline(derived, index, plain_dir, grid=2,
+                    out=io.StringIO())
+    plain = open(os.path.join(plain_dir,
+                              dv.WINDOWS_CSV)).read().splitlines()
+    stripped = [",".join(r.split(",")[:6]) for r in windows]
+    check(stripped == plain,
+          "the price channel must only append columns, never change one")
+    check(open(os.path.join(plain_dir, dv.BANDS_CSV)).read()
+          == open(os.path.join(out_dir, dv.BANDS_CSV)).read(),
+          "bands do not depend on the price at all")
+    # a table built on another index is refused, like supply's
+    blocks, _ = td.derived_chain()
+    _g, other = td.build_index(tmp, blocks, name="tl_other", end=4)
+    other_table = os.path.join(tmp, "tl_other_table")
+    bp.run_build(other, other_table, [a], out=io.StringIO())
+    with pytest.raises(dv.OutpointError):
+        dv.run_timeline(derived, index, os.path.join(tmp, "tl_x"),
+                        grid=2, price_dir=other_table, out=io.StringIO())
+
+
 def main():
     with tempfile.TemporaryDirectory() as tmp:
         test_import_canonical(tmp)

@@ -152,6 +152,8 @@ Subcommands:
     cospends  TXID or TXID:VOUT → what was spent together, with locks
     supply    the issuance identity checked on every block, and the
               fee / subsidy / coinbase series per epoch
+    timeline  one pass over history.bin: balance bands per checkpoint,
+              and outputs/sats/age weights per (creation, spend) window
 
 Standard library only; the shared machinery is one implementation each:
 record I/O and the slab budget in recio, the run writer and the
@@ -169,6 +171,7 @@ import os
 import struct
 import sys
 import time
+from bisect import bisect_right
 from datetime import datetime, timezone
 
 from nodsig import outpoint_index as oi
@@ -1680,6 +1683,391 @@ def run_supply(derived_dir, index_dir, epoch_blocks=SUBSIDY_HALVING,
         index.close()
 
 
+# ---------------------------------------------------------------------------
+# timeline: the whole of history.bin, folded over checkpoints
+# ---------------------------------------------------------------------------
+#
+# history.bin is the one file built so that "statistical scans over locks
+# — balances, dormancy, concentration — read one file sequentially"
+# (the +30 GB argument at the top of this module). This command is that
+# scan: ONE pass over every row, aggregating along the two axes the row
+# carries — WHEN (creation and spend heights, via the index's resident
+# block table) and HOW MUCH (the value, and the balance it builds up
+# per lock). Everything it emits is an aggregate; no lock, no address,
+# no output ever appears in the output.
+#
+# Two primitive tables, and deliberately nothing else. Derived readings
+# — dormancy waves, coin-age destroyed per era, a realized figure —
+# are FORMULAS over these two, stated in the docs; emitting them too
+# would be a second answer to the same question, and two answers is how
+# two artifacts start to diverge.
+#
+#   bands    per (checkpoint, balance band): how many locks held a
+#            balance in that band, and their satoshis. A checkpoint is
+#            a height on a fixed grid (plus the tip, always); a band is
+#            a decade — 1..9 sats, 10..99, and so on. Balance history
+#            per lock is folded with difference arrays, so the cost is
+#            linear in the rows and independent of the checkpoint count.
+#   windows  per (creation window, spend window | unspent): output
+#            count, satoshis, and the two height-weighted sums
+#            Σ value*create_height and Σ value*spend_height (unit:
+#            sat-heights). Those two are the primitives of every age
+#            reading: coin-age destroyed in a cell is their difference;
+#            the value-weighted mean age of the unspent at ANY height H
+#            is (H * sats - Σ value*create_height) / sats — exact, not
+#            window-resolution.
+#
+# `--price` (a blockprice table built on this same index — an external
+# input, digest declared, see docs/external-inputs.md) adds what the
+# chain cannot hold: Σ value*price(create_height) per cell, the
+# at-creation cost basis of the coins that ended in that cell, plus the
+# satoshis that actually had a price so the coverage is stated next to
+# the figure. Prices are accumulated as integer micro-units per row and
+# turned into a currency figure once per cell: the hot loop never
+# touches Decimal.
+#
+# The pass double-checks itself before sealing anything: the row count
+# must equal the manifest's outputs, the spent satoshis must re-add to
+# the manifest's input_sats (the same two-roads identity the seal
+# checks), and the unspent satoshis of the windows table must equal the
+# tip row of the bands table — the two mechanics meet on one number,
+# so a defect in either fails the run instead of shipping a wrong CSV.
+
+TIMELINE_TAG = "derived-timeline-v1"
+TIMELINE_GRID = 10_000
+BANDS_CSV = "timeline_bands.csv"
+WINDOWS_CSV = "timeline_windows.csv"
+TIMELINE_META = "timeline.meta.json"
+
+BANDS_COLUMNS = ("checkpoint", "band_floor_sats", "locks", "sats")
+WINDOWS_COLUMNS = ("create_from", "spend_from", "outputs", "sats",
+                   "sat_heights_created", "sat_heights_spent")
+WINDOWS_PRICE_COLUMNS = ("sats_priced", "cost_at_creation")
+
+# Decade edges for the balance bands: every positive balance consensus
+# can express falls below 10^16 (MAX_VALUE is 7.2e16 but the supply is
+# 2.1e15). bisect_right over this list IS the band index: 1..9 -> 0,
+# 10..99 -> 1, …
+_POW10 = tuple(10 ** k for k in range(1, 17))
+
+# Guide cell sizes, as shifts. Chosen against the real chain's densities
+# (~3,990 outputs and ~1,455 transactions per block) so a cell holds ~1
+# block boundary: the bisect then probes 0-2 candidates instead of ~20
+# levels over 957k entries — measured at +41% on the whole pass, which
+# runs twice per row and billions of times.
+_GUIDE_OUT_SHIFT = 12
+_GUIDE_TX_SHIFT = 11
+
+
+def _guide(boundaries, shift):
+    """The coarse table over an ascending boundary array: g[q] = how
+    many boundaries lie below q << shift. bisect_right(boundaries, x)
+    then equals the same bisect confined to [g[x >> shift],
+    g[(x >> shift) + 1]] — and when that cell is empty, g[x >> shift]
+    IS the answer, no probe at all. An x past the last cell can only
+    sit above every boundary (the last cell starts above boundaries[-1]
+    by construction), so callers answer len(boundaries) there."""
+    n_cells = (int(boundaries[-1]) >> shift) + 2
+    g = [0] * (n_cells + 1)
+    i, n = 0, len(boundaries)
+    for q in range(n_cells + 1):
+        threshold = q << shift
+        while i < n and boundaries[i] < threshold:
+            i += 1
+        g[q] = i
+    return g
+
+
+def _price_micro_by_height(table, index):
+    """A blockprice table flattened to one integer per height: the
+    price in micro-units, 0 where the table has none. The table's own
+    reader hands out Decimals; the timeline loop multiplies a price
+    once per ROW, so the conversion to integers happens here, once per
+    height."""
+    if table.meta["parents"]["index"]["fingerprint"] \
+            != index.manifest["fingerprint"]:
+        raise OutpointError("the price table was built on another "
+                            "index (parent fingerprint differs)")
+    micro = [0] * len(index.first_tx)
+    for i, (price, _series) in enumerate(table.rows()):
+        if price is not None and i < len(micro):
+            micro[i] = int(price * 1_000_000)
+    return micro
+
+
+def _write_csv(path, header, lines):
+    """Write header + lines atomically, digesting the bytes AS WRITTEN
+    (the blockstats rule: the digest is born with the file, never from
+    a re-read, so it cannot drift from what is on disk)."""
+    digest = hashlib.sha256()
+    tmp = path + ".tmp"
+    with open(tmp, "wb") as f:
+        head = (",".join(header) + "\n").encode()
+        f.write(head)
+        digest.update(head)
+        for line in lines:
+            data = (line + "\n").encode()
+            f.write(data)
+            digest.update(data)
+    os.replace(tmp, path)
+    return digest.hexdigest()
+
+
+def run_timeline(derived_dir, index_dir, out_dir, grid=TIMELINE_GRID,
+                 price_dir=None, out=None):
+    """One sequential pass over history.bin → the two timeline tables,
+    written under `out_dir` with a sealed meta beside them."""
+    out = out or sys.stdout
+    derived, index = _open_pair(derived_dir, index_dir)
+    price_micro = None
+    table = None
+    if price_dir is not None:
+        from nodsig import blockprice as bpm
+        try:
+            table = bpm.BlockPrice(price_dir)
+        except bpm.BlockPriceError as e:
+            raise OutpointError(f"price table: {e}")
+        price_micro = _price_micro_by_height(table, index)
+    try:
+        first_out, first_tx = index.first_out, index.first_tx
+        watermark = index.watermark
+        cps = list(range(grid, watermark + 1, grid))
+        if not cps or cps[-1] != watermark:
+            cps.append(watermark)          # the tip is always a checkpoint
+        ncp = len(cps)
+        g_out = _guide(first_out, _GUIDE_OUT_SHIFT)
+        g_tx = _guide(first_tx, _GUIDE_TX_SHIFT)
+
+        # windows: (create_window, spend_window | -1) → accumulators.
+        # bands: difference arrays over the checkpoint axis, one row of
+        # 16 decades per checkpoint boundary, integrated at the end.
+        windows = {}
+        diff_locks = [[0] * len(_POW10) for _ in range(ncp + 1)]
+        diff_sats = [[0] * len(_POW10) for _ in range(ncp + 1)]
+
+        def close_lock(deltas):
+            """Fold one lock's balance history into the difference
+            arrays: between two touched heights the balance is
+            constant, so each constant stretch is one +/- pair per
+            axis instead of one write per checkpoint."""
+            heights = sorted(deltas)
+            balance = 0
+            for k, h in enumerate(heights):
+                balance += deltas[h]
+                if balance < 0:
+                    raise OutpointError(
+                        "a lock's balance went negative during the "
+                        "fold: a spend precedes its output, so these "
+                        "artifacts are corrupt — do not use this run")
+                if balance == 0:
+                    continue               # out of every band
+                h_next = heights[k + 1] if k + 1 < len(heights) else None
+                ci = bisect_right(cps, h - 1)
+                cj = (bisect_right(cps, h_next - 1)
+                      if h_next is not None else ncp)
+                if ci >= cj:
+                    continue               # no checkpoint saw this stretch
+                b = bisect_right(_POW10, balance)
+                diff_locks[ci][b] += 1
+                diff_locks[cj][b] -= 1
+                diff_sats[ci][b] += balance
+                diff_sats[cj][b] -= balance
+
+        entry = derived.build["files"]["history"]
+        path = os.path.join(derived.dir, entry["file"])
+        hist_rec = derived.hist_rec
+        fb = int.from_bytes
+        br = bisect_right
+        n_blocks = len(first_out)
+        len_go, len_gt = len(g_out), len(g_tx)
+        rows = 0
+        locks = 0
+        cur_lock = None
+        deltas = {}
+        t0 = time.monotonic()
+        for slab in read_slabs(path, hist_rec, error=OutpointError):
+            for off in range(0, len(slab), hist_rec):
+                lock = slab[off:off + HIST_KEY]
+                out_ord = fb(slab[off + 20:off + 25], "big")
+                spender = fb(slab[off + 25:off + 30], "big")
+                value = fb(slab[off + HIST_VAL:off + hist_rec], "big")
+                # the two height lookups, guide-confined (see _guide)
+                q = out_ord >> _GUIDE_OUT_SHIFT
+                if q + 1 >= len_go:
+                    h_cre = n_blocks
+                else:
+                    lo, hi = g_out[q], g_out[q + 1]
+                    h_cre = lo if lo == hi else br(first_out, out_ord,
+                                                   lo, hi)
+                if spender == 0:
+                    cell = (h_cre // grid, -1)
+                    h_spe = 0
+                else:
+                    q = spender >> _GUIDE_TX_SHIFT
+                    if q + 1 >= len_gt:
+                        h_spe = n_blocks
+                    else:
+                        lo, hi = g_tx[q], g_tx[q + 1]
+                        h_spe = lo if lo == hi else br(first_tx, spender,
+                                                       lo, hi)
+                    cell = (h_cre // grid, h_spe // grid)
+                acc = windows.get(cell)
+                if acc is None:
+                    acc = windows[cell] = [0, 0, 0, 0, 0, 0]
+                acc[0] += 1
+                acc[1] += value
+                acc[2] += value * h_cre
+                acc[3] += value * h_spe
+                if price_micro is not None:
+                    pm = price_micro[h_cre - 1]
+                    if pm:
+                        acc[4] += value
+                        acc[5] += value * pm
+                if lock != cur_lock:
+                    if cur_lock is not None:
+                        close_lock(deltas)
+                    cur_lock, deltas = lock, {}
+                    locks += 1
+                deltas[h_cre] = deltas.get(h_cre, 0) + value
+                if h_spe:
+                    deltas[h_spe] = deltas.get(h_spe, 0) - value
+                rows += 1
+            if rows % 50_000_000 < len(slab) // hist_rec:
+                rate = rows / max(time.monotonic() - t0, 1e-9)
+                print(f"timeline @ row {rows:>13,}/"
+                      f"{entry['records']:,} | {rate:,.0f} rows/s",
+                      file=sys.stderr)
+        if cur_lock is not None:
+            close_lock(deltas)
+
+        # The pass confronts the manifest before writing a byte: these
+        # are the same identities the seal checked, re-met by different
+        # code, so a decode or lookup defect fails here instead of
+        # shipping a plausible CSV.
+        if rows != derived.build["outputs"]:
+            raise OutpointError(
+                f"the pass read {rows:,} rows but the manifest says "
+                f"{derived.build['outputs']:,} outputs — corrupt file "
+                "or truncated read; do not use this run")
+        totals = derived.build.get("totals", {})
+        spent_sats = sum(a[1] for c, a in windows.items() if c[1] >= 0)
+        spent_rows = sum(a[0] for c, a in windows.items() if c[1] >= 0)
+        unspent_sats = sum(a[1] for c, a in windows.items() if c[1] < 0)
+        if "input_sats" in totals and spent_sats != totals["input_sats"]:
+            raise OutpointError(
+                f"the pass counted {spent_sats:,} spent sats but the "
+                f"manifest committed {totals['input_sats']:,} — the two "
+                "roads MUST meet; do not use this run")
+        if "distinct_locks" in totals and locks != totals["distinct_locks"]:
+            raise OutpointError(
+                f"the pass saw {locks:,} distinct locks, the manifest "
+                f"{totals['distinct_locks']:,} — the file is not sorted "
+                "the way the format promises")
+
+        # Integrate the difference arrays into the bands table, and let
+        # the two mechanics meet: the tip row must re-add to the
+        # windows' unspent satoshis, or one of the folds is wrong.
+        bands_lines = []
+        tip_sats = 0
+        run_l = [0] * len(_POW10)
+        run_s = [0] * len(_POW10)
+        for ci in range(ncp):
+            for b in range(len(_POW10)):
+                run_l[b] += diff_locks[ci][b]
+                run_s[b] += diff_sats[ci][b]
+                if run_l[b] or run_s[b]:
+                    floor = 1 if b == 0 else _POW10[b - 1]
+                    bands_lines.append(f"{cps[ci]},{floor},"
+                                       f"{run_l[b]},{run_s[b]}")
+            if ci == ncp - 1:
+                tip_sats = sum(run_s)
+        if tip_sats != unspent_sats:
+            raise OutpointError(
+                f"bands at the tip hold {tip_sats:,} sats, the windows "
+                f"say {unspent_sats:,} unspent — the two mechanics MUST "
+                "meet; do not use this run")
+
+        from decimal import Decimal
+        windows_lines = []
+        for (cw, sw), acc in sorted(windows.items()):
+            spend_from = "" if sw < 0 else str(sw * grid)
+            line = (f"{cw * grid},{spend_from},{acc[0]},{acc[1]},"
+                    f"{acc[2]},{acc[3]}")
+            if price_micro is not None:
+                # Σ(sats * micro-units/BTC) → currency units: one
+                # Decimal division per CELL, after the pass.
+                cost = Decimal(acc[5]) / (SAT * 1_000_000)
+                line += f",{acc[4]},{cost:.6f}"
+            windows_lines.append(line)
+
+        os.makedirs(out_dir, exist_ok=True)
+        clock = WallClock("build")
+        wcols = WINDOWS_COLUMNS + (WINDOWS_PRICE_COLUMNS
+                                   if price_micro is not None else ())
+        bands_sha = _write_csv(os.path.join(out_dir, BANDS_CSV),
+                               BANDS_COLUMNS, bands_lines)
+        windows_sha = _write_csv(os.path.join(out_dir, WINDOWS_CSV),
+                                 wcols, windows_lines)
+
+        identity = make_identity(TIMELINE_TAG, 1, watermark,
+                                 [("bands", bands_sha),
+                                  ("windows", windows_sha)])
+        coinage = sum(a[3] - a[2] for c, a in windows.items()
+                      if c[1] >= 0)
+        meta = seal_manifest(TIMELINE_TAG, identity, {
+            "producer": producer(),
+            "seconds": clock.stamp(),
+            "wall": clock.wall(),
+            "parent": declared_parent(derived.format,
+                                      derived.manifest["fingerprint"]),
+            "grid": grid,
+            "checkpoints": ncp,
+            "rows": rows,
+            "totals": {"distinct_locks": locks,
+                       "spent_outputs": spent_rows,
+                       "unspent_sats": unspent_sats,
+                       "coinage_destroyed_sat_heights": coinage},
+            "price": (None if table is None else {
+                "digest": table.meta["digest"],
+                "currency": table.currency,
+                "series": table.meta["parents"]["series"]}),
+            "reconstruction": (
+                "one pass over history.bin; heights from the parent "
+                "index's block table; bands = locks and sats per "
+                "(checkpoint on the grid + the tip, balance decade); "
+                "windows = outputs, sats, sum(value*create_height) and "
+                "sum(value*spend_height) per (creation window, spend "
+                "window | unspent), windows of `grid` heights keyed by "
+                "their first height; with a price table, sats_priced "
+                "and sum(value*price(create_height)) per cell"),
+        })
+        meta_tmp = os.path.join(out_dir, TIMELINE_META + ".tmp")
+        with open(meta_tmp, "w") as f:
+            json.dump(meta, f, indent=1)
+        os.replace(meta_tmp, os.path.join(out_dir, TIMELINE_META))
+
+        print(f"{TIMELINE_TAG} written: {out_dir}", file=out)
+        print(f"  covers heights 1..{watermark:,}  ({rows:,} rows, "
+              f"{locks:,} locks, grid {grid:,}, {ncp} checkpoints)",
+              file=out)
+        print(f"  unspent   {unspent_sats / SAT:>20,.8f} BTC in "
+              f"{rows - spent_rows:,} outputs", file=out)
+        print(f"  coin-age destroyed "
+              f"{coinage / SAT:>20,.0f} BTC-heights", file=out)
+        if table is not None:
+            priced_sats = sum(a[4] for a in windows.values())
+            print(f"  at-creation cost rests on an external input: "
+                  f"blockprice digest {table.meta['digest']}; "
+                  f"{priced_sats / SAT:,.8f} BTC of "
+                  f"{(spent_sats + unspent_sats) / SAT:,.8f} had a "
+                  "price at creation", file=out)
+        print(f"fingerprint: {meta['fingerprint']}", file=out)
+        return meta["fingerprint"]
+    finally:
+        derived.close()
+        index.close()
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(
         description="History per lock, fee per transaction and "
@@ -1758,6 +2146,22 @@ def main(argv=None):
                           "the fees in its currency, block by block "
                           "(requires a price series; an external input)")
 
+    ptl = sub.add_parser("timeline", help="one pass over history.bin: "
+                                          "balance bands per checkpoint "
+                                          "and the creation/spend "
+                                          "window table")
+    ptl.add_argument("--derived", required=True)
+    ptl.add_argument("--index", required=True)
+    ptl.add_argument("--out", required=True,
+                     help="directory for the two CSVs and their meta")
+    ptl.add_argument("--grid", type=int, default=TIMELINE_GRID,
+                     help="heights per checkpoint and per window "
+                          "(default 10,000; the tip is always included)")
+    ptl.add_argument("--price", metavar="DIR",
+                     help="a blockprice table built on this index: adds "
+                          "the at-creation cost per window (an external "
+                          "input, digest declared in the meta)")
+
     args = p.parse_args(argv)
     try:
         if args.cmd == "build":
@@ -1780,6 +2184,11 @@ def main(argv=None):
                 p.error("--epoch must be at least 1 block")
             run_supply(args.derived, args.index, epoch_blocks=args.epoch,
                        csv_path=args.csv, price_dir=args.price)
+        elif args.cmd == "timeline":
+            if args.grid < 1:
+                p.error("--grid must be at least 1 block")
+            run_timeline(args.derived, args.index, args.out,
+                         grid=args.grid, price_dir=args.price)
         else:
             run_cospends(args.derived, args.index, args.target)
     except OutpointError as e:

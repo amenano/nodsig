@@ -247,6 +247,8 @@ nodsig derived history  --derived <derived> --index <index> --lock <hash160>
 nodsig derived fee      --derived <derived> --index <index> <txid>
 nodsig derived cospends --derived <derived> --index <index> <txid>:<vout>
 nodsig derived supply   --derived <derived> --index <index> [--csv series.csv]
+nodsig derived timeline --derived <derived> --index <index> --out <dir> \
+                        [--grid N] [--price <blockprice>]
 nodsig archive lookup   --archive <archive> <digest>
 nodsig nonces  groups   --nonces  <nonces>
 nodsig nonces  address  --index <index> --derived <derived> --nonces <nonces> \
@@ -280,6 +282,29 @@ in the series' currency, computed block by block and summed per epoch, with
 the blocks that had no price counted apart and the digests it rests on
 printed under the table.
 
+`derived timeline` is the statistical scan `history.bin` was laid out for:
+ONE sequential pass over every row — at the full chain's 141 GB that is
+hours, not minutes, and the summary prints its own rate — folding the file
+along its two axes into two small CSVs under `--out`, aggregates only.
+`timeline_bands.csv` holds, per checkpoint (every `--grid` heights, default
+10,000, plus the tip) and per balance decade, how many locks held a balance
+in that decade and their satoshis. `timeline_windows.csv` holds, per
+(creation window, spend window | unspent) cell, the output count, the
+satoshis, and the two weights Σ value·create_height and Σ value·spend_height
+(unit: sat·heights) — the primitives every age reading is a formula over:
+coin-age destroyed in a cell is their difference; the value-weighted mean
+age of the unspent at a height H is (H · sats − Σ value·create_height) /
+sats, exact. The pass re-meets the manifest's identities before writing
+(row count, spent satoshis, distinct locks) and the two tables must agree
+on the unspent satoshis at the tip, so a defect fails the run instead of
+shipping a plausible CSV. The meta beside the CSVs declares the parent
+derivatives fingerprint and, with `--price <blockprice>` (section 6b), the
+price table's digest; the price adds two columns per cell — the satoshis
+that had a price at creation, and Σ value·price(create_height), the
+at-creation cost basis of the coins that ended in that cell. A lock is an
+identical scriptPubKey, not a wallet and not a person; the bands say
+nothing about who holds what, only how balances distribute.
+
 Everything above is a local lookup except `nonces address`, which fetches the
 few blocks the index names, by height, from your own node.
 
@@ -303,7 +328,9 @@ nodsig price daily  --blockprice <blockprice> --index <index> [--csv daily.csv]
 ```
 
 `derived supply --price <blockprice>` is the first consumer: the fees of
-each epoch in the series' currency, block by block.
+each epoch in the series' currency, block by block. `derived timeline
+--price <blockprice>` is the second: the at-creation cost basis per
+(creation, spend) window, one integer multiply per row.
 
 `price build` reads the index's block table and the series, and takes
 seconds; `--series` repeats, finest first, and the table records which
@@ -496,6 +523,7 @@ they read, time or explain something you already have.
 | `derived fee` | what a transaction paid | 6 |
 | `derived cospends` | what was spent together with an outpoint | 6 |
 | `derived supply` | coinbase <= subsidy + fees checked on every block; fees, subsidy and coinbase per epoch; `--price` adds them in a currency | 6 |
+| `derived timeline` | one pass over history.bin: balance bands per checkpoint, and outputs/sats/age weights per (creation, spend) window; `--price` adds the at-creation cost | 6 |
 | `firstspend build` | when each lock was first spent from, ordered by time | 4 |
 | `firstspend rewind` | back to a height already covered | rewind |
 | `firstspend verify` | re-read it against its manifest, and confirm its parent | 5 |
