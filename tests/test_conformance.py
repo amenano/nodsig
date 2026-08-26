@@ -215,6 +215,9 @@ DOCUMENTED_ELSEWHERE = {
     "check-report-v1": "historical: superseded by v2",
     "address-book-v3": "forward reference: what a breaking change would be called",
     "check-report-v3": "forward reference: same",
+    "derived-timeline-v1": "derivatives.TIMELINE_TAG: the sealed meta "
+                           "`derived timeline` writes beside its two CSVs "
+                           "(the module's FORMAT_TAG names the record files)",
 }
 
 

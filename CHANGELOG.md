@@ -21,7 +21,7 @@ contract, the **CLI** is convenience, and `reveal-archive-v2` inside a tool
 numbered 1.3.0 is not a discrepancy. Artifacts are identified by their
 fingerprint, never by a tag.
 
-## Unreleased
+## 1.9.0 — the timeline: the scan history.bin was laid out for
 
 ### Command line
 
@@ -56,6 +56,21 @@ fingerprint, never by a tag.
   ancestry section matches parents by fingerprint, so the whole change
   is the role list; a firstspend table reported beside its derivatives
   now shows its link as confirmed.
+
+### Formats
+
+- **New: `derived-timeline-v1`** — not a record file but a sealed meta
+  over the two CSVs `derived timeline` writes, the same shape
+  `block-stats-v2` uses: the identity holds the CSVs' digests, the
+  build block declares the parent derivatives fingerprint and, when a
+  price table was given, its digest. No existing format, tag or
+  fingerprint moves.
+
+### Do your artifacts still work?
+
+- Yes, untouched: this release only adds a reader. Nothing is rebuilt,
+  no fingerprint changes, and the new command's output is reproducible
+  from any sealed derivatives + index pair you already hold.
 
 ### Documentation
 
