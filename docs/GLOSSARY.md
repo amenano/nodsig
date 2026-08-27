@@ -16,6 +16,16 @@ ordinals start at block 1.
 confirmed height an artifact covers. **Every answer is "as of the watermark"** — a
 negative means "not found *up to that height*", never an absolute claim.
 
+### checkpoint
+One word, **two jobs, told apart by context**. In a **build**, a checkpoint is
+a resume point: durable state written as the work advances, so a kill loses at
+most the stretch since the last one (`--checkpoint-every`; the reuse scan's
+`--checkpoint` directory). In a **series**, a checkpoint is a sampled height:
+the reuse curve and `derived timeline` both take one row every 10,000 blocks
+(the timeline also always includes the tip). The published CSVs carry only the
+sampled-height kind — and because the curve and the timeline sample the same
+grid, their rows join directly by height.
+
 ### lock
 The `hash160` of the **full** scriptPubKey. It identifies an **identical lock** —
 one exact locking script — **not** a wallet, and **not** a key seen under its

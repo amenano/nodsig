@@ -31,6 +31,11 @@ placeholders: every one of them is a path you choose on the command line.
 | address book (input) | `address-book-v2` | — |
 | check report (output) | `check-report-v2` | — |
 
+One sealed output is deliberately not a row above: `derived timeline` seals a
+`derived-timeline-v1` meta beside its two CSVs — the same CSV-plus-sealed-meta
+shape as block stats, but produced by the derivatives module rather than a
+module of its own, and the table maps modules to the one artifact each emits.
+
 **Reading widens; emission never does.** Where a previous format is listed, an
 artifact sealed under it still verifies and still answers questions, so what
 you downloaded keeps its value. It cannot be **extended or rewound**: both

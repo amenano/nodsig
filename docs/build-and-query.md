@@ -305,6 +305,22 @@ at-creation cost basis of the coins that ended in that cell. A lock is an
 identical scriptPubKey, not a wallet and not a person; the bands say
 nothing about who holds what, only how balances distribute.
 
+Two other artifacts meet this one, and each meeting is stated rather than
+left for a confused evening. The windows' creation totals are the value
+`blockstats` counts per block, re-added at window width: two roads from two
+artifacts (the graph, the derivatives), **expected to agree exactly** — a
+disagreement means one of the two is broken. The unspent side meets the
+**UTXO census** from your node's `dumptxoutset`, and there the two do NOT
+match, by design: `history.bin` holds one row per output ever created, so
+its unspent side also carries what the node no longer tracks — the two
+BIP30-overwritten coinbases (2 outputs, 100 BTC exactly) and provably
+unspendable outputs, which never enter the UTXO set. At height 957,301
+that reconciliation is 235,248,867 outputs and about 151 BTC. The census
+can only ever hold **less** than the timeline's unspent; a range where it
+holds more means a broken artifact. The timeline's checkpoints are the
+reuse curve's — one row every 10,000 blocks, the same grid — so the two
+CSVs join directly by height.
+
 Everything above is a local lookup except `nonces address`, which fetches the
 few blocks the index names, by height, from your own node.
 
