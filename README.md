@@ -161,6 +161,12 @@ perimeter of what any answer can mean is printed whether you asked for it or
 not. Which is the behaviour you want to see from a tool before trusting it with
 a question that matters.
 
+The next size up from trying is an afternoon:
+[`docs/quickstart.md`](docs/quickstart.md) walks two small exercises with your
+own node, a census of today's UTXO set and a complete build of the first
+200,000 blocks, every mechanism of the full build included, at a small
+fraction of its cost.
+
 Without `--stdout` the same command writes `check-results.txt` instead, and says so:
 that file lists the addresses you asked about, so it is treated as sensitive,
 created readable by its owner alone, and kept out of version control.
@@ -234,7 +240,9 @@ Five ideas, each of which shows up everywhere in the code.
 
 Everything else is a query over files, so this is the part that needs the node
 and the hours. Pick one height and use it everywhere: an artifact is defined by
-where it stopped, and pieces cut at different heights do not join.
+where it stopped, and pieces cut at different heights do not join. For a first
+contact at a fraction of these costs, the same sequence on a small early slice
+is [`docs/quickstart.md`](docs/quickstart.md).
 
 **What each step costs**, so you can decide in advance where to stop. These
 are wall times measured at height 957,301. Most rows come from one run,
