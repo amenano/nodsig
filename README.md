@@ -117,10 +117,19 @@ python3 -m nodsig                       # the map of commands
 ```
 
 If you would rather have `nodsig` on your PATH, install it from the clone with
-`pip install .`. The two forms are the same program. This README writes
-`nodsig …`; substitute `python3 -m nodsig …` if you did not install. Reading
-the code while it runs is a supported way to use this repository, which is why
-`python3 -m nodsig.<module>` also runs a single tool directly.
+`pip install .`, or skip the clone entirely and let pip build it from the
+repository:
+
+```sh
+pip install "git+https://github.com/amenano/nodsig.git@<tag>"
+```
+
+with any release tag from the [CHANGELOG](CHANGELOG.md); without `@<tag>` pip
+installs the current tip of `main`. Installed or run from the clone, it is the
+same program. This README writes `nodsig …`; substitute `python3 -m nodsig …`
+if you did not install. Reading the code while it runs is a supported way to
+use this repository, which is why `python3 -m nodsig.<module>` also runs a
+single tool directly.
 
 Now run the tool with nothing built and no node, on any address you do not mind
 typing:
