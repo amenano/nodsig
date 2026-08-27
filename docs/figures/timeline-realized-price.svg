@@ -1,0 +1,45 @@
+<svg viewBox="0 0 780 410" role="img" xmlns="http://www.w3.org/2000/svg" style="max-width:100%;height:auto;font-family:system-ui,sans-serif">
+<rect width="100%" height="100%" fill="#fdfdfc"/>
+<line x1="56" y1="340.0" x2="600" y2="340.0" stroke="#e6e6e3"/>
+<text x="48.0" y="344.0" text-anchor="end" fill="#666" font-size="11">$0.01</text>
+<line x1="56" y1="300.8" x2="600" y2="300.8" stroke="#e6e6e3"/>
+<text x="48.0" y="304.8" text-anchor="end" fill="#666" font-size="11">$0.10</text>
+<line x1="56" y1="261.5" x2="600" y2="261.5" stroke="#e6e6e3"/>
+<text x="48.0" y="265.5" text-anchor="end" fill="#666" font-size="11">$1</text>
+<line x1="56" y1="222.2" x2="600" y2="222.2" stroke="#e6e6e3"/>
+<text x="48.0" y="226.2" text-anchor="end" fill="#666" font-size="11">$10</text>
+<line x1="56" y1="183.0" x2="600" y2="183.0" stroke="#e6e6e3"/>
+<text x="48.0" y="187.0" text-anchor="end" fill="#666" font-size="11">$100</text>
+<line x1="56" y1="143.8" x2="600" y2="143.8" stroke="#e6e6e3"/>
+<text x="48.0" y="147.8" text-anchor="end" fill="#666" font-size="11">$1k</text>
+<line x1="56" y1="104.5" x2="600" y2="104.5" stroke="#e6e6e3"/>
+<text x="48.0" y="108.5" text-anchor="end" fill="#666" font-size="11">$10k</text>
+<line x1="56" y1="65.2" x2="600" y2="65.2" stroke="#e6e6e3"/>
+<text x="48.0" y="69.2" text-anchor="end" fill="#666" font-size="11">$100k</text>
+<line x1="56" y1="26.0" x2="600" y2="26.0" stroke="#e6e6e3"/>
+<text x="48.0" y="30.0" text-anchor="end" fill="#666" font-size="11">$1M</text>
+<text x="113.3" y="356.0" text-anchor="middle" fill="#666" font-size="11">100k</text>
+<text x="170.5" y="356.0" text-anchor="middle" fill="#666" font-size="11">200k</text>
+<text x="227.8" y="356.0" text-anchor="middle" fill="#666" font-size="11">300k</text>
+<text x="285.1" y="356.0" text-anchor="middle" fill="#666" font-size="11">400k</text>
+<text x="342.3" y="356.0" text-anchor="middle" fill="#666" font-size="11">500k</text>
+<text x="399.6" y="356.0" text-anchor="middle" fill="#666" font-size="11">600k</text>
+<text x="456.8" y="356.0" text-anchor="middle" fill="#666" font-size="11">700k</text>
+<text x="514.1" y="356.0" text-anchor="middle" fill="#666" font-size="11">800k</text>
+<text x="571.4" y="356.0" text-anchor="middle" fill="#666" font-size="11">900k</text>
+<text x="56.0" y="356.0" text-anchor="middle" fill="#666" font-size="11">0</text>
+<text x="600.0" y="356.0" text-anchor="middle" fill="#666" font-size="11">949k</text>
+<line x1="176.3" y1="26" x2="176.3" y2="340" stroke="#e6e6e3" stroke-dasharray="4 3"/>
+<line x1="296.5" y1="26" x2="296.5" y2="340" stroke="#e6e6e3" stroke-dasharray="4 3"/>
+<line x1="416.8" y1="26" x2="416.8" y2="340" stroke="#e6e6e3" stroke-dasharray="4 3"/>
+<line x1="537.0" y1="26" x2="537.0" y2="340" stroke="#e6e6e3" stroke-dasharray="4 3"/>
+<polyline points="96.1,311.1 101.8,308.9 107.5,277.1 113.3,282.0 119.0,263.3 124.7,253.2 130.4,215.6 136.2,225.0 141.9,246.9 147.6,235.1 153.3,234.2 159.1,234.3 164.8,225.0 170.5,218.8 176.3,218.7 182.0,208.7 187.7,176.9 193.4,180.0 199.2,183.8 204.9,179.4 210.6,157.9 216.3,146.6 222.1,151.5 227.8,157.1 233.5,151.8 239.2,156.3 245.0,159.4 250.7,168.5 256.4,167.5 262.1,168.9 267.9,166.6 273.6,165.7 279.3,157.1 285.1,158.4 290.8,157.3 296.5,151.0 302.2,152.3 308.0,148.7 313.7,145.6 319.4,142.0 325.1,125.8 330.9,122.7 336.6,114.1 342.3,93.6 348.0,102.7 353.8,105.8 359.5,112.2 365.2,111.1 370.9,114.5 376.7,122.1 382.4,116.5 388.1,109.1 393.9,104.5 399.6,108.4 405.3,110.0 411.0,106.7 416.8,107.1 422.5,106.0 428.2,103.4 433.9,93.5 439.7,78.8 445.4,75.7 451.1,83.7 456.8,78.8 462.6,73.9 468.3,82.5 474.0,78.4 479.7,85.7 485.5,90.1 491.2,93.1 496.9,95.8 502.7,92.4 508.4,87.6 514.1,86.2 519.8,87.6 525.6,79.3 531.3,77.7 537.0,72.6 542.7,73.7 548.5,75.1 554.2,67.4 559.9,64.8 565.6,68.5 571.4,64.5 577.1,62.4 582.8,63.5 588.5,67.6 594.3,71.7 600.0,69.7" fill="none" stroke="#eda100" stroke-width="2"/>
+<polyline points="96.1,307.3 101.8,308.6 107.5,298.4 113.3,291.1 119.0,277.0 124.7,269.0 130.4,228.5 136.2,223.3 141.9,226.9 147.6,230.2 153.3,230.3 159.1,230.9 164.8,230.3 170.5,226.4 176.3,225.1 182.0,221.1 187.7,200.3 193.4,192.1 199.2,192.0 204.9,190.0 210.6,180.6 216.3,162.5 222.1,160.3 227.8,160.6 233.5,159.2 239.2,159.2 245.0,160.1 250.7,161.7 256.4,162.3 262.1,162.9 267.9,163.1 273.6,163.7 279.3,162.3 285.1,162.1 290.8,161.5 296.5,159.3 302.2,158.9 308.0,157.8 313.7,155.5 319.4,152.9 325.1,146.4 330.9,138.2 336.6,131.5 342.3,116.2 348.0,113.8 353.8,113.8 359.5,114.2 365.2,114.3 370.9,114.9 376.7,116.7 382.4,117.1 388.1,115.7 393.9,112.9 399.6,112.6 405.3,112.9 411.0,112.2 416.8,112.6 422.5,112.1 428.2,111.0 433.9,107.7 439.7,98.6 445.4,92.0 451.1,91.8 456.8,90.5 462.6,87.9 468.3,88.1 474.0,87.7 479.7,88.4 485.5,89.8 491.2,90.3 496.9,91.4 502.7,91.5 508.4,91.1 514.1,90.9 519.8,91.0 525.6,90.2 531.3,88.9 537.0,85.2 542.7,84.0 548.5,83.5 554.2,82.2 559.9,78.7 565.6,78.0 571.4,76.7 577.1,75.0 582.8,74.0 588.5,73.7 594.3,74.2 600.0,74.3" fill="none" stroke="#2a78d6" stroke-width="2"/>
+<rect x="64" y="32" width="12" height="4" fill="#eda100"/>
+<text x="82.0" y="40.0" text-anchor="start" fill="#666" font-size="11">market price at the checkpoint</text>
+<rect x="64" y="50" width="12" height="4" fill="#2a78d6"/>
+<text x="82.0" y="58.0" text-anchor="start" fill="#666" font-size="11">realized price (cost basis of the unspent, per priced BTC)</text>
+<text x="56.0" y="370.0" text-anchor="start" fill="#666" font-size="10">USD per BTC, log scale; realized price = realized cap / unspent priced BTC, exact at the last height of each 10,000-block window; x = block height</text>
+<text x="56.0" y="384.0" text-anchor="start" fill="#666" font-size="10">the two series answer different questions: what the market asks now vs what the resting coins cost when they were created</text>
+<text x="56.0" y="398.0" text-anchor="start" fill="#666" font-size="10">external input: price series identified by digest, see the caption</text>
+</svg>

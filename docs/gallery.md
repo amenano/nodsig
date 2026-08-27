@@ -385,6 +385,143 @@ one, under half a percent in the third. None of those is an error in the
 series; they are the difference between a number computed where the chain
 puts it and a number computed afterwards.
 
+## The whole history, folded into five figures
+
+`derived timeline` is the statistical scan `history.bin` was laid out for:
+one sequential pass over every row, folded into two small CSVs of
+aggregates (balance bands per checkpoint; outputs, satoshis and age
+weights per (creation window, spend window) cell). The command and the two
+files are described in [build-and-query.md](build-and-query.md). The five
+figures below are drawn from those two CSVs at height 957,301, sealed by
+1.9.0. The first two need no price; the last three read the priced pass
+and rest on the external input the previous section stated. No number in
+any caption is typed in: each is the CSVs' own output, and where an
+independent total exists the figure is checked against it.
+
+### Balance bands over time
+
+![Stacked bands: all unspent BTC at each checkpoint, split by the size of
+the balance holding it, closing at 20.05 million BTC at the
+tip](figures/timeline-balance-bands.svg)
+
+**What you see.** All unspent BTC at each sampled height (one every 10,000
+blocks, plus the tip), split by the size of the balance sitting on each
+lock at that height. A lock holding 3 BTC contributes its 3 BTC to the
+"0.1–10 BTC" band; bands group decades of satoshis.
+
+**How it is built.** One pass over `history.bin`. A lock's balance at a
+height is what it had received minus what it had spent up to that height;
+between two events the balance is constant, so every sampled point is
+exact. The stack at the tip re-adds to 20,053,989.79 BTC, total coinbase
+minus total fees: the supply identity met from an independent road.
+
+**Not in the picture.** Clustering. A lock is one exact scriptPubKey, not
+a wallet and not a person. Distribution charts published elsewhere usually
+group addresses into entities first; this one deliberately does not, so it
+reads "how balances distribute across locks", never "how many whales". It
+also includes ~151 BTC the node no longer tracks (the two
+BIP30-overwritten coinbases and unspendable outputs).
+
+### HODL waves (unspent value by age band)
+
+![Stacked bands: the same unspent BTC split by how long each output had
+been sitting unspent, darkest for the oldest coins, axis closing at height
+949,999](figures/timeline-hodl-waves.svg)
+
+**What you see.** The same unspent BTC, split by how long the output
+holding it had been sitting unspent; "HODL waves" is the name this family
+of figures goes by elsewhere. Light bands are young coins; the darkest
+band is value that had not moved for more than 400,000 blocks (about 7.6
+years).
+
+**How it is built.** From the timeline's windows table: every output ever
+created falls in a (creation window, spend window) cell, so at the last
+height of each 10,000-block window both the unspent set and every age are
+exact. Ages are counted in blocks (52,560 blocks is about one year) and in
+whole windows, never in calendar days.
+
+**Not in the picture.** Self-transfer guessing. "Moved" means the output
+was spent: coins moving to a change output count as moved, and no
+heuristic tries to undo that (figures elsewhere often do, silently). The
+tip window is partial, so the axis ends at height 949,999; ages carry the
+10,000-block resolution. Coin-age destroyed (CDD) is not drawn either: it
+stays available as a formula over the windows CSV, not as a gallery
+figure.
+
+### Realized cap
+
+The three figures below add the one thing the chain does not hold, a
+price, and they inherit its terms. A figure derived from a price series is
+governed by that series' license, whatever the repository's: these three
+rest on the Coin Metrics community daily series (*CC BY-NC 4.0*, the same
+input, same digest, as the section above) and are published under those
+terms. To hold the same figures under terms you choose, bring your own
+series and rebuild; the result is then governed by your source's license,
+which you evaluate.
+
+```console
+nodsig price import     --from yours.csv --out series/ ...
+nodsig price build      --index index/ --out blockprice/ --series series/
+nodsig derived timeline --derived derived/ --index index/ --out out/ --price blockprice/
+```
+
+![One line on a log scale rising to 1,086 billion USD at height 949,999,
+dollar labels written out](figures/timeline-realized-cap.svg)
+
+**What you see.** At each sampled height, the sum of every unspent output
+priced at what it was worth **when the output was created, that is, when
+the coins last moved into their current resting place, not when they were
+first issued**: coins mined in 2010 but moved in 2021 count at the 2021
+price. Published elsewhere as "realized capitalization": the aggregate
+cost basis of the coins at rest, as opposed to market cap (today's price
+times supply). Log scale, labels written out. At height 949,999: 1,086
+billion USD.
+
+**How it is built.** From the priced pass of `derived timeline`: each
+output's value times the block price of its creation height, read from the
+block price table the previous section quoted, digest and all.
+
+**Not in the picture.** Unpriced coins. Outputs created before the first
+price observation (height 68,780) or after the last carry no price and are
+left out: 1.56M of the 20.03M unspent BTC at the last point. The figure
+states its own coverage instead of pretending it is total.
+
+### Realized price and market price
+
+![Two lines on one log axis: the market price and, mostly below it, the
+realized price](figures/timeline-realized-price.svg)
+
+**What you see.** Two prices in USD per BTC on one log axis, labels
+written out. Amber: the market price at each sampled height. Blue: the
+"realized price", realized cap divided by the priced unspent BTC, the
+average creation-time price of the coins at rest. Where blue sits far
+below amber, the resting coins were created much cheaper than the market
+asks today.
+
+**How it is built.** The realized side comes from the timeline's priced
+windows; the market series is the same one the price-by-height figure
+draws: same series, same digest, not a third source.
+
+**Not in the picture.** A valuation model. The two series answer different
+questions (what the market asks now vs what the resting coins cost when
+created); their ratio is a fact about the chain's history, not advice. The
+realized side averages over priced coins only.
+
+### The same two series, from height 450,000
+
+![The same two price lines from height 450,000 on, four decades of the log
+axis instead of eight](figures/timeline-realized-price-recent.svg)
+
+**What you see.** The same two series as the figure above, from height
+450,000 on (2016→): four decades instead of eight, so the recent half is
+readable at a glance.
+
+**How it is built.** Identically to the figure above: same sources, same
+resolution; only the axis window changes.
+
+**Not in the picture.** Anything the figure above does not already
+declare; this is a crop, not a new reading.
+
 ## Reproducing any of it
 
 The build sequence is in the [README](../README.md).
@@ -449,6 +586,7 @@ figures) first appeared, with the analysis they belong to, in
 [*Bitcoin and quantum computing: the data, July
 2026*](https://liberlume.com/en/bitcoin-and-quantum-computing-data-july-2026/).
 They are reproduced here under this repository's license. The two price
-figures were drawn for this page, and their terms are stated in their own
-section: they rest on a publisher's series and are published under that
-publisher's terms.
+figures and the five timeline figures were drawn for this page; those that
+rest on a publisher's series (the two price figures and the three priced
+timeline figures) are published under that publisher's terms, stated in
+their own sections.
