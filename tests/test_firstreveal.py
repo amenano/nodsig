@@ -170,6 +170,24 @@ def test_append_equals_rebuild(tmp, blocks):
           "archive, and a same-seal re-run is a no-op")
 
 
+def test_build_over_an_archive_that_does_not_extend_the_table_is_refused(
+        tmp, blocks, archive):
+    """The twin of firstspend's rule: the append fuses the re-emitted
+    rows with the previous generation, which holds only over a parent
+    that extends the old one."""
+    short = _merged_archive(tmp, blocks, "fr_short", end=3)
+    out = os.path.join(tmp, "fr_ext")
+    fp = fr.run_build(archive, out)
+    try:
+        fr.run_build(short, out)
+        fail("a build over a shorter archive was sealed")
+    except fr.FirstRevealError as e:
+        check("rebuild" in str(e), f"unexpected: {e}")
+    check(fr._load_manifest(out)["fingerprint"] == fp,
+          "a refused build must leave the seal alone")
+    print("ok  append: an archive that does not extend the table is refused")
+
+
 def test_refuses_an_unmerged_archive(tmp, archive_oneshot):
     try:
         fr.run_build(archive_oneshot, os.path.join(tmp, "x"))

@@ -550,7 +550,7 @@ def _phase_scan(graph_dir, store, end_height, flush_records,
             for value, script in outs:
                 if value > MAX_VALUE:
                     raise OutpointError(
-                        f"an output at height {height} is worth "
+                        f"an output at height {h} is worth "
                         f"{value} satoshis, past the {MAX_VALUE} a u56 "
                         "field holds. That is more than the whole "
                         "supply, so the block is not one consensus "
@@ -983,6 +983,19 @@ def _phase_seal(index_dir, state, graph_dir, clock):
                 "recipe this major does not compute and cannot be named "
                 "as a parent. Re-seal the graph first with "
                 "`graph fingerprint --reseal` (the bytes do not change).")
+        sealed_to = graph_manifest["identity"]["coverage"]["to"]
+        if sealed_to < state["last_height"]:
+            # The graph grows after `fingerprint` without invalidating
+            # its manifest; declaring that seal as the parent of an
+            # index that reaches further is an ancestry claim the seal
+            # cannot confirm, and `verify --graph` would confirm it by
+            # string equality all the same.
+            raise OutpointError(
+                f"the graph is sealed through height {sealed_to:,} but "
+                f"this index reaches {state['last_height']:,}: the seal "
+                "does not cover what the index was built from — run "
+                "`graph fingerprint` again, then `build` (the seal is "
+                "the only phase left)")
         source_fp = graph_manifest.get("fingerprint")
 
     # The parent is DECLARED, not sealed: it says where this index came
@@ -1062,6 +1075,14 @@ def run_build(graph_dir, index_dir, end_height=None,
             f"a rewind to height {state['rewind']['height']:,} was "
             "interrupted: finish it with `rewind` before building "
             "again, or this build would extend a half-cut index")
+    if end_height is not None and end_height < state["last_height"]:
+        # Not a build, and not a rewind either: the old code re-fused
+        # every generation into identical bytes and sealed the OLD
+        # coverage under a label from argv.
+        raise OutpointError(
+            f"the index already covers height {state['last_height']:,}, "
+            f"above --end {end_height:,}: to shorten it use `rewind "
+            f"--to-height {end_height}`, to grow it omit --end")
     if state["phase"] == "sealed":
         state["phase"] = "scan"          # append: scan decides if
                                          # anything new exists
@@ -1359,6 +1380,19 @@ def _rewind_plan(index_dir, graph_dir, state, store, to_height):
             "this index tolerated unresolved spends: how many of them "
             "lay below the target is not recoverable from the files, "
             "so the count would become a lie — rebuild instead")
+
+    # The graph handed to a rewind lends it one thing: the hash of the
+    # block at the target, which ends up in the state and the manifest.
+    # A graph of another chain would lend a false one and wedge the
+    # next build. Where the graph still holds the watermark, the same
+    # one-record check the append makes settles which chain it is.
+    if ge._load_state(graph_dir)["last_height"] >= state["last_height"]:
+        _verify_resume_point(graph_dir, state)
+    else:
+        print(f"  note: the graph stops below the index watermark "
+              f"{state['last_height']:,}; the hash at height "
+              f"{to_height:,} is taken from it unconfirmed",
+              file=sys.stderr)
 
     n_tx_cut, n_out_cut = _cut_at(index_dir, to_height)
 
@@ -1716,6 +1750,13 @@ def run_verify(index_dir, graph_dir=None):
                 "the given graph's manifest does not match its own "
                 "identity block: nothing can be confirmed against it "
                 "(run `graph fingerprint` on it)")
+        sealed_to = gmanifest["identity"]["coverage"]["to"]
+        if sealed_to < manifest["identity"]["coverage"]["to"]:
+            raise OutpointError(
+                f"that graph is sealed through height {sealed_to:,}, "
+                f"below this index's "
+                f"{manifest['identity']['coverage']['to']:,}: a seal that "
+                "stops short of the child cannot be its parent")
         parent = manifest["build"].get("parent")
         if parent is None or \
                 parent["fingerprint"] != gmanifest["fingerprint"]:

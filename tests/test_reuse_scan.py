@@ -823,7 +823,7 @@ def test_rest_needs_no_credential():
         try:
             rs.build_client("http://127.0.0.1:8332", False, None)
             fail("the RPC path started with no credential at all")
-        except SystemExit:
+        except rs.AuthError:
             pass
     finally:
         if saved is not None:
@@ -912,6 +912,111 @@ def test_a_definite_answer_is_not_retried_and_a_cookie_is_reread(tmp):
         server.shutdown()
     print("ok  rpc: 401 is an answer (no retry, the credential is named), "
           "a rotated cookie is re-read once, a 5xx is retried")
+
+
+def test_the_scan_confronts_its_last_block_with_the_snapshot(tmp):
+    """The locks were photographed at block 3. Scanning to 4 burns
+    locks the snapshot no longer holds and counts their coins as
+    reused: refused, unless asked for by name. Scanning to 3 is
+    aligned; stopping short is a floor and says so."""
+    blocks = build_chain()
+    base3 = os.path.join(tmp, "base3")
+    os.makedirs(base3)
+    locks = test_prepare(base3, base_hash_hex=blocks[3][0])
+    server, url = serve(blocks)
+    try:
+        try:
+            rs.run_scan(locks, url, "user:pass", 4, os.path.join(tmp, "over"),
+                        batch_size=2, checkpoint_every=2)
+            fail("a scan past the snapshot's block was accepted")
+        except rs.ScanError as e:
+            check("photographed" in str(e), f"unexpected: {e}")
+        rs.run_scan(locks, url, "user:pass", 3, os.path.join(tmp, "on"),
+                    batch_size=2, checkpoint_every=2)
+        with open(os.path.join(tmp, "on", "state.json")) as f:
+            st = json.load(f)
+        check(st["base_seen_at"] == 3 and st["base_hash"] == blocks[3][0],
+              f"the state must record where the snapshot's block was: {st}")
+        rs.run_scan(locks, url, "user:pass", 4, os.path.join(tmp, "over2"),
+                    batch_size=2, checkpoint_every=2,
+                    allow_base_mismatch=True)
+        with open(os.path.join(tmp, "over2", "state.json")) as f:
+            st = json.load(f)
+        check(st["base_seen_at"] == 3 and st["last_height"] == 4,
+              "an allowed overshoot still records the crossing")
+    finally:
+        server.shutdown()
+    print("ok  base: past the snapshot's block is refused, on it is "
+          "aligned, short of it is a floor")
+
+
+def test_stats_finishes_a_checkpoint_caught_mid_promotion(tmp, locks_dir):
+    """A kill between the state write and the promotion leaves the
+    bitmaps the state names under `.new` and a stale set under the
+    final names. The scan's resume knew which set to take; `stats`
+    read the final set alone and called it corruption, healable only
+    by a scan with a node behind it. One function decides now."""
+    server, url = serve(build_chain())
+    cp = os.path.join(tmp, "cp_midway")
+    try:
+        rs.run_scan(locks_dir, url, "user:pass", 4, cp, batch_size=2,
+                    checkpoint_every=2)
+    finally:
+        server.shutdown()
+    for t in rs.TYPE_ORDER:
+        final = os.path.join(cp, f"hits_{t}.bin")
+        os.replace(final, final + ".new")
+        with open(final, "wb") as f:
+            f.write(bytes(os.path.getsize(final + ".new")))
+    rs.run_stats(locks_dir, cp, thresholds=(0, 10))
+    check(not any(n.endswith(".new") for n in os.listdir(cp)),
+          "stats must finish the promotion it found half done")
+    print("ok  stats: a checkpoint caught mid-promotion is finished, not "
+          "called corrupt")
+
+
+def test_a_lost_curve_row_comes_back_from_the_state(tmp, locks_dir):
+    """The curve row is the last write of a checkpoint: a kill after
+    the state and before the row left a hole `curve deltas` folded
+    into the next interval without a word. The resume writes the row
+    back from the state."""
+    blocks = build_chain()
+    server, url = serve(blocks)
+    cp = os.path.join(tmp, "cp_hole")
+    try:
+        rs.run_scan(locks_dir, url, "user:pass", 4, cp, batch_size=2,
+                    checkpoint_every=2)
+        curve = os.path.join(cp, rs.CURVE_NAME)
+        with open(curve) as f:
+            lines = f.read().splitlines(keepends=True)
+        with open(curve, "w") as f:
+            f.writelines(lines[:-1])                # the row for 4 is gone
+        rs.run_scan(locks_dir, url, "user:pass", 4, cp, batch_size=2,
+                    checkpoint_every=2)             # nothing to scan
+        with open(curve) as f:
+            healed = f.read().splitlines(keepends=True)
+    finally:
+        server.shutdown()
+    check(healed == lines, f"the row must come back byte for byte:\n"
+                           f"{healed}\n{lines}")
+    print("ok  curve: a lost row is written back from the state on resume")
+
+
+def test_a_truncated_locks_manifest_is_a_named_refusal(tmp):
+    """`prepare` wrote its manifest with a plain open+dump after the
+    runs were gone; a kill there left a truncated manifest that made the
+    next scan die in a JSON traceback. Written atomically now, runs
+    removed after it, and a broken one is refused by name."""
+    locks = os.path.join(tmp, "locks_broken")
+    os.makedirs(locks)
+    with open(os.path.join(locks, rs.MANIFEST_NAME), "w") as f:
+        f.write('{"format": "locks-v1", "types": {')
+    try:
+        rs._load_manifest(locks)
+        fail("a truncated manifest was read")
+    except rs.ScanError as e:
+        check("prepare" in str(e), f"the refusal must say what to do: {e}")
+    print("ok  locks: a truncated manifest is refused with the remedy")
 
 
 def test_stats(tmp, locks_dir):
@@ -1004,6 +1109,10 @@ def main():
         test_rest_rides_out_a_transient_5xx(tmp, locks_dir)
         test_stats(tmp, locks_dir)
         test_a_definite_answer_is_not_retried_and_a_cookie_is_reread(tmp)
+        test_the_scan_confronts_its_last_block_with_the_snapshot(tmp)
+        test_stats_finishes_a_checkpoint_caught_mid_promotion(tmp, locks_dir)
+        test_a_lost_curve_row_comes_back_from_the_state(tmp, locks_dir)
+        test_a_truncated_locks_manifest_is_a_named_refusal(tmp)
     print("PASS: reuse_scan agrees with the mirror chain, resumes "
           "deterministically, and refuses bad bytes.")
 

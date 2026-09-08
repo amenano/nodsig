@@ -121,9 +121,11 @@ between this and typing the same address into a website: the website learns
 which addresses interest you even when it answers correctly.
 
 One file wants care. Without `--stdout`, `check` writes its report to
-`check-results.txt`, and that file lists **your** addresses. It is the only output
-in this project that is not safe to share, it is excluded from version control,
-and it is the reason `--stdout` is opt-in rather than the default. It is created
+`check-results.txt`, and that file lists **your** addresses. It, the `--csv`
+file and the `--json` file are the outputs in this project that are not safe to
+share; the default names (`check-results.txt`, `check-results.json`) and every
+`.csv` are excluded from version control, a `--json` path of your own is not,
+and that is the reason `--stdout` is opt-in rather than the default. It is created
 readable by its owner alone, whatever your umask says, and so is the `--csv`
 file: on a machine with more than one account the usual default would hand your
 questions to every other login.

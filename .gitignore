@@ -63,6 +63,7 @@ locks_*/
 # still holds one, or a shell history that still writes one, must not stop
 # being covered because the default moved.
 check-results.txt
+check-results.json
 verdicts.txt
 
 # `check --csv <path>` writes the same answers under a name YOU choose, so no

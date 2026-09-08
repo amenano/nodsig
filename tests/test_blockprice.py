@@ -257,6 +257,30 @@ def test_verify(built):
 # daily
 # ---------------------------------------------------------------------------
 
+def test_a_parent_is_confirmed_by_its_identity_not_its_label(built):
+    """Two equal strings prove that somebody wrote the same string
+    twice. An index manifest whose identity was altered while its
+    `fingerprint` field still reads the declared value used to pass as
+    "parents confirmed"; the identity is recomputed now."""
+    import shutil
+    tmp, index = built
+    a = series_a(tmp)
+    out = os.path.join(tmp, "bp_ident")
+    bp.run_build(index, out, [a], out=io.StringIO())
+    forged = os.path.join(tmp, "bp_forged_index")
+    shutil.copytree(index, forged)
+    path = os.path.join(forged, oi.MANIFEST_NAME)
+    man = json.load(open(path))
+    man["identity"]["coverage"]["to"] += 1        # the label stays
+    with open(path, "w") as f:
+        json.dump(man, f)
+    with pytest.raises(bp.BlockPriceError, match="recomputes"):
+        bp.run_verify(out, index_dir=forged, series_dirs=[a],
+                      out=io.StringIO())
+    with pytest.raises(bp.BlockPriceError, match="recomputes"):
+        bp.run_daily(out, forged, out=io.StringIO())
+
+
 def test_daily_kinds(built):
     tmp, index = built
     # only heights 3 and 5 priced: the series starts at T0+3 and is

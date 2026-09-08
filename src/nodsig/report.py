@@ -159,7 +159,11 @@ def machine():
         ("CPU", _cpu_model()),
         ("Cores", str(os.cpu_count() or "unknown")),
         ("Memory", _memory_gb()),
-        ("OS", f"{platform.system()} {platform.release()}"),
+        # The system, not the release: a distribution- or WSL-specific
+        # kernel string is not an identity, but it is a narrow enough
+        # fingerprint of one environment for a page meant to be pasted
+        # in public.
+        ("OS", platform.system()),
         ("Python", platform.python_version()),
         ("nodsig", __version__),
     ]

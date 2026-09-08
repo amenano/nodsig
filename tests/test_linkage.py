@@ -289,6 +289,64 @@ def test_a_broken_separation_names_what_broke_it(tmp, backend):
     print("ok  separations: a broken one names the class and the height")
 
 
+def test_a_bridge_fanout_counts_distinct_locks_and_says_when_it_is_a_floor(
+        backend, monkeypatch):
+    """`bridge_fanout` was the number of co-spent INPUTS while every
+    sentence, the contract and HUB_FANOUT spoke of LOCKS: a two-party
+    channel spent 700 times became a hub, and a three-lock bridge was
+    printed as a 480-lock one. Distinct locks now; and a walk that hit
+    the cap reports its fanout as a floor."""
+    entries = entries_for([address(H_A), address(H_C)])
+    mine = _mine(entries)
+    lock_c = hash160(ca.script_pubkey(entries[1].address))
+    bridge = hash160(ca.script_pubkey(ca.decode_address(address(H_X))))
+    real, _ = backend._spenders(bridge)           # X's real spenders
+    check(real, "the fixture must spend from X")
+    monkeypatch.setattr(lk, "HUB_FANOUT", 2)
+    monkeypatch.setattr(backend, "_co_locks", lambda _tx, _ex: [lock_c])
+    monkeypatch.setattr(backend, "_spenders",
+                        lambda _lock: (real * 5, False))
+    found = {}
+    check(backend._through_bridge(mine, 0, bridge, "aa", 2, found) == (1, 0),
+          "five spends with ONE other lock are not a hub")
+    hop = next(iter(found.values()))["hops"][0]
+    check(hop["bridge_fanout"] == 1 and not hop["bridge_fanout_is_floor"],
+          f"the fanout is the count of distinct locks: {hop}")
+    monkeypatch.setattr(backend, "_spenders",
+                        lambda _lock: (real * 2, True))
+    found = {}
+    backend._through_bridge(mine, 0, bridge, "aa", 2, found)
+    hop = next(iter(found.values()))["hops"][0]
+    check(hop["bridge_fanout_is_floor"],
+          f"a capped walk must report its fanout as a floor: {hop}")
+    print("ok  bridge: fanout counts locks, and a capped walk says floor")
+
+
+def test_a_separation_broken_through_a_bridge_carries_the_weight(tmp, backend):
+    """A and C are tied only through the bridge X. The separation used
+    to say `BROKEN by common_input at height N` and nothing else, the
+    strongest sentence of the report built on the evidence the same
+    report calls uninformative. The weight travels now, in JSON and in
+    the text."""
+    book = _book(tmp, [
+        {"label": "cold", "claim": "separate", "addresses": [address(H_A)]},
+        {"label": "hot", "claim": "separate", "addresses": [address(H_C)]}])
+    entries = entries_for(book.addresses, book=book)
+    block = lk.build(entries, backend, 2, book)
+    sep = block["declared_separations"]
+    check(len(sep) == 1 and sep[0]["held"] is False, f"A—C via X: {sep}")
+    check(sep[0]["via_bridge"] is True and sep[0]["bridge_fanout"] >= 2,
+          f"the break must carry the bridge's weight: {sep[0]}")
+    out = io.StringIO()
+    lk.render_text(block, out)
+    check("BROKEN by common_input" in out.getvalue()
+          and "through a bridge with" in out.getvalue(),
+          f"the text must say the break went through a bridge: "
+          f"{out.getvalue()}")
+    print("ok  separations: a break through a bridge names the bridge's "
+          "weight")
+
+
 def test_a_held_separation_declares_what_bounded_the_search(tmp,
                                                             backend):
     """`held: true` is never an attestation: the depth, the caps and the

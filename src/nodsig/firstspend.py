@@ -139,6 +139,10 @@ def run_build(derived_dir, out_dir, flush_records=8_000_000):
     store = _store(out_dir, state, clock=clock)
     store.clean_orphans()
 
+    if state["phase"] == "rewind":
+        raise FirstSpendError(
+            f"a rewind to height {state['coverage']['to']:,} was "
+            "interrupted: finish it with `rewind` before building again")
     if state["phase"] == "sealed":
         # An APPEND: the derivatives grew, so the pass reopens from the
         # start of history against the new parent. A first spend never
@@ -149,6 +153,18 @@ def run_build(derived_dir, out_dir, flush_records=8_000_000):
             print("nothing to do: the table already covers this "
                   "derivatives seal", file=sys.stderr)
             return _load_manifest(out_dir)["fingerprint"]
+        # The append re-emits every row and fuses it WITH the previous
+        # generation, which only holds if the new parent extends the
+        # old one: a parent that went back, or changed at the same
+        # height, leaves rows no rebuild would produce, and the seal
+        # would not notice. That is a rewind or a rebuild, not an append.
+        if coverage["to"] <= state["coverage"]["to"]:
+            raise FirstSpendError(
+                f"the derivatives given cover heights up to "
+                f"{coverage['to']:,}, not above the table's "
+                f"{state['coverage']['to']:,}: that is a rewind (run "
+                "`firstspend rewind`) or a rebuild (a fresh directory), "
+                "not an append")
         state["phase"] = "scan"
         state["hist_pos"] = 0
         state["source_fingerprint"] = None
@@ -256,6 +272,18 @@ def _seal(store, n_tx, parent_fmt, parent_fp):
     state = store.state
     entry = state["files"][LOGICAL]
     path = store.path(entry["file"])
+    # Rows are sorted by spender ordinal, so the last row carries the
+    # largest one: a single read settles that no row names a
+    # transaction the declared parent does not have.
+    if entry["records"]:
+        with open(path, "rb") as f:
+            f.seek((entry["records"] - 1) * FS_REC)
+            last = int.from_bytes(f.read(ORD), "big")
+        if last >= n_tx:
+            raise FirstSpendError(
+                f"the table names spender {last:,} but the parent has "
+                f"{n_tx:,} transactions: not sealed — the rows do not "
+                "come from this parent")
     files = {LOGICAL: {"file": entry["file"], "records": entry["records"],
                        "sha256": entry["sha256"]}}
     frm, to = state["coverage"]["from"], state["coverage"]["to"]
@@ -565,6 +593,14 @@ def run_between(out_dir, index_dir, from_h, to_h, out=sys.stdout):
             raise FirstSpendError(
                 f"--to {to_h} is past the index watermark "
                 f"{index.watermark}")
+        cov_to = manifest["identity"]["coverage"]["to"]
+        if to_h > cov_to:
+            # The table lags the index whenever the index was appended
+            # first; a window past the seal is not "0 locks", it is a
+            # range the table never held.
+            raise FirstSpendError(
+                f"--to {to_h} is past the table's coverage {cov_to}: the "
+                "table has to be rebuilt over the newer derivatives first")
         # first_tx[h-1] is the first tx ordinal of height h; the window is
         # [first_tx of from_h, first_tx of to_h+1), the second being the
         # tx count when to_h is the last height.

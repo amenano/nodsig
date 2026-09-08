@@ -701,6 +701,22 @@ def _phase_merge_inputs(store):
 # Phase 4: seal — audit, invariants, manifest
 # ---------------------------------------------------------------------------
 
+def _blocks_prefix(index, n_blocks):
+    """The first `n_blocks` records of the index's blocks table, by
+    digest: 14 bytes a height, read once at a seal and once at the
+    next append. A strict extension of the parent keeps them; a rebuild
+    below the derivatives' cursors does not, whatever its counts."""
+    entry = index.manifest["build"]["files"]["blocks"]
+    path = os.path.join(index.dir, checked_name(entry["file"], OutpointError))
+    want = n_blocks * oi.BLOCK_REC
+    digest = hashlib.sha256()
+    with open(path, "rb") as f:
+        got = f.read(want)
+    digest.update(got)
+    return {"n_blocks": n_blocks,
+            "sha256": digest.hexdigest() if len(got) == want else None}
+
+
 def _phase_seal(store, index):
     derived_dir, state = store.dir, store.state
     man = index.manifest
@@ -818,6 +834,11 @@ def _phase_seal(store, index):
     state["out_sums_records"] = 0
     state["out_sums_base"] = None
     state["source_fingerprint"] = None      # the cycle is closed
+    # What the next append must extend: the parent's blocks table, by
+    # digest, so an index rebuilt below these cursors (a reorg handled
+    # by `index rewind` + `build` without `derived rewind`) is refused
+    # instead of sealed with rows it no longer implies.
+    state["parent_prefix"] = _blocks_prefix(index, index.watermark)
     store.write_state()
     tmp_path = os.path.join(derived_dir, "out_sums.tmp.bin")
     if os.path.exists(tmp_path):
@@ -873,6 +894,15 @@ def run_build(index_dir, derived_dir, flush_records=8_000_000,
                 "interrupted: finish it with `rewind` before building "
                 "again, or this build would extend half-cut files")
         if state["phase"] == "sealed":
+            prefix = state.get("parent_prefix")
+            if prefix is not None and \
+                    _blocks_prefix(index, prefix["n_blocks"]) != prefix:
+                raise OutpointError(
+                    "the index changed below the derivatives' coverage "
+                    f"(its first {prefix['n_blocks']:,} blocks are not "
+                    "the ones these derivatives were sealed on): a "
+                    "reorg or a rebuild — run `derived rewind` first, "
+                    "or build into a fresh directory")
             state["phase"] = "scan"
         if state["source_fingerprint"] is None:
             state["source_fingerprint"] = index.manifest["fingerprint"]
@@ -890,6 +920,15 @@ def run_build(index_dir, derived_dir, flush_records=8_000_000,
                                    checkpoint_every)
                 if not grew and "history" in state["files"] \
                         and not state["runs"]:
+                    declared = _load_manifest(derived_dir)["build"]
+                    if declared["parent"]["fingerprint"] != \
+                            index.manifest["fingerprint"]:
+                        raise OutpointError(
+                            "the index has the same counts as the one "
+                            "these derivatives were sealed on but a "
+                            "different fingerprint: not the same index "
+                            "— run `derived rewind`, or build into a "
+                            "fresh directory")
                     state["phase"] = "sealed"
                     state["source_fingerprint"] = None
                     store.write_state()

@@ -128,6 +128,25 @@ def test_meta_carries_sealed_graph(tmp, graph):
     print("ok  ancestry: sealed graph's fingerprint carried in meta")
 
 
+def test_a_seal_that_does_not_cover_the_stream_is_refused_as_parent(tmp, graph):
+    """A graph keeps growing after `fingerprint`; its manifest then names
+    bytes shorter than the stream. Declaring that seal as the parent of
+    a series built from the whole stream is an ancestry claim the seal
+    cannot confirm: refused."""
+    ge.run_fingerprint(graph)
+    path = os.path.join(graph, ge.MANIFEST_NAME)
+    man = json.load(open(path))
+    man["identity"]["coverage"]["to"] -= 1
+    with open(path, "w") as f:
+        json.dump(man, f)
+    try:
+        bs.run_build(graph, os.path.join(tmp, "stale_parent.csv"))
+        fail("a seal short of the stream was declared as parent")
+    except bs.StatsError as e:
+        check("seal" in str(e), f"the refusal must name the seal: {e}")
+    print("ok  ancestry: a seal that stops short of the stream is refused")
+
+
 def test_the_recorded_digest_is_the_files_own_sha256(tmp, graph):
     """The Artifact contract says a files[].sha256 is the content digest
     of the named file, and every other artifact seals exactly that. So

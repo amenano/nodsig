@@ -173,6 +173,17 @@ def run_build(graph_dir, out_path):
                 "recipe this major does not compute and cannot be named "
                 "as a parent. Re-seal the graph first with "
                 "`graph fingerprint --reseal` (the bytes do not change).")
+        sealed_to = graph_manifest["identity"]["coverage"]["to"]
+        if sealed_to != covered:
+            # The graph keeps growing after `fingerprint`; its manifest
+            # then names bytes shorter than the stream just read, and a
+            # consumer holding the sealed graph would "confirm" a parent
+            # that does not contain the rows past the seal.
+            raise StatsError(
+                f"the graph is sealed through height {sealed_to:,} but "
+                f"its stream reaches {covered:,}: the seal does not "
+                "cover what this series was built from — run `graph "
+                "fingerprint` again, then build")
         source_fp = graph_manifest.get("fingerprint")
 
     identity = make_identity(FORMAT_TAG, 1, covered, [("csv", csv_sha256)])

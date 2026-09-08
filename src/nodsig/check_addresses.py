@@ -518,7 +518,18 @@ class CoreBalance:
         result = self._call("scantxoutset",
                             ["start",
                              [f"addr({a.text})" for a in addresses]])
-        self.height = result.get("height")
+        # `success: false` is what Core returns for a scan that was
+        # aborted (any other client can abort it), with a partial or
+        # empty list of unspents beside it. Read as an answer, every
+        # missing address became "0 sats, nothing at stake": the one
+        # reassurance this tool exists not to fake. Refused instead.
+        if result.get("success") is not True or result.get("height") is None:
+            raise AddressError(
+                "scantxoutset did not complete (success is not true, or "
+                "no height came back): the UTXO scan was aborted or the "
+                "node answered without a result — no balance can be "
+                "read from it, run the check again")
+        self.height = result["height"]
         # Keyed by scriptPubKey, not by the descriptor's text. The node
         # does NOT echo back the addr() that was asked: `desc` is what
         # the node infers from the script it matched, and for a taproot
@@ -564,7 +575,7 @@ class IndexHistory:
         self.watermark = index.watermark
 
     def source(self):
-        return Source.artifact(dvm.FORMAT_TAG, self.watermark,
+        return Source.artifact(self.derived.format, self.watermark,
                                    self.derived.manifest["fingerprint"])
 
     def describe(self):
@@ -650,7 +661,7 @@ class IndexCoInputs:
         self.watermark = index.watermark
 
     def source(self):
-        return Source.artifact(dvm.FORMAT_TAG, self.watermark,
+        return Source.artifact(self.derived.format, self.watermark,
                                    self.derived.manifest["fingerprint"])
 
     def describe(self):
@@ -908,8 +919,13 @@ def build_backends(sources, rpc_call=None):
         # One single path for credentials, the same as every other
         # command: the cookie file, or NODSIG_RPC_AUTH. Never the argv.
         # See resolve_auth in reuse_scan.py.
+        # An injected transport needs no credential: the one a run
+        # never resolves is the one it cannot leak, and a notebook with
+        # a fake node must not be asked for a cookie it will not use.
         backends["balance"] = CoreBalance(
-            get("rpc"), resolve_auth(get("cookie_file")), rpc_call)
+            get("rpc"),
+            None if rpc_call is not None else resolve_auth(get("cookie_file")),
+            rpc_call)
     if get("index") and get("derived"):
         # One Index/Derived pair shared by both capabilities: the
         # resident tables (blocks.bin, ladders) are paid for once.
@@ -1410,11 +1426,12 @@ def main(argv=None):
                         "fractions of a second, so it is an option and "
                         "not a default")
     p.add_argument("--csv", help="also write the answers as CSV")
-    p.add_argument("--json", nargs="?", const="check-results.json",
+    p.add_argument("--json", metavar="PATH",
                    help=f"also write the whole report as {cr.FORMAT_TAG} "
-                        "JSON (default: check-results.json). The text "
-                        "is for a person and the CSV is a lossy "
-                        "projection; this is the complete form")
+                        "JSON to this file (check-results.json is the "
+                        "name .gitignore covers). The text is for a "
+                        "person and the CSV is a lossy projection; this "
+                        "is the complete form")
     p.add_argument("--out", default="check-results.txt",
                    help="report file (default: check-results.txt). Results "
                         "list YOUR addresses, so they go to a local "
@@ -1423,6 +1440,18 @@ def main(argv=None):
                    help="print the report to stdout instead of a file "
                         "(fine for public fixtures, or for piping)")
     args = p.parse_args(argv)
+    if args.json:
+        # `--json ADDR1 ADDR2` used to take the first address as the
+        # output path (an optional value): the address vanished from the
+        # check and the report landed in a file named after it.
+        try:
+            decode_address(args.json)
+        except Exception:
+            pass
+        else:
+            p.error(f"--json takes a file name, and {args.json!r} decodes "
+                    "as an address: put the path first, or name it "
+                    "check-results.json")
 
     todo = list(args.addresses)
     key_notes = []

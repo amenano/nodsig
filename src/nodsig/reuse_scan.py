@@ -118,6 +118,15 @@ class ScanError(RuntimeError):
     failure after retries. The message says what and where."""
 
 
+class AuthError(ScanError):
+    """A credential that is not there: a missing or empty cookie file,
+    no NODSIG_RPC_AUTH. Raised, never exited: `resolve_auth` is library
+    code that a notebook or a service reaches through `build_backends`,
+    and an interpreter that exits from inside a library call is not an
+    error anybody can catch. The command lines map it to the one-line
+    ERROR like every other ScanError."""
+
+
 # ---------------------------------------------------------------------------
 # The lock types this scan is about
 # ---------------------------------------------------------------------------
@@ -268,6 +277,7 @@ def run_prepare(snapshot_path, out_dir, chunk_records=8_000_000):
     # hashes: heapq.merge streams them in order, so equal hashes arrive
     # adjacent and the group sum is a simple look-behind.
     manifest = {"format": "locks-v1", "base_hash": base_hash, "types": {}}
+    consumed = []
     for t in TYPE_ORDER:
         width = LOCK_TYPES[t]
         rec = width + 8
@@ -313,15 +323,18 @@ def run_prepare(snapshot_path, out_dir, chunk_records=8_000_000):
                 total_sat += last_sat
             if buf:
                 out.write(buf)
-        for p in run_files[t]:
-            os.remove(p)
+        consumed.extend(run_files[t])
         manifest["types"][t] = {"records": records, "satoshis": total_sat,
                                 "sha256": digest.hexdigest()}
         print(f"{t:<8} {records:>12,} locks  "
               f"{total_sat / SAT:>20,.8f} BTC")
 
-    with open(os.path.join(out_dir, MANIFEST_NAME), "w") as f:
-        json.dump(manifest, f, indent=1)
+    # The manifest first, the runs after: a kill during the write left
+    # a truncated manifest under its final name beside complete files,
+    # and the runs it would have taken to redo were already gone.
+    atomic_json(os.path.join(out_dir, MANIFEST_NAME), manifest)
+    for p in consumed:
+        os.remove(p)
     print(f"locks written to {out_dir} "
           f"({(time.monotonic() - start) / 60:.1f} min). "
           "The manifest pins the snapshot's base block: scan only up to "
@@ -999,9 +1012,102 @@ def fingerprint_of_bitmaps(bitmaps):
     return d.hexdigest()
 
 
+def resolve_bitmaps(checkpoint_dir, state):
+    """The bitmaps the state names, as {type: bytearray}, with the
+    checkpoint's two-phase commit finished or unwound on the way.
+
+    checkpoint() commits in two phases: bitmaps under a pending `.new`
+    name, then the state that fingerprints them, then the promotion to
+    the final names. A crash can stop between any two, so a `.new`
+    beside a state is not corruption, it is a checkpoint caught
+    mid-commit — and WHICH set the state names is what the fingerprint
+    says. The pending set is tried first: a match means the state was
+    written and only the promotion was cut short, so it is finished
+    here. A mismatch means the crash came before the state write, the
+    pending set is uncommitted work, and the promoted set must still
+    match — the leftovers go and the promoted set is the answer. Only
+    when neither set matches is the directory actually broken.
+
+    Shared by the scan's resume and by `stats`: the second used to read
+    the promoted set alone and call the first case corruption, healable
+    only by a scan with a node behind it."""
+    finals = {t: os.path.join(checkpoint_dir, f"hits_{t}.bin")
+              for t in TYPE_ORDER}
+    pendings = {t: finals[t] + ".new" for t in TYPE_ORDER}
+
+    def read(prefer_pending):
+        out = {}
+        for t in TYPE_ORDER:
+            path = (pendings[t] if prefer_pending
+                    and os.path.exists(pendings[t]) else finals[t])
+            with open(path, "rb") as f:
+                out[t] = bytearray(f.read())
+        return out
+
+    hits = read(prefer_pending=True)
+    if fingerprint_of_bitmaps(hits) == state["fingerprint"]:
+        for t in TYPE_ORDER:
+            if os.path.exists(pendings[t]):
+                durable_replace(pendings[t], finals[t])
+        return hits
+    if not any(os.path.exists(p) for p in pendings.values()):
+        raise ScanError("checkpoint fingerprint mismatch: bitmaps on "
+                        "disk do not match the recorded state")
+    hits = read(prefer_pending=False)
+    if fingerprint_of_bitmaps(hits) != state["fingerprint"]:
+        raise ScanError("checkpoint fingerprint mismatch: neither the "
+                        "committed bitmaps nor the pending ones match "
+                        "the recorded state")
+    for p in pendings.values():
+        if os.path.exists(p):
+            os.remove(p)
+    return hits
+
+
+def curve_row(height, totals, fingerprint):
+    """One line of curve.csv, from what the state carries for a
+    height: the same text whether written at the checkpoint or replayed
+    from the state on a resume."""
+    return (f"{height},"
+            + ",".join(f"{totals[t]['hits']},{totals[t]['satoshis']}"
+                       for t in TYPE_ORDER)
+            + f",{fingerprint}\n")
+
+
+def _heal_curve(curve_path, state):
+    """The curve row is the last write of a checkpoint, after the state
+    and the promotion: a kill in between leaves a state at H and no row
+    for H, and `curve deltas` would fold the hole into the next
+    interval without a word. The state carries everything the row
+    needs, so a resume writes it back."""
+    last = None
+    if os.path.exists(curve_path):
+        with open(curve_path) as f:
+            for line in f:
+                head = line.split(",", 1)[0]
+                if head.isdigit():
+                    last = int(head)
+    if last is not None and last >= state["last_height"]:
+        return
+    new_curve = not os.path.exists(curve_path)
+    with open(curve_path, "a") as f:
+        if new_curve:
+            f.write("height," + ",".join(
+                f"{t}_hits,{t}_satoshis" for t in TYPE_ORDER)
+                + ",fingerprint\n")
+        f.write(curve_row(state["last_height"], state["totals"],
+                          state["fingerprint"]))
+    print(f"  curve: row for height {state['last_height']:,} written "
+          "from the state (a checkpoint lost it)", file=sys.stderr)
+
 def _load_manifest(locks_dir):
-    with open(os.path.join(locks_dir, MANIFEST_NAME)) as f:
-        manifest = json.load(f)
+    path = os.path.join(locks_dir, MANIFEST_NAME)
+    try:
+        with open(path) as f:
+            manifest = json.load(f)
+    except (OSError, json.JSONDecodeError) as e:
+        raise ScanError(f"{path}: cannot read the locks manifest ({e}): "
+                        "run `reuse prepare` again") from None
     if manifest.get("format") != "locks-v1":
         raise ScanError("unknown locks manifest format")
     return manifest
@@ -1012,7 +1118,7 @@ def run_scan(locks_dir, rpc_url, auth, end_height, checkpoint_dir,
              batch_size=25, checkpoint_every=10_000,
              faces=True, cosigners=True, client=None, graph_dir=None,
              headers_dir=None, prefetch=True, prefetch_depth=1,
-             graph_digest_dir=None):
+             graph_digest_dir=None, allow_base_mismatch=False):
     """The run. Sequential over heights, batch by batch:
 
         fetch raw blocks → verify (header hash, prev link, Merkle,
@@ -1046,6 +1152,7 @@ def run_scan(locks_dir, rpc_url, auth, end_height, checkpoint_dir,
 
     # --- Resume, or start fresh ---
     start_height = 1                      # genesis coinbase reveals nothing
+    base_seen_at = None                   # height of the snapshot's block
     prev_hash = None                      # serialized order, None = unchecked
     if os.path.exists(state_path):
         with open(state_path) as f:
@@ -1073,50 +1180,15 @@ def run_scan(locks_dir, rpc_url, auth, end_height, checkpoint_dir,
                 "neither. Resume with the same flags, or scan into a "
                 "fresh directory")
 
-        # checkpoint() commits in two phases: bitmaps under a pending
-        # `.new` name, then the state that fingerprints them, then the
-        # promotion to the final names. A crash can stop between any
-        # two, so a `.new` beside a state is not corruption, it is a
-        # checkpoint caught mid-commit — and WHICH set the state names
-        # is what the fingerprint says. Try the pending set first: a
-        # match means the state was written and only the promotion was
-        # cut short, so finish it. A mismatch means the crash came
-        # before the state write, the pending set is uncommitted work,
-        # and the promoted set must still match — discard the leftovers
-        # and resume from it. Only when neither set matches is the
-        # directory actually broken.
-        def read_hits(prefer_pending):
-            for t in TYPE_ORDER:
-                final = os.path.join(checkpoint_dir, f"hits_{t}.bin")
-                pending = final + ".new"
-                path = (pending if prefer_pending and os.path.exists(pending)
-                        else final)
-                with open(path, "rb") as f:
-                    locks[t].hits = bytearray(f.read())
-                locks[t].recount_from_bitmap()
-
-        pendings = [os.path.join(checkpoint_dir, f"hits_{t}.bin.new")
-                    for t in TYPE_ORDER]
-        read_hits(prefer_pending=True)
-        if _fingerprint(locks) == state["fingerprint"]:
-            for pending in pendings:
-                if os.path.exists(pending):
-                    durable_replace(pending, pending[:-len(".new")])
-        else:
-            if not any(os.path.exists(p) for p in pendings):
-                raise ScanError("checkpoint fingerprint mismatch: bitmaps "
-                                "on disk do not match the recorded state")
-            read_hits(prefer_pending=False)
-            if _fingerprint(locks) != state["fingerprint"]:
-                raise ScanError("checkpoint fingerprint mismatch: neither "
-                                "the committed bitmaps nor the pending ones "
-                                "match the recorded state")
-            for pending in pendings:
-                if os.path.exists(pending):
-                    os.remove(pending)
+        hits = resolve_bitmaps(checkpoint_dir, state)
+        for t in TYPE_ORDER:
+            locks[t].hits = hits[t]
+            locks[t].recount_from_bitmap()
         stats.update(state["stats"])
         start_height = state["last_height"] + 1
         prev_hash = bytes.fromhex(state["last_block_hash"])[::-1]
+        base_seen_at = state.get("base_seen_at")
+        _heal_curve(curve_path, state)
         print(f"resuming from height {start_height} "
               f"(fingerprint verified)", file=sys.stderr)
 
@@ -1185,6 +1257,8 @@ def run_scan(locks_dir, rpc_url, auth, end_height, checkpoint_dir,
                           "cosigners": bool(cosigners)},
             "last_height": height,
             "last_block_hash": block_hash_display,
+            "base_hash": manifest["base_hash"],
+            "base_seen_at": base_seen_at,
             "stats": stats,
             "totals": {t: {"hits": locks[t].hit_count,
                            "satoshis": locks[t].hit_sats}
@@ -1200,10 +1274,9 @@ def run_scan(locks_dir, rpc_url, auth, end_height, checkpoint_dir,
                 f.write("height," + ",".join(
                     f"{t}_hits,{t}_satoshis" for t in TYPE_ORDER)
                     + ",fingerprint\n")
-            f.write(f"{height},"
-                    + ",".join(f"{locks[t].hit_count},{locks[t].hit_sats}"
-                               for t in TYPE_ORDER)
-                    + f",{fp}\n")
+            f.write(curve_row(height, {t: {"hits": locks[t].hit_count,
+                                            "satoshis": locks[t].hit_sats}
+                                        for t in TYPE_ORDER}, fp))
         return fp
 
     # --- The loop ---
@@ -1232,6 +1305,8 @@ def run_scan(locks_dir, rpc_url, auth, end_height, checkpoint_dir,
                 raise ScanError(f"height {h}: prev_hash does not link to "
                                 f"height {h - 1} (reorg? wrong node?)")
             prev_hash = block.header.hash
+            if blockparse.hash_hex(prev_hash) == manifest["base_hash"]:
+                base_seen_at = h
             if header_emitter:
                 header_emitter.add_block(h, block)
             if h < start_height:
@@ -1273,9 +1348,33 @@ def run_scan(locks_dir, rpc_url, auth, end_height, checkpoint_dir,
                     f"~{eta_h:.1f} h left (flat-cost extrapolation) "
                     f"| {fp[:16]}…", file=sys.stderr)
 
+    # The locks were photographed at ONE block. A scan that stops short
+    # of it counts less than that moment and says so; a scan that runs
+    # PAST it burns locks the snapshot no longer holds and counts more,
+    # silently, against the one promise of this figure ("never more").
+    # The block at end_height is in hand: the comparison is one line.
+    if base_seen_at == end_height:
+        base_note = "aligned with the last block scanned"
+    elif base_seen_at is not None:
+        base_note = (f"passed at height {base_seen_at:,}: the figure "
+                     "counts spends the snapshot never saw")
+        if not allow_base_mismatch:
+            raise ScanError(
+                f"the locks were photographed at block "
+                f"{manifest['base_hash']}, height {base_seen_at:,}, and "
+                f"this scan ran to {end_height:,}: every lock spent in "
+                "between would be counted as reused coin the snapshot "
+                "no longer holds — scan to the snapshot's height, or "
+                "pass --allow-base-mismatch only if crossing two "
+                "moments is what you want")
+    else:
+        base_note = ("not reached: the figure is a floor for the "
+                     "snapshot's moment")
+
     # --- Final summary: the numbers AND the declared blind spots ---
     print(f"\n=== Reuse scan up to height {end_height} "
           f"(locks from snapshot {manifest['base_hash'][:16]}…) ===")
+    print(f"snapshot block: {base_note}")
     print(f"{'type':<8} {'locks':>13} {'burnt':>12} "
           f"{'burnt BTC':>20}")
     for t in TYPE_ORDER:
@@ -1365,16 +1464,7 @@ def _load_exposed_sats(locks_dir, checkpoint_dir):
 
     # Load the bitmaps and verify the fingerprint FIRST: fail fast,
     # before reading gigabytes of amounts off disk.
-    hits = {}
-    fp = hashlib.sha256(b"reuse-hits-v1")
-    for t in TYPE_ORDER:
-        with open(os.path.join(checkpoint_dir, f"hits_{t}.bin"), "rb") as f:
-            hits[t] = bytearray(f.read())
-        fp.update(t.encode())
-        fp.update(hashlib.sha256(bytes(hits[t])).digest())
-    if fp.hexdigest() != state["fingerprint"]:
-        raise ScanError("checkpoint fingerprint mismatch: bitmaps on disk "
-                        "do not match the recorded state")
+    hits = resolve_bitmaps(checkpoint_dir, state)
 
     exposed = {}
     for t in TYPE_ORDER:
@@ -1471,6 +1561,15 @@ def run_stats(locks_dir, checkpoint_dir, thresholds=(10, 100),
           f"(snapshot {manifest['base_hash'][:16]}…, "
           f"height ≤ {state['last_height']:,}) ===")
     print(f"fingerprint: {state['fingerprint']}")
+    if "base_seen_at" in state:
+        seen = state["base_seen_at"]
+        print("snapshot block: "
+              + ("aligned with the last block scanned"
+                 if seen == state["last_height"] else
+                 f"passed at height {seen:,}: the figure counts spends "
+                 "the snapshot never saw" if seen is not None else
+                 "not reached: the figure is a floor for the snapshot's "
+                 "moment"))
     print("a lock = one unique scriptPubKey with the total it guards "
           "(per address/script, NOT per entity)\n")
 
@@ -1601,14 +1700,14 @@ def resolve_auth(cookie_file):
         try:
             content = open(path, encoding="utf-8").read().strip()
         except OSError as e:
-            raise SystemExit(f"--cookie-file is not readable: {path}: {e}")
+            raise AuthError(f"--cookie-file is not readable: {path}: {e}")
         if not content:
-            raise SystemExit(f"--cookie-file is empty: {path}")
+            raise AuthError(f"--cookie-file is empty: {path}")
         return content
     env = os.environ.get(RPC_AUTH_ENV, "").strip()
     if env:
         return env
-    raise SystemExit(
+    raise AuthError(
         f"this command needs --cookie-file (recommended) or the "
         f"{RPC_AUTH_ENV}=user:password environment variable. Credentials "
         f"are not accepted on the command line: they would end up in the "
@@ -1668,6 +1767,11 @@ def main(argv=None):
                          "current one when the node rotates it. Without a "
                          "cookie: NODSIG_RPC_AUTH=user:password in the "
                          "environment.")
+    ps.add_argument("--allow-base-mismatch", action="store_true",
+                    help="scan PAST the snapshot's block anyway: the "
+                         "figure then counts spends the snapshot never "
+                         "saw, which is a different number (refused "
+                         "otherwise)")
     ps.add_argument("--end", type=int, required=True,
                     help="last height to scan: the snapshot's height, "
                          "so the two sides of the comparison match")
@@ -1758,6 +1862,7 @@ def main(argv=None):
                                         args.cookie_file)
             run_scan(args.locks, args.rpc, auth, args.end,
                      args.checkpoint, batch_size=args.batch,
+                     allow_base_mismatch=args.allow_base_mismatch,
                      checkpoint_every=args.checkpoint_every,
                      faces=not args.no_faces,
                      cosigners=not args.no_cosigners,

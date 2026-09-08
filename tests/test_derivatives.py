@@ -351,6 +351,31 @@ def _rewound_pair(tmp, blocks, height, tag):
     return derived, ref
 
 
+def test_an_append_is_bound_to_a_strict_extension_of_its_parent(tmp):
+    """Derivatives sealed on an index at 5, then `build` with an index
+    at 3 (the shape of an `index rewind` + `build` without `derived
+    rewind`): the old code decided "append" from the cursors alone and
+    sealed rows the new parent no longer implies. The parent's blocks
+    table travels by digest, and a parent that does not extend it is
+    refused before a byte moves."""
+    blocks, _ = derived_chain()
+    _g5, i5 = build_index(tmp, blocks, name="ext5")
+    _g3, i3 = build_index(tmp, blocks, name="ext3", end=3)
+    derived = os.path.join(tmp, "ext_derived")
+    dv.run_build(i5, derived)
+    state = json.load(open(os.path.join(derived, "state.json")))
+    check(state["parent_prefix"]["n_blocks"] == 5
+          and state["parent_prefix"]["sha256"],
+          f"the seal must record the parent's blocks table: {state}")
+    try:
+        dv.run_build(i3, derived)
+        fail("an append over a parent below the derivatives was sealed")
+    except dv.OutpointError as e:
+        check("changed below" in str(e), f"unexpected: {e}")
+    dv.run_build(i5, derived)            # the real parent: nothing to do
+    print("ok  append: bound to a strict extension of the sealed parent")
+
+
 def test_rewind_equals_rebuild(tmp):
     """rewind ≡ rebuild for the derivatives, including the rows put
     BACK to unspent: block 5's co-spend consumed two outputs created at

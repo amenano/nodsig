@@ -271,6 +271,7 @@ you looked up, and the census is aggregated by construction, so any of them can
 be published or handed to someone else without leaking what you were curious
 about.
 
-The exception is not an artifact: `check` writes `check-results.txt`, which lists the
-addresses **you** asked about. That one is yours, it is kept out of version
-control, and it is the only file in this project that should not be shared.
+The exception is not an artifact: `check` writes `check-results.txt` (and, with
+`--csv` and `--json`, two more files), which list the addresses **you** asked
+about. Those are yours, the default names are kept out of version control, and
+they are the files in this project that should not be shared.

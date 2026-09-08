@@ -174,7 +174,7 @@ class IndexLinkage:
     def source(self):
         from nodsig import derivatives as dvm
         from nodsig.capability import Source
-        return Source.artifact(dvm.FORMAT_TAG, self.watermark,
+        return Source.artifact(self.derived.format, self.watermark,
                                self.derived.manifest["fingerprint"])
 
     def describe(self):
@@ -255,15 +255,20 @@ class IndexLinkage:
         because the finding it would produce ("both of you touched an
         exchange") means nothing, and the walk would be the price of an
         exchange's neighbourhood."""
-        spenders, _truncated = self._spenders(bridge)
-        fanout = 0
+        spenders, truncated = self._spenders(bridge)
+        # Distinct LOCKS, which is the unit every sentence, the contract
+        # and HUB_FANOUT were written in: counting inputs made a
+        # two-party channel with 700 spends a "hub", and printed a
+        # 480-lock bridge for a 3-lock one.
+        distinct = set()
         reachable = []
         for tx_ord in spenders:
             others = self._co_locks(tx_ord, bridge)
-            fanout += len(others)
+            distinct.update(others)
             reachable.append((tx_ord, others))
-            if fanout > HUB_FANOUT:
+            if len(distinct) > HUB_FANOUT:
                 return 0, 1
+        fanout = len(distinct)
         for tx_ord, others in reachable:
             for other in others:
                 if other in mine and mine[other][0] != pos:
@@ -271,11 +276,13 @@ class IndexLinkage:
                         found, mine, pos, other,
                         [{"bridge_lock": bridge.hex(), "txid": txid,
                           "height": height,
-                          "bridge_fanout": fanout},
+                          "bridge_fanout": fanout,
+                          "bridge_fanout_is_floor": truncated},
                          {"bridge_lock": bridge.hex(),
                           "txid": self.index.txid_of(tx_ord).hex(),
                           "height": self.index.height_of_tx(tx_ord),
-                          "bridge_fanout": fanout}])
+                          "bridge_fanout": fanout,
+                          "bridge_fanout_is_floor": truncated}])
         return 1, 0
 
     @staticmethod
@@ -285,9 +292,16 @@ class IndexLinkage:
             return
         key = tuple(sorted((pos, other_pos)))
         prev = found.get(key)
-        if prev is not None and prev["hops"][0]["height"] <= \
-                hops[0]["height"]:
-            return
+        if prev is not None:
+            # A direct co-spend outranks any bridged path; among equals
+            # the lower height wins.
+            prev_direct = prev["hops"][0]["bridge_lock"] is None
+            direct = hops[0]["bridge_lock"] is None
+            if prev_direct and not direct:
+                return
+            if prev_direct == direct and \
+                    prev["hops"][0]["height"] <= hops[0]["height"]:
+                return
         mine_entry = next(e for _l, (p, e) in mine.items() if p == pos)
         first, second = ((mine_entry, other_entry) if pos < other_pos
                          else (other_entry, mine_entry))
@@ -362,6 +376,13 @@ def build(entries, backend, depth=1, book=None, watermark=None):
                                                 watermark)}
 
 
+def _fanout_text(item):
+    """`1,234`, or `at least 1,234` when the walk that measured it hit
+    the cap: a truncated fanout is a floor and says so."""
+    n = f"{item['bridge_fanout']:,}"
+    return f"at least {n}" if item.get("bridge_fanout_is_floor") else n
+
+
 def separations(classes, book, bounded, watermark):
     """The half of the report that needs a permission, and the
     permission is the user's claim.
@@ -385,8 +406,19 @@ def separations(classes, book, bounded, watermark):
             height = (f.get("observable", {}).get("at_height")
                       if cls == SAME_KEY
                       else f["hops"][0]["height"])
+            item = {"broken_by": cls, "at_height": height}
+            if cls == COMMON_INPUT:
+                # The weight of the evidence travels with the sentence:
+                # a direct co-spend and a two-hop path through a
+                # 900-lock bridge are not the same sentence.
+                hop = f["hops"][0]
+                item["via_bridge"] = hop["bridge_lock"] is not None
+                if item["via_bridge"]:
+                    item["bridge_fanout"] = hop["bridge_fanout"]
+                    item["bridge_fanout_is_floor"] = hop.get(
+                        "bridge_fanout_is_floor", False)
             if key not in breaks or cls == SAME_KEY:
-                breaks[key] = {"broken_by": cls, "at_height": height}
+                breaks[key] = item
 
     out = []
     for i in range(len(claimed)):
@@ -448,7 +480,7 @@ def render_text(block, out):
             hop = f["hops"][0]
             through = ("" if hop["bridge_lock"] is None
                        else f" through a bridge with "
-                            f"{hop['bridge_fanout']:,} co-spending lock(s)")
+                            f"{_fanout_text(hop)} co-spending lock(s)")
             print(f"- common input: {f['addresses'][0]} and "
                   f"{f['addresses'][1]} were spent together at height "
                   f"{hop['height']:,}{through} — {CAVEAT_COMMON_INPUT}",
@@ -477,5 +509,7 @@ def render_text(block, out):
         else:
             at = s.get("at_height")
             when = f" at height {at:,}" if at else ""
+            through = (f" through a bridge with {_fanout_text(s)} "
+                       "co-spending lock(s)" if s.get("via_bridge") else "")
             print(f"- separation {a!r}/{b!r}: BROKEN by "
-                  f"{s['broken_by']}{when}", file=out)
+                  f"{s['broken_by']}{when}{through}", file=out)

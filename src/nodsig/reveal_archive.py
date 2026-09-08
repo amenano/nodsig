@@ -1175,6 +1175,21 @@ def run_crosscheck(archive_dir, locks_dir, faces=True, cosigners=True,
                 f"heights differ: archive at {state['last_height']}, "
                 f"reuse scan at {reuse_state['last_height']} — the two "
                 "roads must be compared at the SAME height")
+        # The scan records the perimeter its bitmaps were burnt under;
+        # this read applies its own flags. Two perimeters give two
+        # fingerprints for one correct pair, and "one of the two
+        # pipelines is wrong" would be a false diagnosis.
+        was = (reuse_state.get("perimeter")
+               or {"faces": True, "cosigners": True})
+        if was != {"faces": bool(faces), "cosigners": bool(cosigners)}:
+            raise ScanError(
+                f"the scan's checkpoint was made with faces="
+                f"{'on' if was['faces'] else 'off'}, cosigners="
+                f"{'on' if was['cosigners'] else 'off'}, but this "
+                f"cross-check reads with faces={'on' if faces else 'off'}, "
+                f"cosigners={'on' if cosigners else 'off'}: the two "
+                "readings burn different locks, so their fingerprints "
+                "cannot meet — run the cross-check with the scan's flags")
         if reuse_state["fingerprint"] != fp:
             raise ScanError(
                 "CHECK FAILED: the archive-derived bitmaps do "
@@ -1273,11 +1288,15 @@ def _tiles(state):
 
 
 def _coverage_to(state, manifest):
-    """The last height the archive speaks for. The manifest is the
-    authority once a merge has sealed one; before that, the state."""
-    if manifest is not None:
-        return manifest["identity"]["coverage"]["to"]
-    return state["last_height"]
+    """The last height the archive speaks for, as the readers here walk
+    it: the sealed generation AND the pending runs, which is the state's
+    watermark whenever runs are pending. The manifest's coverage is the
+    authority only for what the manifest seals; a curve computed over
+    the runs too and labelled with the manifest's height folded every
+    revelation past that height into its last row."""
+    if state["runs"] or manifest is None:
+        return state["last_height"]
+    return manifest["identity"]["coverage"]["to"]
 
 
 def _grid(every, coverage_to):
@@ -1441,6 +1460,21 @@ def run_derive(archive_dir, locks_dir, faces=True, cosigners=True,
     # same hash, same block, same height. Deriving an archive against
     # locks from another block produces a table indistinguishable from
     # a right one, which is why a mismatch is a refusal and not a note.
+    if curve_path and not (faces and cosigners):
+        # A keys record carries ONE first_height, the minimum over every
+        # sighting whatever its provenance: under a narrowed perimeter
+        # the final table is right (membership follows the surviving
+        # bits) but every intermediate row would date a burn by a
+        # sighting the perimeter excluded. A faithful narrow curve needs
+        # one height per provenance bit, which this format does not
+        # carry; rather than print upper bounds under the name of a
+        # curve, the combination is refused.
+        raise ScanError(
+            "--curve is exact only under the full perimeter: with "
+            "--no-faces or --no-cosigners the archive's first_height "
+            "dates a burn by sightings the perimeter excludes, and the "
+            "intermediate rows would over-count — derive the table with "
+            "the narrow perimeter and the curve without it")
     base_hash = locks_manifest["base_hash"]
     tip_hash = state["last_block_hash"]
     if base_hash != tip_hash and not allow_base_mismatch:

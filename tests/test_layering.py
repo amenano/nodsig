@@ -240,3 +240,14 @@ def test_every_name_read_from_json_is_checked_before_it_is_joined():
     if offenders:
         fail("a name read from JSON is joined without checked_name:\n  "
              + "\n  ".join(offenders))
+
+
+def test_every_default_output_that_lists_addresses_is_ignored_by_git():
+    """`check` writes the addresses YOU asked about; two documents promise
+    those files stay out of version control. The promise held for the
+    text report and every CSV and not for the JSON default, whose name
+    a document itself suggests running from a clone."""
+    ignored = (ROOT / ".gitignore").read_text().splitlines()
+    for name in ("check-results.txt", "check-results.json", "*.csv"):
+        if name not in ignored:
+            fail(f".gitignore does not cover {name}")

@@ -10,9 +10,10 @@ record does not hold it. This table holds the signatures that decide.
 - **Read by** `nonces witness-verify`
 - **Built by** `nonces resolve` (needs a node: the signatures live only in
   the blocks)
-- **Parent** the census it resolved (`nonces-v3`, or the `nonces-v2` this
-  tool still reads), declared in the manifest under its own tag, never under
-  the one the building code happens to emit
+- **Parent** the census it resolved (`nonces-v3`: `resolve` refuses an
+  earlier census, whose impossible scalars the extraction no longer reads),
+  declared in the manifest under its own tag, never under the one the
+  building code happens to emit
 
 ## What one record is
 
@@ -76,9 +77,9 @@ the scalars under one prefix differ, where "they differ" only reports it.
 
 It is also the one resolution a fresh census can no longer produce.
 [`Nonces-v3`](Nonces-v3.md) refuses those values at extraction, so a v3 parent
-brings none of them through; the resolution stays because this table also
-resolves the `nonces-v2` censuses the tool still reads, and because a stranger
-auditing an older table has to be able to read what it says.
+brings none of them through, and `resolve` accepts no other parent; the
+resolution stays because tables resolved by earlier code carry it, and a
+stranger auditing one of those has to be able to read what it says.
 
 All three conditions of `exposed` are load-bearing, and each was a defect
 once. The **full `r`**: two scalars can share the census's 12-byte prefix,
@@ -108,8 +109,9 @@ published beside the others rather than left to be discovered.
 ## Appendability
 
 `resolve` is a pure read of the chain, so an interruption costs time and
-nothing else: `state.json` holds the height cursor and a re-run continues
-from it. When the census grows, the table is re-resolved: a point that was
+nothing else, and a re-run starts over: on the whole chain that is about an
+hour and a half of node reads, which is not worth one more state to carry
+the witnesses gathered so far. When the census grows, the table is re-resolved: a point that was
 a singleton can become a group, and its **first** sighting is at an old
 height, so growth is not "read the new blocks". The cost stays
 proportional to the repeated points and not to the chain.

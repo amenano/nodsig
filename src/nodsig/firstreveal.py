@@ -167,6 +167,15 @@ def run_build(archive_dir, out_dir, flush_records=8_000_000):
             print("nothing to do: the table already covers this "
                   "archive seal", file=sys.stderr)
             return _load_manifest(out_dir)["fingerprint"]
+        # Same rule as firstspend: the append fuses the re-emitted rows
+        # with the previous generation, which holds only over a parent
+        # that extends the old one.
+        if coverage["to"] <= state["coverage"]["to"]:
+            raise FirstRevealError(
+                f"the archive given covers heights up to "
+                f"{coverage['to']:,}, not above the table's "
+                f"{state['coverage']['to']:,}: that is a rebuild (a fresh "
+                "directory), not an append")
         state["phase"] = "scan"
         state["keys_pos"] = 0
         state["source_fingerprint"] = None

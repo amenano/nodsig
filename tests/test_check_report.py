@@ -56,7 +56,7 @@ def _balance(addresses_with_coins):
     and the tip it reports is far ahead of the test archive — which is
     exactly the perimeter gap `crossed` exists to declare."""
     def fake_rpc(_method, _params):
-        return {"height": NODE_HEIGHT,
+        return {"success": True, "height": NODE_HEIGHT,
                 "unspents": [{"desc": f"addr({a})#aa",
                               "scriptPubKey": ca.script_pubkey(
                                   ca.decode_address(a)).hex(),

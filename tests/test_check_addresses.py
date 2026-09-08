@@ -331,6 +331,80 @@ def test_undetermined_without_backend():
           "a false answer")
 
 
+def test_an_aborted_utxo_scan_is_not_a_balance():
+    """`scantxoutset` answers `success: false` for a scan that was
+    aborted, with whatever partial list it had. Read as an answer, every
+    address not in that list became "0 sats, nothing at stake". Refused."""
+    keyed = segwit_addr(bytes(range(20)), 0)
+    bal = ca.CoreBalance("http://x", "u:p", rpc_call=lambda m, p: {
+        "success": False, "height": 900000, "unspents": []})
+    try:
+        bal.scan([ca.decode_address(keyed)])
+        fail("an aborted scan was read as a balance of zero")
+    except ca.AddressError as e:
+        check("did not complete" in str(e), f"unexpected: {e}")
+    bal = ca.CoreBalance("http://x", "u:p", rpc_call=lambda m, p: {
+        "success": True, "unspents": []})
+    try:
+        bal.scan([ca.decode_address(keyed)])
+        fail("a scan without a height was read as a live source")
+    except ca.AddressError:
+        pass
+    print("ok  balance: an incomplete UTXO scan is refused, never zero")
+
+
+def test_a_source_names_the_artifact_it_read_not_the_code_constant():
+    """The derived artifact read may be a legacy v2 while the code emits
+    v3; the Source's id used to be the code's constant, so the report
+    named a v3 with a v2 fingerprint that no v3 ever carried."""
+    from types import SimpleNamespace as NS
+    from nodsig import linkage as lk
+    derived = NS(manifest={"format": "outpoint-derived-v2",
+                           "fingerprint": "deadbeef"},
+                 format="outpoint-derived-v2")
+    index = NS(watermark=100, manifest={"fingerprint": "idx"})
+    ids = {ca.IndexHistory(index, derived).source().id,
+           ca.IndexCoInputs(index, derived).source().id,
+           lk.IndexLinkage(index, derived).source().id}
+    check(ids == {"outpoint-derived-v2"},
+          f"the source must carry the artifact's own tag: {ids}")
+    print("ok  source: the id is the tag of the artifact read")
+
+
+def test_json_takes_a_path_and_never_an_address(tmp):
+    """`--json ADDR1 ADDR2` used to take the first address as the output
+    path: the address vanished from the check and the report landed in a
+    file named after it."""
+    a1 = segwit_addr(bytes(range(20)), 0)
+    a2 = segwit_addr(bytes(range(20, 40)), 0)
+    try:
+        ca.main(["--json", a1, a2, "--stdout"])
+        fail("an address was taken as the --json path")
+    except SystemExit as e:
+        check(e.code == 2, f"a usage error, got {e.code}")
+    print("ok  --json: a value that decodes as an address is refused")
+
+
+def test_an_injected_transport_needs_no_credential():
+    """`build_backends` asked for a cookie even when the RPC callable
+    was injected, and `resolve_auth` exited the interpreter from
+    library code. A notebook with a fake node gets a backend now, and a
+    missing credential is an exception it can catch."""
+    from nodsig import reuse_scan as rs
+    backends = ca.build_backends({"rpc": "http://x"},
+                                 rpc_call=lambda m, p: {"success": True,
+                                                        "height": 1,
+                                                        "unspents": []})
+    check("balance" in backends, "the injected transport must be plugged")
+    try:
+        rs.resolve_auth("/no/such/cookie")
+        fail("a missing cookie did not raise")
+    except rs.AuthError:
+        pass
+    print("ok  backends: no credential for an injected transport, and a "
+          "missing one raises")
+
+
 def test_balance_injected():
     """Balance rides an injected rpc_call: the node is never contacted,
     the 'nothing at stake' path is exercised, and one scantxoutset
@@ -344,7 +418,7 @@ def test_balance_injected():
         check(method == "scantxoutset", f"unexpected RPC {method}")
         descs = params[1]
         check(len(descs) == 2, "balance should scan the list in ONE call")
-        return {"height": 800000,
+        return {"success": True, "height": 800000,
                 "unspents": [{"desc": f"addr({keyed})#aa",
                               "scriptPubKey": ca.script_pubkey(
                                   ca.decode_address(keyed)).hex(),
@@ -382,7 +456,7 @@ def test_balance_matches_a_taproot_output_by_its_script():
     spk = ca.script_pubkey(tr).hex()
 
     def fake_rpc(_method, _params):
-        return {"height": 900000,
+        return {"success": True, "height": 900000,
                 "unspents": [{"desc": f"rawtr({bytes(range(32)).hex()})#ck",
                               "scriptPubKey": spk,
                               "amount": 0.25}]}
@@ -408,7 +482,7 @@ def test_balance_ignores_an_unspent_it_did_not_ask_for():
         ca.decode_address(segwit_addr(bytes(range(20, 40)), 0))).hex()
 
     def fake_rpc(_method, _params):
-        return {"height": 900000,
+        return {"success": True, "height": 900000,
                 "unspents": [{"desc": "addr(?)#ck",
                               "scriptPubKey": other, "amount": 9.0}]}
 

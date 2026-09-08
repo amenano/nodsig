@@ -46,7 +46,7 @@ from decimal import Decimal, ROUND_HALF_EVEN
 
 from nodsig import outpoint_index as oi
 from nodsig import priceseries as ps
-from nodsig.artifact import producer
+from nodsig.artifact import identity_fingerprint, producer
 from nodsig.recio import atomic_json, sha_file, checked_name, durable_replace
 
 FORMAT_TAG = "blockprice-v1"
@@ -294,9 +294,8 @@ def run_verify(bp_dir, index_dir=None, series_dirs=(), out=None):
                               "--series, in the declared order")
     index = _open_index(index_dir)
     try:
-        if index.manifest["fingerprint"] != declared["index"]["fingerprint"]:
-            raise BlockPriceError("the index given is not the declared "
-                                  "parent (fingerprint differs)")
+        _confirm_index(index, declared["index"]["fingerprint"],
+                       "the declared parent")
         times = list(index.times)
     finally:
         index.close()
@@ -317,8 +316,8 @@ def run_verify(bp_dir, index_dir=None, series_dirs=(), out=None):
                     if data[i * REC:(i + 1) * REC] != bp.data[i * REC:(i + 1) * REC])
         raise BlockPriceError(f"recomputed table differs, the first at "
                               f"height {diff + 1}")
-    print("  parents confirmed: index fingerprint and series digests "
-          "match, and the table recomputes byte for byte", file=out)
+    print("  parents confirmed: index identity recomputed and series "
+          "digests match, and the table recomputes byte for byte", file=out)
 
 
 # ---------------------------------------------------------------------------
@@ -403,16 +402,37 @@ def write_daily_csv(rows, meta, out, date_from=None, date_to=None):
         out.write(",".join(fmt(x) for x in r) + "\n")
 
 
+def _confirm_index(index, declared_fp, what):
+    """The declared parent, confirmed by recomputing the index's identity
+    rather than by reading the `fingerprint` field of its manifest: two
+    equal strings prove that somebody wrote the same string twice. The
+    identity's blocks digest must also be the one `Index()` just
+    verified on disk, or the identity describes other bytes."""
+    manifest = index.manifest
+    recomputed = identity_fingerprint(manifest["identity"])
+    if recomputed != manifest["fingerprint"]:
+        raise BlockPriceError(
+            f"the index's manifest says fingerprint {manifest['fingerprint']}"
+            f" but its identity recomputes to {recomputed}: the manifest "
+            "was edited or copied from another index")
+    verified = manifest["build"]["files"]["blocks"]["sha256"]
+    named = {f["name"]: f["sha256"] for f in manifest["identity"]["files"]}
+    if named.get("blocks") != verified:
+        raise BlockPriceError("the index identity names a blocks digest "
+                              "other than the one its file carries")
+    if recomputed != declared_fp:
+        raise BlockPriceError(f"the index given is not {what} "
+                              "(fingerprint differs)")
+
+
 def run_daily(bp_dir, index_dir, csv_path=None, date_from=None,
               date_to=None, out=None):
     out = out or sys.stdout
     bp = BlockPrice(bp_dir)
     index = _open_index(index_dir)
     try:
-        if index.manifest["fingerprint"] != \
-                bp.meta["parents"]["index"]["fingerprint"]:
-            raise BlockPriceError("the index given is not the table's "
-                                  "declared parent (fingerprint differs)")
+        _confirm_index(index, bp.meta["parents"]["index"]["fingerprint"],
+                       "the table's declared parent")
         times = list(index.times)
     finally:
         index.close()

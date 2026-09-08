@@ -170,6 +170,36 @@ def test_every_resolution_has_words_to_go_with_it():
 # End to end, over the address chain: build, read, verify
 # ---------------------------------------------------------------------------
 
+def test_a_signature_in_a_taproot_slot_is_never_read_as_the_key():
+    """A 65-byte BIP 340 signature whose R.x happens to start with
+    0x02, 0x03 or 0x04 has the shape of a 65-byte key. For a key-path
+    spend the witness is that one item, and the old rule attributed
+    hash160(signature) as the signer's key; the table then filed two
+    such sightings as `distinct-keys` where `undetermined` was the
+    truth (the key lives in the output, not the input)."""
+    from nodsig import blockparse as bp
+    from nodsig.hashing import hash160
+    r = bytes([0x02]) + bytes(range(1, 32))
+    sig = r + bytes(range(32)) + bytes([0x01])          # R.x | s | sighash
+    wanted = {r[:nn.R_PREFIX]}
+    tx_in = bp.TxIn(bytes(32), 0, b"", 0xFFFFFFFF, [sig])
+    rows = wt.signatures_of_input(tx_in, wanted, nn.new_stats())
+    assert len(rows) == 1, rows
+    _r, key, _s, flags = rows[0]
+    assert flags & wt.FLAG_KEY_ABSENT and key == b"", \
+        "a key-path spend carries no key: the signature is not one"
+    assert flags & wt.FLAG_SCHNORR
+    # And a key pushed where a key can be pushed is still attributed.
+    key33 = bytes([0x02]) + bytes(range(32))
+    s_val = bytes(range(1, 33))
+    der = (bytes([0x30, 4 + 32 + 32, 0x02, 32]) + r + bytes([0x02, 32])
+           + s_val + bytes([0x01]))
+    tx_in = bp.TxIn(bytes(32), 0, b"", 0xFFFFFFFF, [der, key33])
+    rows = wt.signatures_of_input(tx_in, wanted, nn.new_stats())
+    assert rows and rows[0][1] == hash160(key33), \
+        "a key beside a DER signature in a P2WPKH witness is the key"
+
+
 @pytest.fixture
 def resolved(tmp):
     """A census and the witness table resolved from it, over the chain of
@@ -197,6 +227,53 @@ def resolved(tmp):
     finally:
         server.shutdown()
     return census, table, fp
+
+
+def test_resolve_refuses_a_census_with_pending_runs(tmp):
+    """The groups would come from the sealed file AND the runs, the
+    heights to re-read from the sealed file alone: an exposure that
+    straddled the last merge came out as `one-signature`. Refused
+    until `nonces merge` has run, like `nonces rewind` already did."""
+    import test_nonces as tn
+    import test_reuse_scan as trs
+    from nodsig import reveal_archive as ra
+    blocks, _ = tn.address_chain()
+    census = os.path.join(tmp, "census_pending")
+    archive = os.path.join(tmp, "archive_pending")
+    server, url = trs.serve(blocks)
+    try:
+        ra.run_scan(url, "user:pass", 2, archive, batch_size=2,
+                    checkpoint_every=2, nonces_dir=census)
+        nn.run_merge(census)
+        ra.run_scan(url, "user:pass", 5, archive, batch_size=2,
+                    checkpoint_every=2, nonces_dir=census)
+        assert nn._load_state(census)["runs"], "the fixture needs runs"
+        client = trs.rs.RpcClient(url, "user:pass")
+        with pytest.raises(wt.WitnessError, match="pending run"):
+            wt.run_resolve(census, os.path.join(tmp, "witness_pending"),
+                           client, out=io.StringIO())
+    finally:
+        server.shutdown()
+
+
+def test_resolve_refuses_a_census_of_an_earlier_format(resolved, tmp):
+    """A v2 census names sightings whose r is 0 or >= n, which the
+    extraction since v3 refuses: re-reading them either aborts or drops
+    them, and the table would say something the census does not."""
+    import json
+    import shutil
+    census, _table, _fp = resolved
+    old = os.path.join(tmp, "census_v2")
+    shutil.copytree(census, old)
+    for name in (nn.MANIFEST_NAME, "state.json"):
+        path = os.path.join(old, name)
+        doc = json.load(open(path))
+        doc["format"] = "nonces-v2"
+        with open(path, "w") as f:
+            json.dump(doc, f)
+    with pytest.raises(wt.WitnessError, match="nonces-v3"):
+        wt.run_resolve(old, os.path.join(tmp, "witness_v2"), None,
+                       out=io.StringIO())
 
 
 def test_the_chain_gives_every_resolution_a_case(resolved):

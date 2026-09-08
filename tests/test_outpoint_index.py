@@ -604,6 +604,115 @@ def test_the_join_reads_the_resolver_to_its_end():
     print("ok  drain: the join reads the resolver past the last spend")
 
 
+def test_end_below_the_watermark_is_refused(built):
+    """`build --end 2` on an index sealed at 4 used to re-fuse every
+    generation into identical bytes and seal the old coverage under
+    the label from argv: hours on the real chain for nothing. It is a
+    rewind, and is refused with that name."""
+    tmp, graph, index, _ = built
+    before = json.load(open(os.path.join(index, oi.MANIFEST_NAME)))
+    try:
+        oi.run_build(graph, index, end_height=2)
+        fail("--end below the watermark was accepted")
+    except oi.OutpointError as e:
+        check("rewind" in str(e), f"the refusal must point at rewind: {e}")
+    after = json.load(open(os.path.join(index, oi.MANIFEST_NAME)))
+    check(before == after, "a refused build must leave the seal alone")
+    print("ok  build: --end below the watermark is refused, nothing moves")
+
+
+def test_a_graph_seal_short_of_the_index_is_no_parent(built):
+    """The graph keeps growing after `fingerprint`; its manifest then
+    covers less than the index built from its stream. Declaring it the
+    parent, or confirming it with `verify --graph`, was done by string
+    equality of two fingerprints. Both compare coverages now."""
+    from nodsig.artifact import identity_fingerprint
+    tmp, graph, _index, _ = built
+    oi.ge.run_fingerprint(graph)
+    index = os.path.join(tmp, "index_sealed_parent")
+    oi.run_build(graph, index)
+    gpath = os.path.join(graph, oi.ge.MANIFEST_NAME)
+    saved = open(gpath).read()
+    gman = json.loads(saved)
+    gman["identity"]["coverage"]["to"] -= 1          # a seal left behind
+    gman["fingerprint"] = identity_fingerprint(gman["identity"])
+    with open(gpath, "w") as f:
+        json.dump(gman, f)
+    try:
+        oi.run_verify(index, graph_dir=graph)
+        fail("a seal short of the index was confirmed as its parent")
+    except oi.OutpointError as e:
+        check("stops short" in str(e), f"unexpected: {e}")
+    try:
+        oi.run_build(graph, os.path.join(tmp, "index_stale_parent"))
+        fail("an index was sealed against a graph seal short of it")
+    except oi.OutpointError as e:
+        check("does not cover" in str(e), f"unexpected: {e}")
+    with open(gpath, "w") as f:
+        f.write(saved)
+    oi.run_verify(index, graph_dir=graph)
+    print("ok  ancestry: a graph seal short of the index is refused at "
+          "the seal and by verify")
+
+
+def test_rewind_confronts_the_graph_with_the_index(built):
+    """A rewind takes the hash at the target from whichever graph it is
+    handed. A graph of another chain lends a false one, sealed into the
+    manifest, and the next build refuses the right graph: wedged. The
+    same one-record check the append makes is made here."""
+    import test_reuse_scan as trs
+    tmp, _graph, index, _ = built
+    other = emit_graph(tmp, trs.build_chain(), "other_chain_graph")
+    try:
+        oi.run_rewind(index, other, 2)
+        fail("a rewind accepted a graph of another chain")
+    except oi.OutpointError as e:
+        check("same chain" in str(e), f"unexpected: {e}")
+    check(json.load(open(os.path.join(index, "state.json")))["phase"]
+          == "sealed", "a refused rewind must leave the index whole")
+    print("ok  rewind: a graph of another chain is refused before a "
+          "byte moves")
+
+
+def test_an_impossible_output_value_is_refused_by_name(tmp, monkeypatch):
+    """The refusal for a value past what a u56 holds named a variable
+    the loop never bound: it died with NameError instead of the
+    designed OutpointError."""
+    blocks, _ = index_chain()
+    graph = emit_graph(tmp, blocks, "huge_value_graph")
+    monkeypatch.setattr(oi, "MAX_VALUE", 0)
+    try:
+        oi.run_build(graph, os.path.join(tmp, "huge_value_index"))
+        fail("a value past MAX_VALUE was accepted")
+    except oi.OutpointError as e:
+        check("height 1" in str(e), f"the refusal must name the height: {e}")
+    print("ok  refusal: an impossible output value fails by design")
+
+
+def test_verify_tells_grown_from_corrupted_before_hashing(built):
+    """A sealed file that grew (appended, not re-sealed) used to be
+    hashed whole and then called "corrupted since sealing". The size
+    is compared first: grown is grown, and the remedy is named."""
+    tmp, _graph, index, _ = built
+    man = json.load(open(os.path.join(index, oi.MANIFEST_NAME)))
+    path = os.path.join(index, man["build"]["files"]["txid_index"]["file"])
+    with open(path, "ab") as f:
+        f.write(b"\x00" * 40)
+    try:
+        oi.run_verify(index)
+        fail("a grown file passed verify")
+    except oi.OutpointError as e:
+        check("grown since sealing" in str(e), f"unexpected: {e}")
+    with open(path, "r+b") as f:
+        f.truncate(os.path.getsize(path) - 80)
+    try:
+        oi.run_verify(index)
+        fail("a truncated file passed verify")
+    except oi.OutpointError as e:
+        check("truncated" in str(e), f"unexpected: {e}")
+    print("ok  verify: grown and truncated are told apart before the hash")
+
+
 def test_lookup(built):
     _, _, index, txids = built
     buf = io.StringIO()
@@ -1042,7 +1151,8 @@ def test_verify_confirms_the_parent_it_was_handed(built):
         oi.run_verify(index, graph_dir=stranger)
         fail("verify confirmed a parent against a stranger graph")
     except oi.OutpointError as e:
-        check("not this index's parent" in str(e),
+        check("not this index's parent" in str(e)
+              or "stops short" in str(e),
               f"stranger graph refused as: {e}")
 
     # A parent whose manifest no longer matches its own identity block

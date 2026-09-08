@@ -1499,6 +1499,8 @@ def test_the_census_names_sightings_that_are_not_this_lock_s(owner_setup):
     assert "one signature only" in text
     assert f"census: {point_of(N_REUSED).hex()} was also published 2 time" \
         in text
+    assert "through height 5 by signatures" in text and \
+        "census through height 5" in text
     assert "does not hand either one over" in text
 
     # The script lock's nonce is its own alone: the line must stay silent
@@ -1508,6 +1510,52 @@ def test_the_census_names_sightings_that_are_not_this_lock_s(owner_setup):
     # And with no census plugged in, no such line either way.
     assert "census:" not in _ask(owner_setup, ADDR_ONCE,
                                  with_census=False)[0]
+
+
+def test_the_census_line_counts_only_what_the_index_covers(tmp):
+    """The census reaches height 5, the index only 3: the strangers who
+    published the KEY lock's nonce did so at heights 4 and 5, and the
+    old line counted them (and would have counted the lock's own later
+    spends) as "not this lock's" against an index that stops at 3.
+    Both sides are now cut at the lower watermark, printed on the lock
+    line, and the census line stays silent."""
+    blocks, _txids = address_chain()
+    graph = toi.emit_graph(tmp, blocks, "short_graph")
+    index = os.path.join(tmp, "short_index")
+    oi.run_build(graph, index, end_height=3)
+    derived = os.path.join(tmp, "short_derived")
+    dv.run_build(index, derived)
+    census = os.path.join(tmp, "short_nonces")
+    server, url = trs.serve(blocks)
+    try:
+        ra.run_scan(url, "user:pass", 5, os.path.join(tmp, "short_archive"),
+                    batch_size=2, checkpoint_every=2, nonces_dir=census)
+        nn.run_merge(census)
+        client = trs.rs.RpcClient(url, "user:pass")
+        sink = io.StringIO()
+        nn.run_address([ADDR_KEY], index, derived, client,
+                       nonces_dir=census, out=sink)
+    finally:
+        server.shutdown()
+    text = sink.getvalue()
+    assert "index through height 3, census through height 5" in text
+    assert f"REPEATED NONCE {point_of(N_REUSED).hex()}" in text
+    assert "census:" not in text, text
+
+
+def test_merge_sweeps_what_the_state_does_not_name(owner_setup):
+    """Index, derivatives and the two tables sweep crash leftovers on
+    every command; the census did so only in the scan, and a kill
+    between a merge's state write and its deletions left 55-60 GB of
+    a superseded generation beside the new one, for good."""
+    _index, _derived, census, _client, _server = owner_setup
+    ghost = os.path.join(census, "nonces_g0099.bin")
+    stale = os.path.join(census, nn.RUNS_DIR, "run_ghost.bin")
+    for path in (ghost, stale):
+        with open(path, "wb") as f:
+            f.write(b"x")
+    nn.run_merge(census)                       # nothing to fuse, but sweeps
+    assert not os.path.exists(ghost) and not os.path.exists(stale)
 
 
 def test_max_blocks_refuses_instead_of_fetching_a_chain(owner_setup):

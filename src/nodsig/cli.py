@@ -192,10 +192,20 @@ def main(argv=None):
     saved_argv0, sys.argv[0] = sys.argv[0], prog
     try:
         # The tools raise their own error type for expected failures (a
-        # missing artefact, an index that tolerates holes). argparse
-        # already exits 2 on usage errors; anything else is a real
-        # traceback and stays one, on purpose.
+        # missing artefact, an index that tolerates holes): every one of
+        # them derives from RuntimeError or ValueError and lives in this
+        # package, and an OSError is the same kind of answer (a path
+        # that is not there). Those become the one-line ERROR and exit
+        # status 1, here, once. argparse already exits 2 on usage
+        # errors; anything else is a real traceback and stays one, on
+        # purpose.
         return module.main(rest)
+    except (RuntimeError, OSError) as e:
+        sys.exit(f"ERROR: {e}")
+    except ValueError as e:
+        if type(e).__module__.startswith(f"{__package__}."):
+            sys.exit(f"ERROR: {e}")
+        raise
     finally:
         sys.argv[0] = saved_argv0
 

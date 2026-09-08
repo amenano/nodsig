@@ -21,6 +21,7 @@ import contextlib
 import io
 import os
 import subprocess
+import tempfile
 import sys
 import unittest
 
@@ -94,6 +95,25 @@ class TestCommandSurface(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("usage: nodsig derived", r.stdout)
         self.assertNotIn("__main__.py", r.stdout)
+
+    def test_an_expected_refusal_is_one_line_in_every_group(self):
+        """cli.py promises the exit status mapped once from the tools'
+        own error types. Five groups used to print a traceback on a
+        missing directory; the mapping is in the dispatcher now, so a
+        runbook can rely on `ERROR:` and status 1 whatever the group."""
+        missing = os.path.join(tempfile.gettempdir(), "nodsig-no-such-dir")
+        for argv in (["nonces", "verify", "--nonces", missing],
+                     ["firstspend", "stats", "--firstspend", missing],
+                     ["firstreveal", "stats", "--firstreveal", missing],
+                     ["nonces", "witness-verify", "--witness", missing],
+                     ["reuse", "stats", "--locks", missing,
+                      "--checkpoint", missing],
+                     ["index", "stats", "--index", missing]):
+            r = subprocess.run([sys.executable, "-m", "nodsig"] + argv,
+                               capture_output=True, text=True, env=_ENV)
+            self.assertEqual(r.returncode, 1, (argv, r.stderr))
+            self.assertNotIn("Traceback", r.stderr, argv)
+            self.assertTrue(r.stderr.startswith("ERROR: "), (argv, r.stderr))
 
     def test_unknown_command_lists_the_map(self):
         with self.assertRaises(SystemExit) as cm:
@@ -285,10 +305,12 @@ class TestCredentialsNeverOnTheCommandLine(unittest.TestCase):
             del os.environ[RPC_AUTH_ENV]
 
     def test_no_credentials_at_all_is_a_clear_refusal(self):
-        from nodsig.reuse_scan import RPC_AUTH_ENV, resolve_auth
+        from nodsig.reuse_scan import RPC_AUTH_ENV, AuthError, resolve_auth
         saved = os.environ.pop(RPC_AUTH_ENV, None)
         try:
-            with self.assertRaises(SystemExit) as cm:
+            # Raised, not exited: library code that a notebook reaches
+            # through build_backends; the dispatcher maps it to ERROR.
+            with self.assertRaises(AuthError) as cm:
                 resolve_auth(None)
             self.assertIn("--cookie-file", str(cm.exception))
             self.assertIn(RPC_AUTH_ENV, str(cm.exception))

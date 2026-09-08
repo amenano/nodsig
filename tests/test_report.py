@@ -56,6 +56,16 @@ def test_the_page_names_no_path(pair, tmp):
     assert os.sep + "tmp" not in page
 
 
+def test_the_machine_block_names_the_system_not_the_kernel():
+    """A kernel release string is not an identity, but it is a narrow
+    fingerprint of one environment on a page meant to be pasted in
+    public: the system name is enough."""
+    import platform
+    facts = dict(rp.machine())
+    assert facts["OS"] == platform.system()
+    assert platform.release() not in facts["OS"]
+
+
 def test_the_machine_block_asks_nothing_that_identifies_it():
     """Hardware and runtime, never whose. The host name is the obvious
     trap, so it is the one asserted against by value and not by

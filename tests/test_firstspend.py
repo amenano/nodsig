@@ -237,6 +237,65 @@ def test_between_window(tmp):
           "window, whole-chain and one-height")
 
 
+def test_build_over_a_parent_that_does_not_extend_the_table_is_refused(tmp):
+    """A table sealed over height-5 derivatives, then `build` with
+    height-3 derivatives: the old code re-emitted the rows, fused them
+    with the old generation and sealed 3 rows where a rebuild has 2,
+    with a fingerprint that was neither. That is a rewind, and is named."""
+    d5 = build_pipeline(tmp, name="fs_ext5")
+    d3 = build_pipeline(tmp, name="fs_ext3", end=3)
+    out = os.path.join(tmp, "fs_ext")
+    fp5 = fs.run_build(d5, out)
+    try:
+        fs.run_build(d3, out)
+        fail("a build over a lower parent was sealed")
+    except fs.FirstSpendError as e:
+        check("rewind" in str(e), f"the refusal must name rewind: {e}")
+    check(fs._load_manifest(out)["fingerprint"] == fp5,
+          "a refused build must leave the seal alone")
+    print("ok  append: a parent that does not extend the table is refused")
+
+
+def test_between_refuses_a_window_past_the_tables_coverage(tmp):
+    """The index is appended before the table is rebuilt: a window past
+    the table's seal used to print `0 lock(s) first spent` as a fact
+    over heights the table never held."""
+    from nodsig import outpoint_index as oi
+    import test_derivatives as td
+    blocks, _ = td.derived_chain()
+    _g5, i5 = td.build_index(tmp, blocks, name="fs_win5")
+    d3 = build_pipeline(tmp, name="fs_win3", end=3)
+    out = os.path.join(tmp, "fs_win")
+    fs.run_build(d3, out)
+    try:
+        fs.run_between(out, i5, 4, 5, out=io.StringIO())
+        fail("a window past the table's coverage was answered")
+    except fs.FirstSpendError as e:
+        check("coverage" in str(e), f"unexpected: {e}")
+    fs.run_between(out, i5, 1, 3, out=io.StringIO())
+    print("ok  between: a window past the table's coverage is refused")
+
+
+def test_build_refuses_to_extend_an_interrupted_rewind(tmp):
+    """Index and derivatives already refuse to build over a half-cut
+    artifact; the table did not, and returned the old seal's fingerprint
+    in silence."""
+    d5 = build_pipeline(tmp, name="fs_rw5")
+    out = os.path.join(tmp, "fs_rw")
+    fs.run_build(d5, out)
+    path = os.path.join(out, "state.json")
+    st = json.load(open(path))
+    st["phase"] = "rewind"
+    with open(path, "w") as f:
+        json.dump(st, f)
+    try:
+        fs.run_build(d5, out)
+        fail("a build extended an interrupted rewind")
+    except fs.FirstSpendError as e:
+        check("interrupted" in str(e), f"unexpected: {e}")
+    print("ok  build: an interrupted rewind is finished first")
+
+
 def test_between_refuses_bad_range(tmp):
     derived, index_dir = build_pipeline_with_index(tmp)
     out = os.path.join(tmp, "fs_bt2")

@@ -101,7 +101,7 @@ nodsig derived cospends --derived derived/ --index index/ \
     a1075db55d416d3ca199f55b6084e2115b9345e16c5cf302fc80e9d5fbf5d48d
 nodsig derived supply   --derived derived/ --index index/
 
-nodsig archive lookup --archive archive/ b2b81d4e9ff14d85c2d393558da7d0b620e3960d
+nodsig archive lookup --archive archive/ 46af3fb481837fadbb421727f9959c2d32a36829
 nodsig nonces  groups --nonces nonces/
 ```
 
@@ -109,9 +109,15 @@ Two details worth noticing while they print. The pizza lock kept receiving
 tribute payments for years, but `derived history` here stops at the two
 events of 1..200,000, because an artifact is defined by where it ended; the
 full-height transcript in the gallery shows the rest. And the `archive
-lookup` line asks about the pizza lock itself: its key entered the chain
-with the spend at height 57,044, inside the slice, so this archive already
-holds it.
+lookup` line asks about the pizza payee's **key**, not its lock: the two
+commands are keyed differently. `derived history --lock` takes
+hash160(scriptPubKey), the lock as the index names it; `archive lookup`
+takes what the chain revealed, hash160(public key) for a key (the 20 bytes
+the address `17SkEw2md5avVNyYgj6RiXuQKNwkXaxFyQ` encodes) or the hash of a
+script. That key entered the chain with the spend at height 57,044, inside
+the slice, so this archive already holds it. `nodsig check` decodes an
+address into the right digest for every backend, which is why it is the
+command to reach for with an address in hand.
 
 If you want the statistical pass too, it is hours at full height and minutes
 here:

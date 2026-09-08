@@ -73,6 +73,7 @@ from nodsig.artifact import (WallClock, identity_fingerprint, make_identity,
                              declared_parent)
 from nodsig.hashing import hash160
 from nodsig.recio import atomic_json, read_fixed, sha_file
+from nodsig.reuse_scan import looks_like_pubkey
 
 STATE_NAME = "state.json"
 MANIFEST_NAME = "manifest.json"
@@ -194,8 +195,15 @@ def signatures_of_input(tx_in, wanted, stats):
     if not hits:
         return []
 
-    keys = [it for it in items
-            if len(it) in (33, 65) and it[0] in (0x02, 0x03, 0x04)]
+    # A key can be pushed in the scriptSig, or sit in the witness
+    # outside the taproot slots: the slots hold signatures, and a
+    # 65-byte Schnorr signature whose R.x starts 0x02/0x03/0x04 (three
+    # in 256 of the explicit-sighash form) used to be read as a key,
+    # giving a key-path spend a "key" that was hash160 of a signature.
+    # The archive's own predicate says what a key looks like.
+    keys = [it for it in pushes if looks_like_pubkey(it)]
+    keys += [it for it in tx_in.witness
+             if not any(it is s for s in slots) and looks_like_pubkey(it)]
     out = []
     for item, r, schnorr in hits:
         flags = FLAG_SCHNORR if schnorr else 0
@@ -316,7 +324,6 @@ def _load_state(witness_dir):
         raise WitnessError("unknown witness table format")
     return state
 
-
 def _load_manifest(witness_dir):
     path = os.path.join(witness_dir, MANIFEST_NAME)
     if not os.path.exists(path):
@@ -350,14 +357,36 @@ def run_resolve(nonces_dir, witness_dir, client, min_count=2,
                 batch_size=25, out=sys.stdout):
     """Re-read the blocks the repeated points name, and keep the witnesses.
 
-    Resumable in the only way that matters here: the pass is a pure read
-    of the chain, so an interruption loses time and nothing else, and a
-    re-run starts from the height cursor in `state.json`.
+    Not resumable, and not pretending to be: the pass is a pure read of
+    the chain, so an interruption loses time and nothing else, and a
+    re-run starts over. On the whole chain that is about an hour and a
+    half of node reads; a checkpoint would have to carry the witnesses
+    gathered so far, which is one more state for a pass that short.
+    `state.json` records what the pass did, for `stats`, once it is done.
     """
     t = WallClock("resolve")
     p = lambda *a: print(*a, file=out)
 
     parent = nn._load_manifest(nonces_dir, required=True)
+    if parent["format"] != nn.FORMAT_TAG:
+        # A v2 census names sightings whose r is 0 or >= n, which the
+        # extraction since v3 refuses: re-reading their blocks either
+        # aborts ("the census and the node disagree") or drops them,
+        # and the table then says something the census does not.
+        raise WitnessError(
+            f"resolve needs a {nn.FORMAT_TAG} census; this one is "
+            f"{parent['format']}: rebuild the census with the current "
+            "code, or resolve it with the release that wrote it")
+    pending = nn._load_state(nonces_dir)["runs"]
+    if pending:
+        # The groups would come from the fused file AND the runs, the
+        # heights to re-read from the fused file alone: a repeat that
+        # straddles the last merge would be witnessed once and filed as
+        # "exposes nothing". Same rule as `nonces rewind`.
+        raise WitnessError(
+            f"the census has {len(pending)} pending run(s): run `nonces "
+            "merge` first, then resolve — a resolution reads the sealed "
+            "file its groups came from, and a run is not in it yet")
     groups, wanted = _heights_of_groups(nonces_dir, min_count, 0)
     heights = sorted(wanted)
     p(f"{len(groups):,} repeated points name {len(heights):,} block(s)")
@@ -405,9 +434,10 @@ def run_resolve(nonces_dir, witness_dir, client, min_count=2,
                     "are not in this block. The census and the node "
                     "disagree; nothing is written")
             done += 1
-        atomic_json(os.path.join(witness_dir, STATE_NAME),
-                    {"format": FORMAT_TAG, "cursor": window[-1],
-                     "heights": len(heights), "done": done})
+
+    atomic_json(os.path.join(witness_dir, STATE_NAME),
+                {"format": FORMAT_TAG, "heights": len(heights),
+                 "done": done})
 
     rows = []
     for (r, key, _f), witnesses in seen.items():

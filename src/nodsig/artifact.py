@@ -606,6 +606,26 @@ def verify_sealed(directory, manifest, tag, error, fp_order, ladder_hint="",
                     f"{build['caches'][name]['file']}: declares a step of "
                     f"{every} records, but {found_tag} fixes it at "
                     f"{spec[2]}{ladder_hint}")
+        records = build["files"][name].get("records")
+        if spec is not None and records is not None and name not in prepared:
+            # The size is a comparison, the hash a pass over the file:
+            # a file that grew past the seal (the artifact was appended
+            # and not re-sealed) or lost a tail is told apart here,
+            # before hours of hashing end in "corrupted since sealing"
+            # about bytes nobody corrupted.
+            expected = records * spec[0]
+            size = os.path.getsize(path)
+            if size > expected:
+                raise error(
+                    f"{file_name}: {size - expected:,} bytes past the "
+                    f"{records:,} records the seal names — grown since "
+                    "sealing, not corrupted: re-seal (run the build "
+                    "verb) and verify again")
+            if size < expected:
+                raise error(
+                    f"{file_name}: {expected - size:,} bytes short of the "
+                    f"{records:,} records the seal names — truncated "
+                    "since sealing")
         if name in prepared:
             found, ladder = prepared[name]
             if spec is not None:

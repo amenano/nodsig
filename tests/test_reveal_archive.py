@@ -729,6 +729,47 @@ def test_crosscheck(tmp, blocks, locks_dir, archive):
 # derive — the single-pass pipeline's read side
 # ---------------------------------------------------------------------------
 
+def test_crosscheck_refuses_a_perimeter_other_than_the_scans(tmp, blocks,
+                                                             locks_dir, archive):
+    """The scan records the perimeter its bitmaps were burnt under; the
+    cross-check read with other flags gave another fingerprint and
+    said "one of the two pipelines is wrong" about a correct pair."""
+    server, url = trs.serve(blocks)
+    cp = os.path.join(tmp, "cp_narrow_scan")
+    try:
+        rs.run_scan(locks_dir, url, "user:pass", 4, cp, batch_size=2,
+                    checkpoint_every=2, cosigners=False)
+    finally:
+        server.shutdown()
+    try:
+        ra.run_crosscheck(archive, locks_dir,
+                          reuse_state_path=os.path.join(cp, rs.STATE_NAME))
+        fail("a cross-check under another perimeter was compared")
+    except ra.ScanError as e:
+        check("flags" in str(e) and "pipelines" not in str(e),
+              f"the refusal must name the perimeter, not a defect: {e}")
+    print("ok  cross-check: a perimeter other than the scan's is refused "
+          "by name")
+
+
+def test_the_curve_is_refused_under_a_narrow_perimeter(tmp, locks_dir,
+                                                       archive):
+    """A keys record carries one first_height, the minimum over every
+    sighting: under --no-cosigners the final table is right but every
+    intermediate curve row dated a burn by a sighting the perimeter
+    excluded. The combination is refused rather than printed."""
+    curve = os.path.join(tmp, "narrow_curve.csv")
+    try:
+        ra.run_derive(archive, locks_dir, cosigners=False, curve_path=curve,
+                      curve_every=1)
+        fail("a curve under a narrow perimeter was written")
+    except ra.ScanError as e:
+        check("full perimeter" in str(e), f"unexpected: {e}")
+    check(not os.path.exists(curve), "nothing must be written")
+    ra.run_derive(archive, locks_dir, cosigners=False)     # the table: fine
+    print("ok  curve: refused under a narrow perimeter, the table is not")
+
+
 def test_derive(tmp, blocks, locks_dir):
     server, url = trs.serve(blocks)
     archive = os.path.join(tmp, "arch_derive")
@@ -743,18 +784,24 @@ def test_derive(tmp, blocks, locks_dir):
             fp_scan = rs.run_scan(locks_dir, url, "user:pass", 4, cp,
                                   batch_size=2, checkpoint_every=2,
                                   faces=faces, cosigners=cosigners)
-            curve = os.path.join(tmp, f"curve_{label}.csv")
+            # The curve is exact only under the full perimeter (a keys
+            # record carries one first_height, whatever the provenance
+            # of the sighting that set it), so derive refuses it under
+            # a narrow one; the table is derived on every perimeter.
+            full = faces and cosigners
+            curve = os.path.join(tmp, f"curve_{label}.csv") if full else None
             fp_der = ra.run_derive(archive, locks_dir, faces=faces,
                                    cosigners=cosigners,
                                    curve_path=curve, curve_every=2)
             check(fp_der == fp_scan,
                   f"derive ({label}): fingerprint differs from the scan")
-            with open(curve) as f_a, \
-                 open(os.path.join(cp, rs.CURVE_NAME)) as f_b:
-                check(f_a.read() == f_b.read(),
-                      f"derive ({label}): curve differs from the scan's")
-        print("ok  derive: table and curve equal the scan's, "
-              "on all three perimeters")
+            if full:
+                with open(curve) as f_a, \
+                     open(os.path.join(cp, rs.CURVE_NAME)) as f_b:
+                    check(f_a.read() == f_b.read(),
+                          f"derive ({label}): curve differs from the scan's")
+        print("ok  derive: the table equals the scan's on all three "
+              "perimeters, and the curve on the full one")
 
         # After a merge the tiling is spent: derive burns the fused
         # base silently and must land on the same final state.
@@ -800,6 +847,40 @@ def _curve_rows(path):
     with open(path) as f:
         head, *body = [line.rstrip("\n").split(",") for line in f]
     return head, [(int(r[0]), r[1:]) for r in body]
+
+
+def test_the_curve_covers_the_runs_it_reads(tmp, blocks):
+    """`archive curve` reads the sealed generation AND the pending runs,
+    but labelled its rows with the manifest's coverage: after a merge at
+    3 and a resume to 4, the row for height 3 held height 4's first
+    revelations too. The curve of a merged-then-resumed archive must
+    equal the curve of a one-shot scan to the same height."""
+    server, url = trs.serve(blocks)
+    split = os.path.join(tmp, "curve_split")
+    whole = os.path.join(tmp, "curve_whole")
+    try:
+        ra.run_scan(url, "user:pass", 3, split, batch_size=2,
+                    checkpoint_every=1, prefetch=False)
+        ra.run_merge(split)
+        ra.run_scan(url, "user:pass", 4, split, batch_size=2,
+                    checkpoint_every=1, prefetch=False)
+        ra.run_scan(url, "user:pass", 4, whole, batch_size=2,
+                    checkpoint_every=1, prefetch=False)
+    finally:
+        server.shutdown()
+    check(ra._load_state(split)["runs"], "the fixture needs pending runs")
+    rows = {}
+    for name, archive in (("split", split), ("whole", whole)):
+        path = os.path.join(tmp, f"curve_{name}.csv")
+        ra.run_archive_curve(archive, path, every=1)
+        rows[name] = _curve_rows(path)
+    check(rows["split"] == rows["whole"],
+          f"merge-then-resume curve {rows['split']} differs from the "
+          f"one-shot curve {rows['whole']}")
+    check([h for h, _ in rows["split"][1]][-1] == 4,
+          "the last row must be the archive's watermark, not the seal's")
+    print("ok  curve: a merged-then-resumed archive curves like a one-shot "
+          "scan, up to its own watermark")
 
 
 def test_the_curve_lands_on_the_grid_it_was_asked_for(tmp, blocks, locks_dir):

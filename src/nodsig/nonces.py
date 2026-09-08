@@ -1050,6 +1050,7 @@ def run_merge(nonces_dir):
     state = _load_state(nonces_dir)
     clock = WallClock("merge", state)
     store = store_of(nonces_dir, state, clock=clock)
+    store.clean_orphans()
     manifest = _load_manifest(nonces_dir, required=False)
     if not state["runs"] and manifest is not None:
         entry = _merged_entry(state)
@@ -1219,6 +1220,7 @@ def run_rewind(nonces_dir, to_height):
     cut = to_height
     clock = WallClock("rewind", state)
     store = store_of(nonces_dir, state, clock=clock)
+    store.clean_orphans()
 
     def sift(rec):
         return rec if rec_height(rec) <= cut else None
@@ -1597,14 +1599,21 @@ def _read_sightings(client, index, derived, address, lock, stats,
     spends = sorted(_spends_of(index, derived, lock))
     if not spends:
         return [], 0
-    heights = sorted({h for h, _s, _t, _v in spends})
+    by_height = {}
+    for spend in spends:
+        by_height.setdefault(spend[0], []).append(spend)
+    heights = sorted(by_height)
     if len(heights) > max_blocks:
         raise NonceError(
             f"this lock was spent in {len(heights):,} different blocks, and "
             f"reading them all is {len(heights):,} block fetches. Raise "
             f"--max-blocks if that is what you want")
 
-    blocks = {}
+    # One window of blocks in memory at a time: the sightings are read
+    # off each block as it arrives and the block is dropped, so the cap
+    # above bounds the fetches and not the RAM.
+    single = address.kind in SINGLE_KEY_KINDS
+    sightings = []
     for i in range(0, len(heights), 25):
         window = heights[i:i + 25]
         hashes, raws = client.fetch_blocks(window)
@@ -1613,18 +1622,16 @@ def _read_sightings(client, index, derived, address, lock, stats,
             if block.header.hash != want:
                 raise NonceError(f"height {h}: block bytes do not hash to "
                                  "the requested block hash")
-            blocks[h] = block
-
-    single = address.kind in SINGLE_KEY_KINDS
-    sightings = []
-    for height, spender, prev_txid, vout in spends:
-        points, details, key_path = _signatures_of_spend(
-            blocks[height], spender, prev_txid, vout, stats)
-        for (flags, point), (r_full, s, s_raw) in zip(points, details):
-            sightings.append(_Sighting(
-                height, point, flags, spender,
-                single or (address.kind == "p2tr" and key_path),
-                r_full, s, s_raw))
+            for height, spender, prev_txid, vout in by_height[h]:
+                points, details, key_path = _signatures_of_spend(
+                    block, spender, prev_txid, vout, stats)
+                for (flags, point), (r_full, s, s_raw) in zip(points,
+                                                              details):
+                    sightings.append(_Sighting(
+                        height, point, flags, spender,
+                        single or (address.kind == "p2tr" and key_path),
+                        r_full, s, s_raw))
+    sightings.sort(key=lambda s: (s.height, s.spender))
     return sightings, len(heights)
 
 
@@ -1650,8 +1657,10 @@ def run_address(addresses, index_dir, derived_dir, client, nonces_dir=None,
     index = oi.Index(index_dir)
     derived = dvm.Derived(derived_dir, index)
     census = None
+    census_to = None
     if nonces_dir:
         census = open_sorted(nonces_dir)
+        census_to = _load_state(nonces_dir)["last_height"]
     stats = new_stats()
     p = lambda *a: print(*a, file=out)
     findings = 0
@@ -1663,7 +1672,9 @@ def run_address(addresses, index_dir, derived_dir, client, nonces_dir=None,
             p(f"\n{address.text}")
             p(f"  {KINDS[address.kind][1]}")
             p(f"  lock {lock.hex()}, index through height "
-              f"{index.watermark:,}")
+              f"{index.watermark:,}"
+              + (f", census through height {census_to:,}"
+                 if census_to is not None else ""))
 
             sightings, n_blocks = _read_sightings(
                 client, index, derived, address, lock, stats, max_blocks, out)
@@ -1746,12 +1757,29 @@ def run_address(addresses, index_dir, derived_dir, client, nonces_dir=None,
                       "What that means here is not decided")
 
             if census is not None:
+                # Two clocks: the lock's sightings stop at the index's
+                # watermark, the census's at its own. Subtracting one
+                # count from the other across that gap made the lock's
+                # later spends "signatures that are not this lock's",
+                # or swallowed a negative. Both sides are cut at the
+                # lower of the two, and the line says so.
+                horizon = min(index.watermark, census_to)
                 for pt, g in groups.items():
+                    own = sum(1 for s in g if s.height <= horizon)
                     pt = pt[:R_PREFIX]        # the census is keyed on those
-                    elsewhere = len(census.find(pt)) - len(g)
+                    seen = sum(1 for rec in census.find(pt)
+                               if rec_height(rec) <= horizon)
+                    elsewhere = seen - own
+                    if elsewhere < 0:
+                        raise NonceError(
+                            f"the census holds {seen} sighting(s) of "
+                            f"{pt.hex()} through height {horizon:,} and "
+                            f"the index {own}: the two do not describe "
+                            "the same chain")
                     if elsewhere > 0:
                         p(f"  census: {pt.hex()} was also published "
-                          f"{elsewhere} time(s) by signatures that are not "
+                          f"{elsewhere} time(s) through height "
+                          f"{horizon:,} by signatures that are not "
                           f"this lock's. Two DIFFERENT keys sharing a nonce "
                           f"does not hand either one over; it does show the "
                           f"point was not drawn at random, though not whether "
