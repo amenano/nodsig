@@ -303,6 +303,90 @@ def test_refusals(tmp, blocks, graph_oneshot):
               "fingerprint")
 
 
+def _graph_with_runs(tmp, name, n=4, state=True):
+    """A graph directory as a crash or a wrong `--graph` could leave
+    it: `n` runs tiling 1..n, with or without the state that names
+    them. The bytes are junk: nothing below reads a run, only the
+    housekeeping around them is under test."""
+    g = os.path.join(tmp, name)
+    os.makedirs(os.path.join(g, ge.RUNS_DIR))
+    runs = []
+    for i in range(1, n + 1):
+        run = f"run_{i:08d}-{i:08d}.bin"
+        with open(os.path.join(g, ge.RUNS_DIR, run), "wb") as f:
+            f.write(b"x" * 10)
+        runs.append({"name": run, "start": i, "end": i,
+                     "sha256": "0" * 64, "bytes": 10, "records": 1})
+    if state:
+        with open(os.path.join(g, ge.STATE_NAME), "w") as f:
+            json.dump({"format": ge.FORMAT_TAG, "runs": runs,
+                       "last_height": n, "last_block_hash": "00" * 32}, f)
+    return g
+
+
+def test_sweeps_refuse_what_no_state_describes(tmp):
+    """The sweep on load exists to remove the leftovers of a crash, and
+    a crash is bounded: a run or two the state did not get to name. A
+    directory with runs and NO state is not a crash, it is a graph whose
+    state was lost or a `--graph` pointed at the wrong place, and the
+    old sweep answered both by deleting every run (300 GB, in seconds,
+    one stderr line each). Same shape for the ahead-drop: dropping the
+    suffix past the host's resume point heals the crash window, but a
+    FRESH host at height 1 against an existing graph would drop all of
+    it and re-emit for days. Both are refused now, with the runs intact."""
+    g = _graph_with_runs(tmp, "graph_nostate", state=False)
+    try:
+        ge.GraphEmitter(g).load(1)
+        fail("runs without a state were swept instead of refused")
+    except ge.GraphError as e:
+        check("state" in str(e), f"refusal must name the missing state: {e}")
+    check(len(os.listdir(os.path.join(g, ge.RUNS_DIR))) == 4,
+          "a refusal must leave every run where it was")
+
+    g = _graph_with_runs(tmp, "graph_fresh_host")
+    try:
+        ge.GraphEmitter(g).load(1)
+        fail("a fresh host at height 1 dropped every run of the graph")
+    except ge.GraphError as e:
+        check("fresh" in str(e), f"refusal must say what to do: {e}")
+    check(len(os.listdir(os.path.join(g, ge.RUNS_DIR))) == 4,
+          "a refusal must leave every run where it was")
+    check(ge._load_state(g)["last_height"] == 4,
+          "a refusal must leave the state as it was")
+    print("ok  sweeps: runs without a state, and a fresh host against an "
+          "existing graph, are refused with everything intact")
+
+
+def test_run_names_from_the_state_stay_inside_the_directory(tmp):
+    """The state file is untrusted input the moment this process did
+    not write it (recio.checked_name). A run named `../../victim` used
+    to be joined and removed by the ahead-drop, deleting a file outside
+    the archive; the same name would be opened by the readers."""
+    g = _graph_with_runs(tmp, "graph_escape", n=1)
+    victim = os.path.join(tmp, "victim.bin")
+    with open(victim, "wb") as f:
+        f.write(b"v")
+    st = ge._load_state(g)
+    st["runs"].append({"name": "../../victim.bin", "start": 2, "end": 2,
+                       "sha256": "0" * 64, "bytes": 1, "records": 1})
+    st["last_height"] = 2
+    with open(os.path.join(g, ge.STATE_NAME), "w") as f:
+        json.dump(st, f)
+    try:
+        ge.GraphEmitter(g).load(2)     # drops the run past the resume point
+        fail("a run name escaping the directory was accepted")
+    except ge.GraphError:
+        pass
+    check(os.path.exists(victim), "a file outside the archive was removed")
+    try:
+        list(ge._run_bytes(g, st["runs"][1]))
+        fail("a run name escaping the directory was opened")
+    except ge.GraphError:
+        pass
+    print("ok  names: a run name that leaves the directory is refused, "
+          "not removed and not opened")
+
+
 def test_cli_readers(graph):
     """stats and show, as a user would drive them (must not raise)."""
     ge.run_stats(graph)
@@ -588,6 +672,8 @@ def main():
             test_determinism(tmp, blocks, graph)
             test_crash_window(tmp, blocks, graph)
             test_refusals(tmp, blocks, graph)
+            test_sweeps_refuse_what_no_state_describes(tmp)
+            test_run_names_from_the_state_stay_inside_the_directory(tmp)
             test_cli_readers(graph)
             test_digest_agrees(tmp, blocks, graph)
             test_digest_host_independence(tmp, blocks, locks_dir, graph)

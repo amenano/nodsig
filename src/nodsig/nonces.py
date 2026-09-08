@@ -116,7 +116,7 @@ from nodsig.artifact import (WallClock, make_identity, producer,
                              seal_manifest, verify_sealed)
 from nodsig.blockparse import scriptsig_pushes
 from nodsig.genstore import GenStore, new_state_fields
-from nodsig.recio import atomic_json, read_fixed
+from nodsig.recio import atomic_json, read_fixed, checked_name
 from nodsig.recsort import SortedFile
 
 FORMAT_TAG = "nonces-v3"
@@ -926,7 +926,7 @@ def iter_records(nonces_dir, state=None, verify_sha=True):
     entry = _merged_entry(state)
     if entry is None:
         return
-    path = os.path.join(nonces_dir, entry["file"])
+    path = os.path.join(nonces_dir, checked_name(entry["file"], NonceError))
     yield from read_fixed(path, REC,
                           expect_sha=entry["sha256"] if verify_sha else None,
                           error=NonceError)
@@ -942,12 +942,15 @@ def open_sorted(nonces_dir, state=None):
     blob = b""
     every = LADDER_EVERY
     if cache is not None:
-        with open(os.path.join(nonces_dir, cache["file"]), "rb") as f:
+        ladder_path = os.path.join(
+            nonces_dir, checked_name(cache["file"], NonceError))
+        with open(ladder_path, "rb") as f:
             blob = f.read()
         if hashlib.sha256(blob).hexdigest() != cache["sha256"]:
             raise NonceError(f"{cache['file']}: corrupted ladder")
         every = cache["every"]
-    return SortedFile(os.path.join(nonces_dir, entry["file"]), REC,
+    path = os.path.join(nonces_dir, checked_name(entry["file"], NonceError))
+    return SortedFile(path, REC,
                       POINT_LEN, entry["records"], blob, every,
                       error=NonceError)
 
@@ -1340,7 +1343,8 @@ def run_groups(nonces_dir, min_count=2, limit=20, csv_path=None,
     sources = [iter_records(nonces_dir, state)]
     for run in state["runs"]:
         sources.append(read_fixed(
-            os.path.join(nonces_dir, RUNS_DIR, run["name"]), REC,
+            os.path.join(nonces_dir, RUNS_DIR,
+                         checked_name(run["name"], NonceError, "run")), REC,
             expect_sha=run["sha256"], error=NonceError))
     stream = sources[0] if len(sources) == 1 else heapq.merge(*sources)
     groups = []
@@ -1467,9 +1471,10 @@ def run_lookup(nonces_dir, values, out=sys.stdout):
             point = raw[:POINT_LEN]
             hits = list(sf.find(point)) if sf is not None else []
             for run in state["runs"]:
-                hits += _run_hits(os.path.join(nonces_dir, RUNS_DIR,
-                                               run["name"]),
-                                  run["records"], point)
+                run_path = os.path.join(
+                    nonces_dir, RUNS_DIR,
+                    checked_name(run["name"], NonceError, "run"))
+                hits += _run_hits(run_path, run["records"], point)
             hits.sort()
             print(f"\n{point.hex()}", file=out)
             if not hits:

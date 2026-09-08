@@ -42,7 +42,7 @@ import time
 from decimal import Decimal, InvalidOperation
 
 from nodsig.artifact import producer
-from nodsig.recio import atomic_json, sha_file
+from nodsig.recio import atomic_json, sha_file, checked_name
 
 FORMAT_TAG = "price-series-v1"
 CSV_NAME = "series.csv"
@@ -224,7 +224,8 @@ class Series:
     def __init__(self, series_dir, check_digest=True):
         self.dir = series_dir
         self.meta = load_meta(series_dir)
-        csv_path = os.path.join(series_dir, self.meta["file"])
+        csv_path = os.path.join(
+            series_dir, checked_name(self.meta["file"], PriceSeriesError))
         if check_digest and sha_file(csv_path) != self.meta["digest"]:
             raise PriceSeriesError(
                 f"{csv_path}: digest differs from {META_NAME}; the file "

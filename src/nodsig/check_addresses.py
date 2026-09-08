@@ -124,6 +124,7 @@ from nodsig import witness as wit
 from nodsig.capability import Source, Result, Status
 from nodsig.hashing import hash160, sha256d
 from nodsig.reuse_scan import SAT, resolve_auth
+from nodsig.recio import checked_name
 
 # ---------------------------------------------------------------------------
 # Address decoding — from text to (kind, digest)
@@ -446,7 +447,8 @@ class RevealArchiveExposure:
             if run["category"] != cat:
                 continue
             got = ra._bisect_file(
-                os.path.join(self.dir, ra.RUNS_DIR, run["name"]),
+                os.path.join(self.dir, ra.RUNS_DIR,
+                             checked_name(run["name"], AddressError, "run")),
                 cat, address.digest)
             if got is not None:
                 hit = got if hit is None else ra._reduce(

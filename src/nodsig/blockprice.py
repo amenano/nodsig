@@ -47,7 +47,7 @@ from decimal import Decimal, ROUND_HALF_EVEN
 from nodsig import outpoint_index as oi
 from nodsig import priceseries as ps
 from nodsig.artifact import producer
-from nodsig.recio import atomic_json, sha_file
+from nodsig.recio import atomic_json, sha_file, checked_name
 
 FORMAT_TAG = "blockprice-v1"
 BIN_NAME = "blockprice.bin"
@@ -225,7 +225,8 @@ class BlockPrice:
     def __init__(self, bp_dir, check_digest=True):
         self.dir = bp_dir
         self.meta = load_meta(bp_dir)
-        path = os.path.join(bp_dir, self.meta["file"])
+        path = os.path.join(
+            bp_dir, checked_name(self.meta["file"], BlockPriceError))
         if check_digest and sha_file(path) != self.meta["digest"]:
             raise BlockPriceError(f"{path}: digest differs from "
                                   f"{META_NAME}; the file changed after "

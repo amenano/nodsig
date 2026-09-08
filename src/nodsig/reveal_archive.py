@@ -1498,7 +1498,8 @@ def _open_merged(archive_dir, manifest, cat):
     if cache is None:
         return None
     path = os.path.join(archive_dir, _cat_file(manifest, cat))
-    with open(os.path.join(archive_dir, cache["file"]), "rb") as f:
+    with open(os.path.join(archive_dir,
+                           checked_name(cache["file"], ScanError)), "rb") as f:
         blob = f.read()
     if hashlib.sha256(blob).hexdigest() != cache["sha256"]:
         raise ScanError(f"{cache['file']}: corrupted ladder")

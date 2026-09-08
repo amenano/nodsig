@@ -223,8 +223,8 @@ from nodsig.artifact import (WallClock, declared_parent,
                              seal_manifest, sha_and_ladder, verify_sealed)
 from nodsig.hashing import hash160, warn_if_slow_ripemd160
 from nodsig.genstore import GenStore, new_state_fields
-from nodsig.recio import (IO_CHUNK, atomic_json, budgeted_slab, read_fixed,
-                          sha_file)
+from nodsig.recio import (IO_CHUNK, atomic_json, budgeted_slab, checked_name,
+                          read_fixed, sha_file)
 from nodsig.recsort import SortedFile, bisect_blob
 from nodsig.reuse_scan import SAT
 
@@ -912,7 +912,8 @@ def _phase_seal(index_dir, state, graph_dir, clock):
     # (the audit).
     for name in list(MERGED) + list(GENERATED):
         entry = state["files"][name]
-        path = os.path.join(index_dir, entry["file"])
+        path = os.path.join(index_dir,
+                            checked_name(entry["file"], OutpointError))
         if sha_file(path) != entry["sha256"]:
             raise OutpointError(f"{entry['file']}: sha256 changed "
                                 "since its fusion")
@@ -925,8 +926,9 @@ def _phase_seal(index_dir, state, graph_dir, clock):
     # so comparing it would confirm nothing at all, the tautology this
     # format has to avoid. The count is therefore recomputed here from
     # the bytes on disk, independently of whatever the fusion counted.
-    real, marked = _count_slots(os.path.join(
-        index_dir, files["spender_of"]["file"]), n_out)
+    spender_path = os.path.join(
+        index_dir, checked_name(files["spender_of"]["file"], OutpointError))
+    real, marked = _count_slots(spender_path, n_out)
     resolved = state["n_spends"] - state["totals"]["unresolved_spends"]
     if real + files["spend_extra"]["records"] != resolved:
         raise OutpointError(
@@ -936,9 +938,10 @@ def _phase_seal(index_dir, state, graph_dir, clock):
     # And the two files must agree with each other: a marker with no
     # records behind it, or records with no marker, is a half-broken
     # split representation and would otherwise be invisible.
+    extra_path = os.path.join(
+        index_dir, checked_name(files["spend_extra"]["file"], OutpointError))
     distinct = len({rec[:ORD] for rec in _read_fixed(
-        os.path.join(index_dir, files["spend_extra"]["file"]),
-        EXTRA_REC, files["spend_extra"]["sha256"])})
+        extra_path, EXTRA_REC, files["spend_extra"]["sha256"])})
     if distinct != marked:
         raise OutpointError(
             f"spender_of.bin marks {marked} output(s) as having more "
@@ -1387,7 +1390,8 @@ def _print_manifest(index_dir, manifest):
     print(f"  overwritten txids (BIP30): {t['overwritten_txids']}, "
           f"duplicate spends: {t['duplicate_spends']}, "
           f"unresolved: {t['unresolved_spends']}")
-    total = sum(os.path.getsize(os.path.join(index_dir, e["file"]))
+    total = sum(os.path.getsize(os.path.join(
+                    index_dir, checked_name(e["file"], OutpointError)))
                 for e in build["files"].values())
     print(f"  on disk      {total / 2**30:>13.2f} GiB "
           "(+ ladder caches)")
@@ -1468,7 +1472,9 @@ class Index:
     def _ladder(self, name):
         if name not in self._ladders:
             entry = self.build["caches"][name]
-            with open(os.path.join(self.dir, entry["file"]), "rb") as f:
+            ladder_path = os.path.join(
+                self.dir, checked_name(entry["file"], OutpointError))
+            with open(ladder_path, "rb") as f:
                 blob = f.read()
             if hashlib.sha256(blob).hexdigest() != entry["sha256"]:
                 raise OutpointError(f"{entry['file']}: corrupted ladder")
@@ -1483,8 +1489,10 @@ class Index:
                                or LEGACY_MERGED[logical])
             entry = self.build["files"][logical]
             blob, every = self._ladder(logical)
+            path = os.path.join(self.dir,
+                                checked_name(entry["file"], OutpointError))
             self._sorted[logical] = SortedFile(
-                os.path.join(self.dir, entry["file"]), rec, key_len,
+                path, rec, key_len,
                 entry["records"], blob, every, error=OutpointError)
         return self._sorted[logical]
 
@@ -1583,8 +1591,9 @@ class Index:
                     "resident: that index is corrupt, not merely "
                     "anomalous")
             self._extra_map = {}
-            for rec in _read_fixed(os.path.join(self.dir, entry["file"]),
-                                   EXTRA_REC, entry["sha256"]):
+            extra_path = os.path.join(
+                self.dir, checked_name(entry["file"], OutpointError))
+            for rec in _read_fixed(extra_path, EXTRA_REC, entry["sha256"]):
                 self._extra_map.setdefault(rec[:ORD], []).append(rec[ORD:])
         return self._extra_map
 

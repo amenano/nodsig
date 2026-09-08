@@ -181,7 +181,7 @@ from nodsig.artifact import (WallClock, declared_parent,
 from nodsig.genstore import GenStore, new_state_fields
 from nodsig.outpoint_index import ORD, OutpointError
 from nodsig.hashing import hash160
-from nodsig.recio import (IO_CHUNK, atomic_json, budgeted_slab,
+from nodsig.recio import (IO_CHUNK, atomic_json, budgeted_slab, checked_name,
                           read_fixed, read_slabs)
 from nodsig.recsort import SortedFile
 from nodsig.reuse_scan import SAT
@@ -327,7 +327,9 @@ def _index_stream(index, logical, rec, start):
     read whole; a resumed (offset) stream cannot be — the derivative
     seal is the audit that closes that honesty gap."""
     entry = index.build["files"][logical]
-    return read_fixed(os.path.join(index.dir, entry["file"]), rec,
+    path = os.path.join(index.dir,
+                        checked_name(entry["file"], OutpointError))
+    return read_fixed(path, rec,
                       expect_sha=entry["sha256"] if start == 0 else None,
                       start_record=start, error=OutpointError)
 
@@ -1104,12 +1106,16 @@ class Derived:
         if name not in self._sorted:
             entry = self.build["files"][name]
             cache = self.build["caches"][name]
-            with open(os.path.join(self.dir, cache["file"]), "rb") as f:
+            ladder_path = os.path.join(
+                self.dir, checked_name(cache["file"], OutpointError))
+            with open(ladder_path, "rb") as f:
                 blob = f.read()
             if hashlib.sha256(blob).hexdigest() != cache["sha256"]:
                 raise OutpointError(f"{cache['file']}: corrupted ladder")
+            path = os.path.join(self.dir,
+                                checked_name(entry["file"], OutpointError))
             self._sorted[name] = SortedFile(
-                os.path.join(self.dir, entry["file"]), rec, key_len,
+                path, rec, key_len,
                 entry["records"], blob, cache["every"], error=OutpointError)
         return self._sorted[name]
 
@@ -1470,7 +1476,8 @@ def _fees_by_height(derived, index):
     sequential pass over fees.bin: the tx boundaries come from the
     resident first_tx array, so no record is ever looked up."""
     entry = derived.build["files"]["fees"]
-    path = os.path.join(derived.dir, entry["file"])
+    path = os.path.join(derived.dir,
+                        checked_name(entry["file"], OutpointError))
     rec = derived.fee_rec
     fmt = ">IHB" if rec == 7 else ">Q"    # u56 (v3) or u64 (v2)
     first_tx = index.first_tx
@@ -1874,7 +1881,8 @@ def run_timeline(derived_dir, index_dir, out_dir, grid=TIMELINE_GRID,
                 diff_sats[cj][b] -= balance
 
         entry = derived.build["files"]["history"]
-        path = os.path.join(derived.dir, entry["file"])
+        path = os.path.join(derived.dir,
+                            checked_name(entry["file"], OutpointError))
         hist_rec = derived.hist_rec
         fb = int.from_bytes
         br = bisect_right

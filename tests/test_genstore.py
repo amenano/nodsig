@@ -257,6 +257,58 @@ def test_orphan_sweep_spares_the_declared_inventory(tmp):
           "declared inventory stays")
 
 
+def test_orphan_sweep_refuses_a_directory_without_a_state(tmp):
+    """A crash leaves a run or two the state did not get to name; a
+    directory full of runs and generations with NO state is a lost
+    state or a wrong `--out`, and the old sweep deleted all of it
+    (`*_g*`, `*.tmp`, everything under runs/) before any check could
+    speak. Now: refused, files intact; and an empty directory, which
+    is what a fresh build starts in, is still fine."""
+    store = fresh(tmp, "nostate")
+    open(store.path("m_g0001.bin"), "wb").close()
+    open(store.run_path("run_a.bin"), "wb").close()
+    try:
+        store.clean_orphans()
+        fail("runs and generations without a state were swept")
+    except StoreError as e:
+        check("state" in str(e), f"the refusal must name the state: {e}")
+    check(os.path.exists(store.path("m_g0001.bin"))
+          and os.path.exists(store.run_path("run_a.bin")),
+          "a refusal must leave every file where it was")
+    empty = fresh(tmp, "empty")
+    empty.clean_orphans()
+    print("ok  sweep: no state and files to sweep is refused; no state "
+          "and nothing to sweep is a fresh start")
+
+
+def test_orphan_sweep_matches_the_generation_shape_exactly(tmp):
+    """`_g` as a substring is not a generation: `notes_graph.txt` and
+    `history_g0003.bin.bak` are somebody's files, and a subdirectory is
+    never this store's to remove (the old sweep died on one with
+    IsADirectoryError, after deleting what came before it)."""
+    store = fresh(tmp, "shape")
+    store.write_run("run_a.bin", "cat", [rec(10, 1)])
+    _dups, delete = store.fuse("m", SPEC, "cat", dedup=None)
+    store.commit(delete)
+    spare = ["notes_graph.txt", "history_g0003.bin.bak", "m_g01.bin"]
+    for name in spare:
+        open(store.path(name), "wb").close()
+    os.makedirs(store.path("sub_g0001.bin"))
+    os.makedirs(store.run_path("nested"))
+    open(store.path("m_g0007.lad"), "wb").close()
+    store.clean_orphans()
+    for name in spare:
+        check(os.path.exists(store.path(name)),
+              f"{name} is not a generation and must survive")
+    check(os.path.isdir(store.path("sub_g0001.bin"))
+          and os.path.isdir(store.run_path("nested")),
+          "directories are never swept")
+    check(not os.path.exists(store.path("m_g0007.lad")),
+          "an unnamed ladder of the exact shape must go")
+    print("ok  sweep: only `<logical>_g<4 digits>.bin|.lad` and `.tmp` "
+          "files go; look-alikes and directories stay")
+
+
 def test_drop_runs_defers_deletion(tmp):
     """`drop_runs` forgets a category and hands back its paths; the
     files stay until the caller has committed the state that stopped
@@ -566,6 +618,8 @@ TESTS = (test_fusion_generations_and_ladder,
          test_dedup_last_and_none,
          test_dedup_len_longer_than_key,
          test_orphan_sweep_spares_the_declared_inventory,
+         test_orphan_sweep_refuses_a_directory_without_a_state,
+         test_orphan_sweep_matches_the_generation_shape_exactly,
          test_drop_runs_defers_deletion,
          test_truncate_appended,
          test_gallop_answers_exactly_as_the_plain_fusion,

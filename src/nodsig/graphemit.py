@@ -124,7 +124,7 @@ import sys
 from nodsig.artifact import (WallClock, identity_fingerprint,
                              make_identity, producer, seal_manifest)
 from nodsig.blockparse import read_compactsize, write_compactsize
-from nodsig.recio import atomic_json
+from nodsig.recio import atomic_json, checked_name
 
 STATE_NAME = "state.json"
 MANIFEST_NAME = "manifest.json"
@@ -282,13 +282,30 @@ class GraphEmitter:
             self.watermark = state["last_height"]
             self.last_hash = state["last_block_hash"]
 
-        # Crash leftovers: run files the state does not name.
+        # Every run name the state carries is checked before anything
+        # below joins it to a path: the state is untrusted input the
+        # moment this process did not write it.
+        for run in self.runs:
+            _run_path(self.dir, run["name"])
+
+        # Crash leftovers: run files the state does not name. A crash
+        # leaves a run or two unnamed; a directory of runs with NO state
+        # is a lost state or a wrong `--graph`, and sweeping it would
+        # delete the whole archive in seconds. Refused, runs intact.
         known = {r["name"] for r in self.runs}
-        for name in os.listdir(os.path.join(self.dir, RUNS_DIR)):
-            if name not in known:
-                os.remove(os.path.join(self.dir, RUNS_DIR, name))
-                print(f"  graph: removed stale run {name} "
-                      "(not named by the state)", file=sys.stderr)
+        stale = [name for name in sorted(os.listdir(
+                     os.path.join(self.dir, RUNS_DIR)))
+                 if name not in known]
+        if stale and not os.path.exists(state_path):
+            raise GraphError(
+                f"{self.dir}: no {STATE_NAME}, but {RUNS_DIR}/ holds "
+                f"{len(stale)} run file(s) — not a crash to sweep but a "
+                "lost state or the wrong directory; restore the state, "
+                "or use an empty directory for a fresh scan")
+        for name in stale:
+            os.remove(os.path.join(self.dir, RUNS_DIR, name))
+            print(f"  graph: removed stale run {name} "
+                  "(not named by the state)", file=sys.stderr)
 
         # The ahead case: the graph knows heights the host's state does
         # not (the crash window between the two checkpoint writes, or
@@ -309,7 +326,21 @@ class GraphEmitter:
                     "this scan")
             else:
                 keep.append(run)
+        if drop and not keep:
+            # Not a crash window: a host starting from scratch against
+            # an archive that already covers the chain. Healing it would
+            # be deleting the archive and re-emitting it over days.
+            raise GraphError(
+                f"graph archive covers 1..{self.watermark} but the scan "
+                f"starts from {start_height}: every run would be dropped "
+                "— a fresh scan needs a fresh graph directory, and a "
+                "resumed scan needs its own checkpoint directory")
         if drop:
+            print(f"  graph: dropping {len(drop)} run(s) past the scan's "
+                  f"resume point {start_height} "
+                  f"({drop[0]['start']}..{drop[-1]['end']}, "
+                  f"{sum(r['bytes'] for r in drop):,} bytes): they will "
+                  "be re-emitted", file=sys.stderr)
             self.runs = keep
             self.watermark = keep[-1]["end"] if keep else 0
             # The recorded hash belonged to the dropped watermark; the
@@ -323,7 +354,7 @@ class GraphEmitter:
             # every later start died on the missing one.
             self._write_state()
             for run in drop:
-                path = os.path.join(self.dir, RUNS_DIR, run["name"])
+                path = _run_path(self.dir, run["name"])
                 if os.path.exists(path):
                     os.remove(path)
                 print(f"  graph: dropped run {run['name']} — past the "
@@ -724,13 +755,21 @@ def _load_state(graph_dir):
     return state
 
 
+def _run_path(graph_dir, name):
+    """A run name read from the state: refused unless it stays inside
+    the archive. These names are opened and, on load, removed, so the
+    check sits where the name comes in (recio.checked_name)."""
+    return os.path.join(graph_dir, RUNS_DIR,
+                        checked_name(name, GraphError, "run"))
+
+
 def _run_bytes(graph_dir, run, chunk=8 * 2**20):
     """Stream one run's bytes, verifying its recorded sha256 on the
     way: a graph that feeds derived indices (and published numbers
     downstream) is trusted exactly as much as the blocks were — not
     at all."""
     digest = hashlib.sha256()
-    with open(os.path.join(graph_dir, RUNS_DIR, run["name"]), "rb") as f:
+    with open(_run_path(graph_dir, run["name"]), "rb") as f:
         while True:
             data = f.read(chunk)
             if not data:

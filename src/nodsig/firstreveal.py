@@ -37,7 +37,7 @@ from nodsig.artifact import (WallClock, declared_parent, identity_fingerprint,
                              make_identity, producer, seal_manifest,
                              verify_sealed)
 from nodsig.genstore import GenStore, new_state_fields
-from nodsig.recio import atomic_json, read_fixed
+from nodsig.recio import atomic_json, read_fixed, checked_name
 from nodsig.recsort import SortedFile
 
 FORMAT_TAG = "firstreveal-v1"
@@ -325,7 +325,7 @@ def _floor_from_data(out_dir, manifest):
     entry = manifest["build"]["files"][LOGICAL]
     if entry["records"] == 0:
         return None
-    path = os.path.join(out_dir, entry["file"])
+    path = os.path.join(out_dir, checked_name(entry["file"], FirstRevealError))
     with open(path, "rb") as f:
         f.seek((entry["records"] - 1) * FR_REC)
         rec = f.read(FR_REC)
@@ -390,7 +390,7 @@ def _verify_structural(out_dir, manifest, out):
     inside the declared coverage."""
     entry = manifest["build"]["files"][LOGICAL]
     cov = manifest["identity"]["coverage"]
-    path = os.path.join(out_dir, entry["file"])
+    path = os.path.join(out_dir, checked_name(entry["file"], FirstRevealError))
     prev = None
     rows = 0
     for rec in read_fixed(path, FR_REC, expect_sha=entry["sha256"],
@@ -426,7 +426,8 @@ def _verify_against_parent(out_dir, manifest, archive_dir, keys_records,
     try:
         entry = manifest["build"]["files"][LOGICAL]
         step = max(1, rows // _SAMPLE)
-        path = os.path.join(out_dir, entry["file"])
+        path = os.path.join(out_dir,
+                            checked_name(entry["file"], FirstRevealError))
         checked = 0
         with open(path, "rb") as f:
             for i in range(0, rows, step):
@@ -460,11 +461,15 @@ def _sorted_firstreveal(out_dir, manifest):
     """A SortedFile over the sealed table, its ladder verified."""
     entry = manifest["build"]["files"][LOGICAL]
     cache = manifest["build"]["caches"][LOGICAL]
-    with open(os.path.join(out_dir, cache["file"]), "rb") as f:
+    ladder_path = os.path.join(
+        out_dir, checked_name(cache["file"], FirstRevealError))
+    with open(ladder_path, "rb") as f:
         blob = f.read()
     if hashlib.sha256(blob).hexdigest() != cache["sha256"]:
         raise FirstRevealError(f"{cache['file']}: corrupted ladder")
-    return SortedFile(os.path.join(out_dir, entry["file"]), FR_REC, FR_KEY,
+    path = os.path.join(out_dir,
+                        checked_name(entry["file"], FirstRevealError))
+    return SortedFile(path, FR_REC, FR_KEY,
                       manifest["build"]["rows"], blob, cache["every"],
                       error=FirstRevealError)
 

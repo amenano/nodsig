@@ -202,3 +202,41 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+def _join_args(text):
+    """Every `os.path.join(` call in `text`, as (line, argument text)."""
+    out = []
+    for m in re.finditer(r"os\.path\.join\(", text):
+        i = m.end()
+        depth, j = 1, i
+        while depth and j < len(text):
+            if text[j] == "(":
+                depth += 1
+            elif text[j] == ")":
+                depth -= 1
+            j += 1
+        out.append((text[:m.start()].count("\n") + 1, text[i:j - 1]))
+    return out
+
+
+def test_every_name_read_from_json_is_checked_before_it_is_joined():
+    """recio.checked_name states the rule: a file or run name read out
+    of a manifest or a state file is untrusted input, refused unless it
+    is a plain name inside the artifact directory. The rule was written
+    once and applied in two modules; a security review then found
+    thirty-odd joins of `entry["file"]` and `run["name"]` that skipped
+    it, one of them an `os.remove`. The rule is only a rule if every
+    intake obeys it, so this test reads every join in the tree."""
+    key = re.compile(r"""\[["'](file|name)["']\]""")
+    offenders = []
+    for path in sorted(SRC.glob("*.py")):
+        if path.name in ("recio.py",):
+            continue
+        for line, arg in _join_args(path.read_text()):
+            if key.search(arg) and "checked_name" not in arg:
+                offenders.append(f"{path.name}:{line}: "
+                                 f"os.path.join({' '.join(arg.split())})")
+    if offenders:
+        fail("a name read from JSON is joined without checked_name:\n  "
+             + "\n  ".join(offenders))

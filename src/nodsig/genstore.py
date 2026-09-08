@@ -69,6 +69,7 @@ what makes `clean_orphans` a safe sweep rather than a guess.
 import hashlib
 import heapq
 import os
+import re
 import sys
 
 from nodsig.recio import (IO_CHUNK, atomic_json, budgeted_slab, checked_name,
@@ -148,6 +149,11 @@ def _adjacent_equal(slab, off, count, rec, dedup_len):
             found += 1
         i = mask.find(0, i + 1)
     return found
+
+
+# The one shape a merged generation or its ladder can have; see
+# GenStore.clean_orphans for why the sweep matches nothing looser.
+_GENERATION = re.compile(r".+_g\d{4}\.(bin|lad)")
 
 
 class _BaseCursor:
@@ -588,24 +594,48 @@ class GenStore:
         produced again by the phase that re-runs.
 
         `keep` is the artifact's own top-level inventory (positional
-        files and the like), which this sweep must not touch."""
-        known_runs = {r["name"] for r in self.state["runs"]}
+        files and the like), which this sweep must not touch.
+
+        The sweep is only a sweep when there IS a state on disk to
+        measure the leftovers against. A directory holding runs or
+        generations and no state is not a crash — a crash leaves a run
+        or two unnamed, not everything — it is an artifact whose state
+        was lost, or an `--out` pointed at the wrong place, and either
+        way the files are somebody's hours. Refused, with everything
+        left where it was. The same goes for the shape of a name: a
+        generation is exactly `<logical>_g<4 digits>.bin|.lad`, and
+        nothing else with `_g` in it is this store's to remove."""
         runs_dir = os.path.join(self.dir, self.runs_dir)
+        fresh = not os.path.exists(self.path(self.state_name))
+        stale_runs = []
         if os.path.isdir(runs_dir):
-            for name in os.listdir(runs_dir):
-                if name not in known_runs:
-                    os.remove(os.path.join(runs_dir, name))
-                    print(f"  {self.label}: removed stale run {name} "
-                          "(not named by the state)", file=sys.stderr)
+            known_runs = {r["name"] for r in self.state["runs"]}
+            stale_runs = [name for name in sorted(os.listdir(runs_dir))
+                          if name not in known_runs
+                          and not os.path.isdir(os.path.join(runs_dir, name))]
         known_top = ({e["file"] for e in self.state["files"].values()}
                      | {e["file"] for e in self.state["caches"].values()}
                      | set(keep))
-        for name in os.listdir(self.dir):
-            if name.endswith(".tmp") or ("_g" in name
-                                         and name not in known_top):
-                os.remove(self.path(name))
-                print(f"  {self.label}: removed stale file {name} "
-                      "(not named by the state)", file=sys.stderr)
+        stale_top = [name for name in sorted(os.listdir(self.dir))
+                     if not os.path.isdir(self.path(name))
+                     and (name.endswith(".tmp")
+                          or (_GENERATION.fullmatch(name)
+                              and name not in known_top))]
+        if fresh and (stale_runs or stale_top):
+            raise self.error(
+                f"{self.dir}: no {self.state_name}, but the directory "
+                f"holds {len(stale_runs)} run(s) and {len(stale_top)} "
+                "generation or tmp file(s) — not a crash to sweep but a "
+                "lost state or the wrong directory; restore the state, "
+                "or start in an empty directory")
+        for name in stale_runs:
+            os.remove(os.path.join(runs_dir, name))
+            print(f"  {self.label}: removed stale run {name} "
+                  "(not named by the state)", file=sys.stderr)
+        for name in stale_top:
+            os.remove(self.path(name))
+            print(f"  {self.label}: removed stale file {name} "
+                  "(not named by the state)", file=sys.stderr)
 
     def truncate_appended(self, todo):
         """Files that grow in place are not committed atomically: a

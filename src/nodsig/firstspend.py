@@ -29,7 +29,7 @@ from nodsig.artifact import (WallClock, declared_parent, identity_fingerprint,
                              make_identity, producer, seal_manifest,
                              verify_sealed)
 from nodsig.genstore import GenStore, new_state_fields
-from nodsig.recio import atomic_json, read_fixed, sha_file
+from nodsig.recio import atomic_json, read_fixed, sha_file, checked_name
 from nodsig.recsort import SortedFile
 
 FORMAT_TAG = "firstspend-v1"
@@ -115,7 +115,8 @@ def _history_source(derived_dir):
     read here, but the whole record is streamed to keep the sha check."""
     man = dv._load_manifest(derived_dir, accept=(dv.FORMAT_TAG,))
     entry = man["build"]["files"]["history"]
-    path = os.path.join(derived_dir, entry["file"])
+    path = os.path.join(derived_dir,
+                        checked_name(entry["file"], FirstSpendError))
     return (path, entry["sha256"], man["build"]["transactions"],
             man["fingerprint"], man["identity"]["coverage"],
             man["format"], dv.HIST_REC)
@@ -443,7 +444,7 @@ def _verify_structural(out_dir, manifest, out):
     spender below the parent's transaction count."""
     entry = manifest["build"]["files"][LOGICAL]
     n_tx = manifest["build"]["transactions"]
-    path = os.path.join(out_dir, entry["file"])
+    path = os.path.join(out_dir, checked_name(entry["file"], FirstSpendError))
     prev = None
     rows = 0
     for rec in read_fixed(path, FS_REC, expect_sha=entry["sha256"],
@@ -476,7 +477,9 @@ def _verify_against_parent(out_dir, manifest, hist, out):
     dman = dv._load_manifest(derived_dir, accept=(dv.FORMAT_TAG,))
     hentry = dman["build"]["files"]["history"]
     hcache = dman["build"]["caches"]["history"]
-    with open(os.path.join(derived_dir, hcache["file"]), "rb") as f:
+    ladder_path = os.path.join(
+        derived_dir, checked_name(hcache["file"], FirstSpendError))
+    with open(ladder_path, "rb") as f:
         blob = f.read()
     if hashlib.sha256(blob).hexdigest() != hcache["sha256"]:
         raise FirstSpendError("the parent's history ladder is corrupt")
@@ -486,7 +489,8 @@ def _verify_against_parent(out_dir, manifest, hist, out):
         entry = manifest["build"]["files"][LOGICAL]
         rows = manifest["build"]["rows"]
         step = max(1, rows // _SAMPLE)
-        path = os.path.join(out_dir, entry["file"])
+        path = os.path.join(out_dir,
+                            checked_name(entry["file"], FirstSpendError))
         checked = 0
         with open(path, "rb") as f:
             for i in range(0, rows, step):
@@ -520,11 +524,15 @@ def _sorted_firstspend(out_dir, manifest):
     """A SortedFile over the sealed table, its ladder verified."""
     entry = manifest["build"]["files"][LOGICAL]
     cache = manifest["build"]["caches"][LOGICAL]
-    with open(os.path.join(out_dir, cache["file"]), "rb") as f:
+    ladder_path = os.path.join(
+        out_dir, checked_name(cache["file"], FirstSpendError))
+    with open(ladder_path, "rb") as f:
         blob = f.read()
     if hashlib.sha256(blob).hexdigest() != cache["sha256"]:
         raise FirstSpendError(f"{cache['file']}: corrupted ladder")
-    return SortedFile(os.path.join(out_dir, entry["file"]), FS_REC, FS_KEY,
+    path = os.path.join(out_dir,
+                        checked_name(entry["file"], FirstSpendError))
+    return SortedFile(path, FS_REC, FS_KEY,
                       manifest["build"]["rows"], blob, cache["every"],
                       error=FirstSpendError)
 
