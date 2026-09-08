@@ -261,6 +261,37 @@ A canonical form of the whole manifest is deliberately **not** offered. `build`
 is unconstrained by design and differs between formats, so canonicalizing it is
 the JSON-canonicalization problem refused above.
 
+### The statement, second version: the parent's coverage travels
+
+A parent declared by fingerprint alone can be confirmed only by whoever holds
+the parent. One fact about the parent is checkable **offline** against the
+child's own identity, and it is the one that went stale in practice: the
+parent's coverage. A graph sealed through height G and appended to G' keeps
+its manifest; an index built to G' that declared it as parent used to be
+confirmed by string equality of two fingerprints, and nothing on disk said
+the seal stopped short of the child. `declared_parent` therefore carries the
+parent's coverage, and the statement binds it:
+
+```
+canonical_statement(manifest) :=
+      "nodsig-statement-v2\x00"
+   || lp(manifest.format)
+   || raw32(manifest.fingerprint)
+   || u8(build.parent present ? 1 : 0)
+   || [ lp(parent.format) || raw32(parent.fingerprint)
+        || u32(parent.coverage.from) || u32(parent.coverage.to) ]   // if present
+
+statement := sha256( canonical_statement(manifest) ), lowercase hex
+```
+
+The rule for what enters is the same as before: outside the fingerprint, not
+recomputable from the bytes, checkable by whoever receives it. The
+coverage of the parent is all three: a reader with the child alone can refuse
+a parent whose `to` is below the child's, and `verify` and `report` do. The
+2.0.0 release seals every manifest it writes with v2 and re-seals the
+manifests of artifacts it does not rebuild; a manifest with a v1 statement is
+refused by the tag, with the release that reads it named.
+
 The digest is written into the manifest for the same reason the fingerprint is:
 it is recomputable, and having it in view makes a disagreement visible. On its
 own it secures nothing — whoever edits a declared parent edits this too — but

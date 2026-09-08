@@ -234,7 +234,23 @@ DOCUMENTED_ELSEWHERE = {
     "address-book-v1": "historical: superseded by v2, named in the changelog",
     "check-report-v1": "historical: superseded by v2",
     "address-book-v3": "forward reference: what a breaking change would be called",
-    "check-report-v3": "forward reference: same",
+    "check-report-v3": "forward reference: the 2.0.0 report, page written "
+                       "before the code",
+    "reveal-archive-v3": "forward reference: the 2.0.0 format, page written "
+                         "before the code that emits it",
+    "nonces-witness-v2": "forward reference: same",
+    "firstreveal-v2": "forward reference: same",
+    "locks-v2": "forward reference: same",
+    "reuse-scan-v2": "forward reference: same",
+    "reuse-hits-v2": "forward reference: same",
+    "reuse-stats-v2": "forward reference: same",
+    "reuse-curve-v2": "forward reference: same",
+    "archive-curve-v2": "forward reference: same",
+    "derived-timeline-v2": "forward reference: same",
+    "price-series-v2": "forward reference: same",
+    "blockprice-v2": "forward reference: same",
+    "block-stats-v3": "forward reference: same",
+    "nodsig-statement-v2": "forward reference: same",
     "derived-timeline-v1": "derivatives.TIMELINE_TAG: the sealed meta "
                            "`derived timeline` writes beside its two CSVs "
                            "(the module's FORMAT_TAG names the record files)",
