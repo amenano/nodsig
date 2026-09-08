@@ -1019,6 +1019,26 @@ def test_a_truncated_locks_manifest_is_a_named_refusal(tmp):
     print("ok  locks: a truncated manifest is refused with the remedy")
 
 
+def test_end_below_the_checkpoint_is_refused_by_name(tmp, locks_dir):
+    """A resume with --end below the watermark ran zero windows and then
+    tripped over the snapshot comparison with a message about the wrong
+    thing; a bitmap cannot un-burn, so it is refused as what it is."""
+    server, url = serve(build_chain())
+    cp = os.path.join(tmp, "cp_shorter")
+    try:
+        rs.run_scan(locks_dir, url, "user:pass", 4, cp, batch_size=2,
+                    checkpoint_every=2)
+        try:
+            rs.run_scan(locks_dir, url, "user:pass", 2, cp, batch_size=2,
+                        checkpoint_every=2)
+            fail("--end below the checkpoint was accepted")
+        except rs.ScanError as e:
+            check("already covers" in str(e), f"unexpected: {e}")
+    finally:
+        server.shutdown()
+    print("ok  resume: --end below the checkpoint is refused by name")
+
+
 def test_stats(tmp, locks_dir):
     """`stats` reads a locks dir + a scan checkpoint and reports the
     value distribution of the exposed locks. Checked against the scan's
@@ -1113,6 +1133,7 @@ def main():
         test_stats_finishes_a_checkpoint_caught_mid_promotion(tmp, locks_dir)
         test_a_lost_curve_row_comes_back_from_the_state(tmp, locks_dir)
         test_a_truncated_locks_manifest_is_a_named_refusal(tmp)
+        test_end_below_the_checkpoint_is_refused_by_name(tmp, locks_dir)
     print("PASS: reuse_scan agrees with the mirror chain, resumes "
           "deterministically, and refuses bad bytes.")
 

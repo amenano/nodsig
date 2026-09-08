@@ -1188,6 +1188,15 @@ def run_scan(locks_dir, rpc_url, auth, end_height, checkpoint_dir,
         start_height = state["last_height"] + 1
         prev_hash = bytes.fromhex(state["last_block_hash"])[::-1]
         base_seen_at = state.get("base_seen_at")
+        if end_height < state["last_height"]:
+            # Not a scan and not a rewind (a bitmap does not un-burn):
+            # the old code ran zero windows and then tripped over the
+            # snapshot comparison with a message about the wrong thing.
+            raise ScanError(
+                f"this checkpoint already covers height "
+                f"{state['last_height']:,}, above --end {end_height:,}: a "
+                "reuse scan only ever grows; scan into a fresh directory "
+                "for a shorter range")
         _heal_curve(curve_path, state)
         print(f"resuming from height {start_height} "
               f"(fingerprint verified)", file=sys.stderr)
