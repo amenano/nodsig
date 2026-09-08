@@ -28,7 +28,7 @@ error keeps the index's or the archive's type.
 import hashlib
 import os
 
-from nodsig.recio import IO_CHUNK, RecordError
+from nodsig.recio import IO_CHUNK, RecordError, durable_replace
 
 
 def write_run(path, records):
@@ -55,7 +55,7 @@ def write_run(path, records):
         if buf:
             f.write(buf)
             digest.update(buf)
-    os.replace(tmp, path)
+    durable_replace(tmp, path)
     return len(records), digest.hexdigest()
 
 

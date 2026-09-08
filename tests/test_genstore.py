@@ -309,6 +309,53 @@ def test_orphan_sweep_matches_the_generation_shape_exactly(tmp):
           "files go; look-alikes and directories stay")
 
 
+def test_a_run_the_disk_lost_is_refused_on_load(tmp):
+    """The state names a run with its size; a power loss after the
+    rename can leave that run empty on disk with the state intact,
+    and nothing would re-produce its records. The next load compares
+    sizes and stops there, not days later at a fusion."""
+    store = fresh(tmp, "lost")
+    store.write_run("run_a.bin", "cat", [rec(10, 1), rec(11, 2)])
+    store.write_state()
+    check(store.state["runs"][0]["bytes"] == 2 * REC,
+          "a run entry must record its bytes")
+    with open(store.run_path("run_a.bin"), "wb") as f:
+        f.truncate(0)
+    try:
+        store.clean_orphans()
+        fail("an empty run the state names was accepted")
+    except StoreError as e:
+        check("lost" in str(e), f"the refusal must say what happened: {e}")
+    print("ok  sizes: a named run the disk lost is refused on load")
+
+
+def test_a_fusion_refuses_without_the_space(tmp):
+    """The fusion writes a whole generation before deleting anything;
+    on a network mount a full disk shows up hours in, as EIO. The
+    upper bound (runs plus the current generation) is checked first."""
+    from nodsig import recio
+    store = fresh(tmp, "space")
+    store.write_run("run_a.bin", "cat", [rec(10, 1)])
+    real = recio.shutil.disk_usage
+    class _Usage:
+        total = used = 0
+        free = 1
+    recio.shutil.disk_usage = lambda _p: _Usage
+    try:
+        store.fuse("m", SPEC, "cat", dedup=None)
+        fail("a fusion started without the space for it")
+    except StoreError as e:
+        check("free" in str(e), f"the refusal must name the space: {e}")
+    finally:
+        recio.shutil.disk_usage = real
+    check(not any(n.startswith("m_g") for n in os.listdir(store.dir)),
+          "the refusal must come before the first byte")
+    _dups, delete = store.fuse("m", SPEC, "cat", dedup=None)
+    store.commit(delete)
+    print("ok  preflight: a fusion without the space is refused before "
+          "writing, and runs once the space is there")
+
+
 def test_drop_runs_defers_deletion(tmp):
     """`drop_runs` forgets a category and hands back its paths; the
     files stay until the caller has committed the state that stopped
@@ -620,6 +667,8 @@ TESTS = (test_fusion_generations_and_ladder,
          test_orphan_sweep_spares_the_declared_inventory,
          test_orphan_sweep_refuses_a_directory_without_a_state,
          test_orphan_sweep_matches_the_generation_shape_exactly,
+         test_a_run_the_disk_lost_is_refused_on_load,
+         test_a_fusion_refuses_without_the_space,
          test_drop_runs_defers_deletion,
          test_truncate_appended,
          test_gallop_answers_exactly_as_the_plain_fusion,

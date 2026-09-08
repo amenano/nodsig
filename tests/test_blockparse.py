@@ -151,7 +151,7 @@ def w_commitment_spk(wtxids, reserved):
     return b"\x6a\x24\xaa\x21\xa9\xed" + w_sha256d(witness_root + reserved)
 
 
-def build_synthetic(with_commitment=True):
+def build_synthetic(with_commitment=True, stripped=False):
     """Three transactions that among them exercise every branch:
 
     tx0 — the coinbase, itself SegWit as in every real post-2017 block
@@ -168,6 +168,10 @@ def build_synthetic(with_commitment=True):
 
     `with_commitment=False` builds the same block WITHOUT the commitment
     output: an invalid block, used to prove the parser refuses it.
+    `stripped=True` builds the real block re-serialized WITHOUT its
+    witnesses: same txids, same Merkle root, same hash, commitment
+    output intact, no witness bytes anywhere — what a pre-BIP144 proxy
+    or a hostile node would deliver, and what the parser must refuse.
     """
     # tx1: legacy, two inputs; the second scriptSig pushes 80 bytes via
     # OP_PUSHDATA1 (0x4c 0x50), then a direct push of the fake key.
@@ -189,6 +193,15 @@ def build_synthetic(with_commitment=True):
         [w_output(999, bytes([0x00, 0x20]) + bytes(32))],
         0,
         witnesses=[[FAKE_SIG, FAKE_PUB], [FAKE_SIG, FAKE_PUB], []])
+    if stripped:
+        raw2, _txid2, _ = w_tx(
+            2,
+            [w_input(b"\x33" * 32, 1, b"", 0xFFFFFFFF),
+             w_input(b"\x44" * 32, 0, redeem_push, 0xFFFFFFFF),
+             w_input(b"\x55" * 32, 2, bytes([71]) + FAKE_SIG + bytes([33]) + FAKE_PUB, 0)],
+            [w_output(999, bytes([0x00, 0x20]) + bytes(32))],
+            0)
+        assert _txid2 == txid2
 
     # tx0: the coinbase, built LAST because the commitment in its
     # outputs depends on the other transactions' wtxids.
@@ -203,7 +216,7 @@ def build_synthetic(with_commitment=True):
         [w_input(bytes(32), 0xFFFFFFFF, b"\x03\x40\x42\x0f hello", 0xFFFFFFFF)],
         outputs,
         0,
-        witnesses=[[reserved]])
+        witnesses=None if stripped else [[reserved]])
 
     txs = [raw0, raw1, raw2]
     txids = [txid0, txid1, txid2]
@@ -331,6 +344,29 @@ def test_failure_paths():
     print("ok  failure paths: truncation, trailing bytes, tx corruption "
           "(Merkle), witness corruption (commitment), missing commitment, "
           "malformed push")
+
+
+def test_a_block_delivered_without_its_witnesses_is_refused():
+    """Stripping the witnesses changes no txid, so the Merkle root and
+    the block hash still match: the four integrity checks used to pass
+    such a block, and every witness-borne key and signature (most of
+    the chain since 2017) vanished without an error. The commitment
+    output sits under the Merkle root and cannot be stripped, so its
+    presence is what demands the witness."""
+    raw, block_hash, _ = build_synthetic()
+    stripped, stripped_hash, _ = build_synthetic(stripped=True)
+    check(stripped_hash == block_hash and len(stripped) < len(raw),
+          "the stripped block must be the same block, shorter")
+    check(bp.block_id(stripped) == block_hash,
+          "block_id cannot tell a stripped block apart: that is the point")
+    try:
+        bp.parse_block(stripped)
+        fail("a block carrying a witness commitment was accepted without "
+             "its witnesses")
+    except bp.ParseError as e:
+        check("witness" in str(e), f"the refusal must name the witness: {e}")
+    print("ok  stripped: a block with a commitment and no witnesses is "
+          "refused, though its hash matches")
 
 
 def test_compactsize():
@@ -555,6 +591,7 @@ def main():
     test_compactsize()
     test_synthetic()
     test_failure_paths()
+    test_a_block_delivered_without_its_witnesses_is_refused()
     test_every_field_is_bytes_whatever_the_buffer_was()
     test_truncation_is_named_field_by_field()
     test_genesis()

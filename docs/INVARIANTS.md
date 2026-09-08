@@ -68,12 +68,22 @@ instead of restating them.
     logical name.
 
     The rule is not stylistic: every sealed file is named together with its
-    `sha256`, and every reader verifies that digest before yielding a byte.
+    `sha256`, and every reader settles that digest when it reaches the end of
+    the file — a consumer that stops early has verified nothing, which is why
+    a fusion or a join drains its sources rather than taking exactly the
+    records it needs.
     Overwriting a file in place therefore has no recoverable failure mode — a
     kill between the rename and the manifest write leaves the manifest
     describing bytes that are gone, and the tool that would repair it is the
     one that refuses to read. This too shipped, in the archive's fusion, and
     the fix was to make the write additive.
+
+    The state is written after the bytes it names, and both are fsynced —
+    the file, then the rename, then the directory — so the order holds
+    against a power loss and not only against a kill. What a crash can cost
+    is the stretch since the last checkpoint, never a state naming bytes
+    that are not there; and a run the disk lost anyway is refused at the
+    next load, by its size, before anything is built on it.
 
 ## The binding invariant (stated once)
 

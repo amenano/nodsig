@@ -387,6 +387,23 @@ def test_run_names_from_the_state_stay_inside_the_directory(tmp):
           "not removed and not opened")
 
 
+def test_a_run_the_disk_lost_is_refused_on_load(tmp):
+    """A run the state names with 10 bytes and the disk holds with 5
+    was lost after the state was written (a power loss): refused at
+    load, by its size, before a scan resumes past heights no graph
+    holds and a fingerprint days later says "corrupted"."""
+    g = _graph_with_runs(tmp, "graph_lost", n=2)
+    with open(os.path.join(g, ge.RUNS_DIR, "run_00000002-00000002.bin"),
+              "wb") as f:
+        f.write(b"x" * 5)
+    try:
+        ge.GraphEmitter(g).load(3)
+        fail("a run shorter than the state records was accepted")
+    except ge.GraphError as e:
+        check("lost" in str(e), f"the refusal must say what happened: {e}")
+    print("ok  sizes: a named run the disk lost is refused on load")
+
+
 def test_cli_readers(graph):
     """stats and show, as a user would drive them (must not raise)."""
     ge.run_stats(graph)
@@ -583,6 +600,31 @@ def test_digest_refusals(tmp, blocks, graph_oneshot):
 # an emission sealed by an earlier major: readable, but not a parent
 # ---------------------------------------------------------------------------
 
+def test_digest_names_the_gap_it_did_not_measure(tmp):
+    """A digest checkpointed at height 1 whose host resumes at 4 used
+    to keep 2..3 in neither column and print `result: ok`: the one
+    number a reader trusts, computed over what happened to be
+    measured. Now every reference run inside the gap is `skipped`, so
+    the report names it."""
+    ref = _graph_with_runs(tmp, "digest_ref", n=4)
+    host = os.path.join(tmp, "digest_host")
+    os.makedirs(host)
+    with open(os.path.join(host, ge.DIGEST_STATE_NAME), "w") as f:
+        json.dump({"format": ge.FORMAT_TAG, "last_height": 1,
+                   "last_block_hash": "11" * 32, "contiguous": True,
+                   "stream_sha256": None, "beyond": 0, "skipped": [],
+                   "intervals": [{"start": 1, "end": 1, "ok": True}]}, f)
+    d = ge.GraphDigest(ref, host)
+    d.load(4)
+    check(d.results == [{"start": 1, "end": 1, "ok": True}],
+          "the interval measured before the gap must survive")
+    check(d.skipped == [[2, 2], [3, 3]],
+          f"the gap must be named run by run, got {d.skipped}")
+    check(d.totals()["skipped"] == 2, "totals must count the gap")
+    print("ok  digest: a resume past the check's own state reports the "
+          "gap as not verified")
+
+
 def test_earlier_major(tmp, blocks, graph_oneshot):
     """The v1 → v2 break moved the seal and not the stream, so a v1
     emission still has to be readable — and re-sealing it must not
@@ -674,12 +716,14 @@ def main():
             test_refusals(tmp, blocks, graph)
             test_sweeps_refuse_what_no_state_describes(tmp)
             test_run_names_from_the_state_stay_inside_the_directory(tmp)
+            test_a_run_the_disk_lost_is_refused_on_load(tmp)
             test_cli_readers(graph)
             test_digest_agrees(tmp, blocks, graph)
             test_digest_host_independence(tmp, blocks, locks_dir, graph)
             test_digest_catches_a_change(tmp, blocks, graph)
             test_digest_resume(tmp, blocks, graph)
             test_digest_refusals(tmp, blocks, graph)
+            test_digest_names_the_gap_it_did_not_measure(tmp)
             test_earlier_major(tmp, blocks, graph)
     finally:
         ge.GraphEmitter.__init__ = original

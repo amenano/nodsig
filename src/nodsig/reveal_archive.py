@@ -89,7 +89,10 @@ Subcommands:
     merge       fuse all runs (and the previous merged files) into
                 one sorted deduplicated file per category, and write
                 the manifest with the archive's canonical fingerprint.
-                This is the periodic fusion of the card index.
+                This is the periodic fusion of the card index —
+                periodic BETWEEN scans, never during one: scan and
+                merge on one directory exclude each other (a `.lock`
+                in the directory says so, see recio.exclusive).
     crosscheck  derive the burnt-locks bitmaps from the archive and
                 the lock files of `reuse_scan.py prepare`, and print
                 the fingerprint in reuse_scan's exact format — or
@@ -128,6 +131,7 @@ from nodsig.blockparse import ParseError, script_pushes, scriptsig_pushes
 # read/write budget, the sha-verifying reader, atomic writes — shared with
 # the outpoint index, one implementation of the mechanics for both.
 from nodsig.recio import (IO_CHUNK, atomic_json, budgeted_slab, checked_name,
+                          durable_replace, locked, preflight_space,
                           read_fixed)
 
 # The ladder-backed search over the merged files: same primitive the index
@@ -361,7 +365,7 @@ def _write_run(path, cat, records):
         if buf:
             f.write(buf)
             digest.update(buf)
-    os.replace(tmp, path)
+    durable_replace(tmp, path)
     return written, digest.hexdigest()
 
 
@@ -500,6 +504,8 @@ def _archive_sources(archive_dir, cat, state, manifest):
 # scan — the long run
 # ---------------------------------------------------------------------------
 
+@locked("archive_dir", ScanError, "scan")
+@locked("nonces_dir", ScanError, "scan")
 def run_scan(rpc_url, auth, end_height, archive_dir,
              batch_size=25, checkpoint_every=10_000,
              flush_records=8_000_000, client=None, graph_dir=None,
@@ -543,6 +549,20 @@ def run_scan(rpc_url, auth, end_height, archive_dir,
                 os.remove(os.path.join(archive_dir, RUNS_DIR, name))
                 print(f"  removed stale run {name} (not named by the "
                       "state)", file=sys.stderr)
+        # A named run whose bytes the disk does not hold was lost after
+        # the state was written (a power loss): nothing re-emits those
+        # records, so stop here rather than at the fusion.
+        for run in runs:
+            path = _run_path(archive_dir, run["name"])
+            expected = run["records"] * rec_width(run["category"])
+            actual = os.path.getsize(path) if os.path.exists(path) else -1
+            if actual != expected:
+                raise ScanError(
+                    f"{path}: the state names this run with "
+                    f"{run['records']:,} records ({expected:,} bytes) but "
+                    f"the disk holds {actual:,} bytes — lost after the "
+                    "state was written (power loss?); the heights it "
+                    "covers have to be scanned again")
         print(f"resuming from height {start_height}", file=sys.stderr)
 
     # Graph co-emission (OFF by default), same contract as in
@@ -735,6 +755,7 @@ def run_scan(rpc_url, auth, end_height, archive_dir,
 # merge — the periodic fusion
 # ---------------------------------------------------------------------------
 
+@locked("archive_dir", ScanError, "merge")
 def run_merge(archive_dir):
     """Fuse the merged files and all runs into one sorted deduplicated
     file per category, then fingerprint the result.
@@ -770,6 +791,21 @@ def run_merge(archive_dir):
 
     generation = ((manifest["build"]["generation"] + 1)
                   if manifest else 1)
+    # The fusion writes the new generation beside the runs and the old
+    # one, and deletes nothing before the commit. Its upper bound is
+    # every record it reads: the run pile plus the current generation
+    # (the first fusion of a scan reads a pile about twice the size of
+    # what it will seal — measured, and the reason this is checked
+    # here rather than discovered as EIO hours in).
+    pile = sum(run["records"] * rec_width(run["category"])
+               for run in state["runs"])
+    base = sum(os.path.getsize(os.path.join(archive_dir,
+                                            _cat_file(manifest, cat)))
+               for cat in CAT_ORDER) if manifest else 0
+    print(f"  fusing {pile / 1e9:,.1f} GB of runs"
+          + (f" into {base / 1e9:,.1f} GB sealed" if base else ""),
+          file=sys.stderr)
+    preflight_space(archive_dir, pile + base, ScanError, "archive merge")
     # The clock reads what the archive's state already carries, so an
     # entry the scan left under `scan` rides into the manifest here
     # instead of being lost when the runs are consumed. Stamped at the
@@ -803,7 +839,7 @@ def run_merge(archive_dir):
             if buf:
                 f.write(buf)
                 digest.update(buf)
-        os.replace(tmp, out_path)
+        durable_replace(tmp, out_path)
         build["files"][cat] = {"file": out_name, "records": records}
         digests[cat] = digest.hexdigest()
 
@@ -814,7 +850,7 @@ def run_merge(archive_dir):
         tmp_lad = lad_path + ".tmp"
         with open(tmp_lad, "wb") as f:
             f.write(ladder)
-        os.replace(tmp_lad, lad_path)
+        durable_replace(tmp_lad, lad_path)
         build["caches"][cat] = {
             "file": lad_name,
             "every": ARCHIVE_LADDER_EVERY,
@@ -1306,7 +1342,7 @@ def _write_curve(locks, curve_path, every, coverage_to):
                     + ",".join(f"{counts[t]},{sats[t]}" for t in TYPE_ORDER)
                     + f",{fingerprint_of_bitmaps(bitmaps)}\n")
             rows += 1
-    os.replace(tmp, curve_path)
+    durable_replace(tmp, curve_path)
     print(f"curve: {rows} rows on the {every:,} grid → {curve_path}",
           file=sys.stderr)
 
@@ -1355,7 +1391,7 @@ def run_archive_curve(archive_dir, out_path, every=10_000):
             row = [counts[cat][n] for cat in CAT_ORDER]
             f.write(f"{point}," + ",".join(str(v) for v in row)
                     + f",{sum(row)}\n")
-    os.replace(tmp, out_path)
+    durable_replace(tmp, out_path)
     total = sum(sum(counts[cat]) for cat in CAT_ORDER)
     print(f"archive curve: {len(points)} windows of {every:,} blocks "
           f"through height {coverage_to:,}, {total:,} first revelations "

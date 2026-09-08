@@ -80,6 +80,7 @@ import sys
 from nodsig import graphemit as ge
 from nodsig.artifact import (WallClock, declared_parent, make_identity,
                              producer, seal_manifest)
+from nodsig.recio import durable_replace
 
 FORMAT_TAG = "block-stats-v2"
 META_NAME_SUFFIX = ".meta.json"
@@ -147,7 +148,7 @@ def run_build(graph_dir, out_path):
             totals["n_inputs"] += row[3]
             totals["n_outputs"] += row[4]
             totals["value_created_sats"] += row[5]
-    os.replace(tmp, out_path)
+    durable_replace(tmp, out_path)
     csv_sha256 = digest.hexdigest()
 
     # Tie the derivative to the graph it came from, INSIDE the identity:
@@ -192,7 +193,7 @@ def run_build(graph_dir, out_path):
     meta_tmp = meta_path + ".tmp"
     with open(meta_tmp, "w") as f:
         json.dump(meta, f, indent=1)
-    os.replace(meta_tmp, meta_path)
+    durable_replace(meta_tmp, meta_path)
 
     print(f"{FORMAT_TAG} written: {out_path}")
     print(f"  covers heights 1..{covered:,}  ({rows:,} blocks)")

@@ -42,7 +42,7 @@ import time
 from decimal import Decimal, InvalidOperation
 
 from nodsig.artifact import producer
-from nodsig.recio import atomic_json, sha_file, checked_name
+from nodsig.recio import atomic_json, sha_file, checked_name, durable_replace
 
 FORMAT_TAG = "price-series-v1"
 CSV_NAME = "series.csv"
@@ -159,7 +159,7 @@ def import_series(src_path, out_dir, ts_field, price_field, ts_format,
         f.write("ts,price\n")
         for ts, price in dedup:
             f.write(f"{ts},{price}\n")
-    os.replace(tmp, csv_path)
+    durable_replace(tmp, csv_path)
     meta = {
         "format": FORMAT_TAG,
         "currency": currency,

@@ -832,6 +832,88 @@ def test_rest_needs_no_credential():
           "demands one")
 
 
+class _Definite(BaseHTTPRequestHandler):
+    """A node that answers with a status code: 401 unless the request
+    carries `accept` as its credential, 503 when `flaky` says so."""
+    accept = None
+    flaky = 0
+    seen = []
+
+    def do_POST(self):
+        self.seen.append(self.headers.get("Authorization"))
+        if _Definite.flaky:
+            _Definite.flaky -= 1
+            self.send_response(503)
+            self.end_headers()
+            return
+        if self.headers.get("Authorization") != _Definite.accept:
+            self.send_response(401)
+            self.end_headers()
+            return
+        n = len(json.loads(self.rfile.read(
+            int(self.headers["Content-Length"]))))
+        body = json.dumps([{"id": i, "result": i} for i in range(n)])
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.end_headers()
+        self.wfile.write(body.encode())
+
+    def log_message(self, *args):
+        pass
+
+
+def _basic(auth):
+    import base64
+    return "Basic " + base64.b64encode(auth.encode()).decode()
+
+
+def test_a_definite_answer_is_not_retried_and_a_cookie_is_reread(tmp):
+    """A 401 used to ride the same backoff as a socket error (8 tries,
+    three minutes) and end in "RPC unreachable", pointing at the tunnel
+    instead of the credential. A 5xx IS transient and is retried. And
+    a 401 with a cookie file behind it gets one re-read: Core rotates
+    the cookie at every restart, and a scan of days meets restarts."""
+    import time as _time
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _Definite)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    url = f"http://127.0.0.1:{server.server_port}/"
+    sleeps = []
+    real_sleep, _time.sleep = _time.sleep, lambda s: sleeps.append(s)
+    try:
+        _Definite.accept = _basic("u:new")
+        _Definite.seen.clear()
+        try:
+            rs.RpcClient(url, "u:old", retries=4).batch([("getblockhash", [1])])
+            fail("a 401 was not raised")
+        except rs.ScanError as e:
+            assert "401" in str(e) and "credentials" in str(e), str(e)
+        assert sleeps == [], f"a definite answer must not back off: {sleeps}"
+        assert len(_Definite.seen) == 1, "a 401 must be asked once"
+
+        cookie = os.path.join(tmp, "cookie")
+        with open(cookie, "w") as f:
+            f.write("u:old")
+        client, _auth = rs.build_client(url, False, cookie)
+        with open(cookie, "w") as f:
+            f.write("u:new")             # the node restarted meanwhile
+        _Definite.seen.clear()
+        assert client.batch([("getblockhash", [1])]) == [0]
+        assert _Definite.seen == [_basic("u:old"), _basic("u:new")], \
+            "the rotated cookie must be re-read once, after the 401"
+        assert sleeps == [], "the re-read is immediate, not a backoff"
+
+        _Definite.flaky = 2
+        _Definite.seen.clear()
+        assert rs.RpcClient(url, "u:new", retries=4).batch(
+            [("getblockhash", [1])]) == [0]
+        assert sleeps == [2, 4], f"a 5xx is retried with backoff: {sleeps}"
+    finally:
+        _time.sleep = real_sleep
+        server.shutdown()
+    print("ok  rpc: 401 is an answer (no retry, the credential is named), "
+          "a rotated cookie is re-read once, a 5xx is retried")
+
+
 def test_stats(tmp, locks_dir):
     """`stats` reads a locks dir + a scan checkpoint and reports the
     value distribution of the exposed locks. Checked against the scan's
@@ -921,6 +1003,7 @@ def main():
         test_rest_transport(tmp, locks_dir)
         test_rest_rides_out_a_transient_5xx(tmp, locks_dir)
         test_stats(tmp, locks_dir)
+        test_a_definite_answer_is_not_retried_and_a_cookie_is_reread(tmp)
     print("PASS: reuse_scan agrees with the mirror chain, resumes "
           "deterministically, and refuses bad bytes.")
 

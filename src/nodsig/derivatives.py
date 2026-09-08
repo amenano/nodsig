@@ -182,7 +182,7 @@ from nodsig.genstore import GenStore, new_state_fields
 from nodsig.outpoint_index import ORD, OutpointError
 from nodsig.hashing import hash160
 from nodsig.recio import (IO_CHUNK, atomic_json, budgeted_slab, checked_name,
-                          read_fixed, read_slabs)
+                          durable_replace, read_fixed, read_slabs)
 from nodsig.recsort import SortedFile
 from nodsig.reuse_scan import SAT
 
@@ -480,6 +480,7 @@ def _phase_scan(index, store, flush_records, checkpoint_every):
             with open(os.path.join(derived_dir, "out_sums.tmp.bin"),
                       "ab") as f:
                 f.write(osums_buf)
+                os.fsync(f.fileno())
             state["out_sums_records"] += len(osums_buf) // 8
             osums_buf.clear()
         state["out_pos"], state["spend_pos"] = out_pos, spend_pos
@@ -679,6 +680,12 @@ def _phase_merge_inputs(store):
             fee_row(0)
         txin_f.write(txin_buf)
         fee_f.write(fee_buf)
+        # Positional files grow in place and the state names their
+        # sizes: on disk before the state is, or a power loss leaves a
+        # state longer than its files ("the file lost data").
+        for f in (txin_f, fee_f):
+            f.flush()
+            os.fsync(f.fileno())
 
     delete = store.drop_runs("spends")
     state["files"]["tx_inputs"] = {
@@ -748,7 +755,7 @@ def _phase_seal(store, index):
     tmp = lad_path + ".tmp"
     with open(tmp, "wb") as f:
         f.write(ladder)
-    os.replace(tmp, lad_path)
+    durable_replace(tmp, lad_path)
     state["caches"]["tx_inputs"] = {
         "file": "tx_inputs.lad", "every": TXIN_EVERY,
         "sha256": hashlib.sha256(ladder).hexdigest()}
@@ -1816,7 +1823,7 @@ def _write_csv(path, header, lines):
             data = (line + "\n").encode()
             f.write(data)
             digest.update(data)
-    os.replace(tmp, path)
+    durable_replace(tmp, path)
     return digest.hexdigest()
 
 
@@ -2052,7 +2059,7 @@ def run_timeline(derived_dir, index_dir, out_dir, grid=TIMELINE_GRID,
         meta_tmp = os.path.join(out_dir, TIMELINE_META + ".tmp")
         with open(meta_tmp, "w") as f:
             json.dump(meta, f, indent=1)
-        os.replace(meta_tmp, os.path.join(out_dir, TIMELINE_META))
+        durable_replace(meta_tmp, os.path.join(out_dir, TIMELINE_META))
 
         print(f"{TIMELINE_TAG} written: {out_dir}", file=out)
         print(f"  covers heights 1..{watermark:,}  ({rows:,} rows, "

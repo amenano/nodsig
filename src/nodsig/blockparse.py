@@ -566,24 +566,34 @@ def _verify_witness_commitment(transactions):
     in every block that has witness data; if several outputs match the
     pattern, the last one wins (also per BIP 141).
 
-    Blocks with no SegWit transaction (everything before block 481,824,
-    and the occasional all-legacy block after) have nothing to commit to:
-    the function returns without checking anything, and the header's
-    Merkle root alone already covers every byte of those blocks.
-    """
-    if not any(tx.is_segwit for tx in transactions):
-        return
-    coinbase = transactions[0]
-    if not is_coinbase(coinbase):
-        raise ParseError("block with witness data whose first transaction "
-                         "is not the coinbase")
+    Blocks with no SegWit transaction AND no commitment output (everything
+    before block 481,824, and the occasional all-legacy block after) have
+    nothing to commit to: the function returns without checking anything,
+    and the header's Merkle root alone already covers every byte.
 
+    The order of the two tests is the whole point. A block re-serialized
+    WITHOUT its witnesses has the same txids, hence the same Merkle root
+    and the same hash as the real one, and not one SegWit-serialized
+    transaction: a check that only looked for witness data would find
+    none to verify and pass it, with every witness-borne key and
+    signature silently gone. The commitment output sits UNDER the Merkle
+    root and cannot be stripped, so it is looked for first, and where it
+    is, the coinbase witness must be there and must verify — Core's own
+    rule (bad-witness-nonce-size, bad-witness-merkle-match).
+    """
+    coinbase = transactions[0]
     commitment = None
     for out in coinbase.outputs:           # the LAST matching output wins
         spk = out.script_pubkey
         if (len(spk) >= 38 and spk[0] == 0x6A and spk[1] == 0x24
                 and spk[2:6] == _WITNESS_COMMITMENT_MARK):
             commitment = spk[6:38]
+    has_witness = any(tx.is_segwit for tx in transactions)
+    if commitment is None and not has_witness:
+        return
+    if not is_coinbase(coinbase):
+        raise ParseError("block with witness data whose first transaction "
+                         "is not the coinbase")
     if commitment is None:
         raise ParseError("block with witness data but no witness "
                          "commitment in the coinbase")
@@ -591,7 +601,10 @@ def _verify_witness_commitment(transactions):
     witness = coinbase.inputs[0].witness
     if len(witness) != 1 or len(witness[0]) != 32:
         raise ParseError("coinbase witness is not the single 32-byte "
-                         "reserved value required by BIP 141")
+                         "reserved value required by BIP 141"
+                         + ("" if has_witness else
+                            " (a block carrying a witness commitment "
+                            "was delivered without its witnesses)"))
 
     witness_root = merkle_root([bytes(32)]
                                + [tx.wtxid for tx in transactions[1:]])

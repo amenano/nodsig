@@ -116,7 +116,7 @@ from nodsig.artifact import (WallClock, make_identity, producer,
                              seal_manifest, verify_sealed)
 from nodsig.blockparse import scriptsig_pushes
 from nodsig.genstore import GenStore, new_state_fields
-from nodsig.recio import atomic_json, read_fixed, checked_name
+from nodsig.recio import atomic_json, checked_name, locked, read_fixed
 from nodsig.recsort import SortedFile
 
 FORMAT_TAG = "nonces-v3"
@@ -1036,6 +1036,7 @@ def _seal(nonces_dir, state, tallies, clock):
     return manifest
 
 
+@locked("nonces_dir", NonceError, "merge")
 def run_merge(nonces_dir):
     """Fuse the pending runs and the previous generation into the next
     one, then seal.
@@ -1184,6 +1185,7 @@ def run_verify(nonces_dir, deep=False):
 # rewind: back to a height already covered, in the bytes of a rebuild
 # ---------------------------------------------------------------------------
 
+@locked("nonces_dir", NonceError, "rewind")
 def run_rewind(nonces_dir, to_height):
     """Bring a sealed artifact back to `to_height`.
 

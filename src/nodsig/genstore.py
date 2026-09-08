@@ -73,6 +73,7 @@ import re
 import sys
 
 from nodsig.recio import (IO_CHUNK, atomic_json, budgeted_slab, checked_name,
+                          preflight_space, durable_replace,
                           read_fixed, read_slabs)
 from nodsig.recsort import write_run
 
@@ -392,13 +393,13 @@ def merge_to_file(sources, out_path, rec, key_len, ladder_path,
         if buf:
             f.write(buf)
             digest.update(buf)
-    os.replace(tmp, out_path)
+    durable_replace(tmp, out_path)
 
     ladder_sha = hashlib.sha256(ladder).hexdigest()
     tmp = ladder_path + ".tmp"
     with open(tmp, "wb") as f:
         f.write(ladder)
-    os.replace(tmp, ladder_path)
+    durable_replace(tmp, ladder_path)
     return records, digest.hexdigest(), ladder_sha, dups
 
 
@@ -478,8 +479,11 @@ class GenStore:
         the state yet: the resolve phase swaps a whole category at
         once, and a run named before that swap would be fused twice."""
         count, sha = write_run(self.run_path(name), records)
+        # `bytes` lets the next load see a run the disk lost (a power
+        # loss after the rename) before a day of work is built on it.
         entry = {"name": name, "category": category,
-                 "records": count, "sha256": sha}
+                 "records": count, "sha256": sha,
+                 "bytes": count * (len(records[0]) if records else 0)}
         (self.state["runs"] if into is None else into).append(entry)
         return count
 
@@ -524,6 +528,12 @@ class GenStore:
         this one implementation. A sift MUST NOT change a record's key
         or its order — removing records from a sorted file leaves it
         sorted, rewriting one past its neighbour does not."""
+        needed = sum(os.path.getsize(p) for p in self.run_paths(category))
+        current = self.state["files"].get(logical)
+        if current is not None:
+            needed += os.path.getsize(self.path(current["file"]))
+        preflight_space(self.dir, needed, self.error,
+                        f"{self.label} fusion of {logical}")
         rec, key_len, every = spec
         old = self.state["files"].get(logical)
         todo = []
@@ -632,6 +642,24 @@ class GenStore:
             os.remove(os.path.join(runs_dir, name))
             print(f"  {self.label}: removed stale run {name} "
                   "(not named by the state)", file=sys.stderr)
+        # A run the state names with a size the disk does not hold is
+        # not a crash leftover: the state was written, the run's bytes
+        # never reached the disk (a power loss, a mount that lied). No
+        # phase re-produces those records, so the only honest answer is
+        # to stop here, where the loss is one run, not at a fusion days
+        # later with "sha256 mismatch".
+        for run in self.state["runs"]:
+            if "bytes" not in run:
+                continue            # written before the field existed
+            path = self.run_path(run["name"])
+            actual = os.path.getsize(path) if os.path.exists(path) else -1
+            if actual != run["bytes"]:
+                raise self.error(
+                    f"{path}: the state names this run with "
+                    f"{run['bytes']:,} bytes but the disk holds "
+                    f"{actual:,} — the run was lost after the state "
+                    "was written (power loss?); the heights it covered "
+                    "have to be scanned again")
         for name in stale_top:
             os.remove(self.path(name))
             print(f"  {self.label}: removed stale file {name} "
@@ -655,6 +683,7 @@ class GenStore:
             if actual > committed:
                 with open(path, "ab") as f:
                     f.truncate(committed)
+                    os.fsync(f.fileno())
                 print(f"  {self.label}: truncated {name} to its "
                       f"committed {committed} bytes (tail past the "
                       "last checkpoint)", file=sys.stderr)

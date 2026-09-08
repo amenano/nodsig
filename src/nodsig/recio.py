@@ -33,9 +33,15 @@ and the sha256 of the slabs is the sha256 of the same bytes — no slab choice
 touches any fingerprint.
 """
 
+import contextlib
+import fcntl
+import functools
 import hashlib
+import inspect
 import json
 import os
+import shutil
+import sys
 
 # One read/write buffer. 8 MiB amortises syscalls without holding much.
 IO_CHUNK = 8 * 2**20
@@ -154,10 +160,140 @@ def sha_file(path):
     return digest.hexdigest()
 
 
+def fsync_dir(path):
+    """Make a rename in `path` durable. Skipped where the filesystem
+    refuses (some network mounts): the rename is then as durable as the
+    mount makes it, which is what it was before."""
+    try:
+        fd = os.open(path, os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(fd)
+    except OSError:
+        pass
+    finally:
+        os.close(fd)
+
+
+def durable_replace(tmp, path):
+    """`os.replace` that survives a power loss, not only a kill.
+
+    A rename is atomic against a process dying; it says nothing about
+    the page cache. The bytes of the tmp file, and the rename itself,
+    can reach the disk after the state that names them, in which case
+    a reboot leaves the state naming a run that is empty on disk, and
+    the scan resumes past blocks no artifact holds. So: the file's
+    bytes first, then the rename, then the directory entry. The cost
+    is one fsync per run or state, not per record."""
+    with open(tmp, "rb+") as f:
+        os.fsync(f.fileno())
+    os.replace(tmp, path)
+    fsync_dir(os.path.dirname(os.path.abspath(path)))
+
+
 def atomic_json(path, obj):
     """Write JSON to a tmp file and rename it into place, so a crash never
-    leaves a half-written state or manifest under its final name."""
+    leaves a half-written state or manifest under its final name; the
+    bytes and the rename are fsynced, so a power loss does not either."""
     tmp = path + ".tmp"
     with open(tmp, "w") as f:
         json.dump(obj, f, indent=1)
+        f.flush()
+        os.fsync(f.fileno())
     os.replace(tmp, path)
+    fsync_dir(os.path.dirname(os.path.abspath(path)))
+
+
+def preflight_space(directory, needed, error, what):
+    """Refuse a step that will write `needed` bytes into `directory`
+    unless the filesystem has them free, and say both numbers.
+
+    A fusion writes the next generation beside the current one and the
+    runs, and deletes nothing until the new one is committed: the
+    space it needs is the new generation, and the first fusion of a
+    scan fuses a run pile about twice the size of what it will seal.
+    On a network mount a full disk shows up as EIO hours in, not as
+    ENOSPC; a number before the first byte is cheaper."""
+    free = shutil.disk_usage(directory).free
+    print(f"  {what}: writes up to {needed / 1e9:,.1f} GB, "
+          f"{free / 1e9:,.1f} GB free", file=sys.stderr)
+    if free < needed:
+        raise error(
+            f"{directory}: {what} needs up to {needed:,} bytes free and "
+            f"the filesystem has {free:,}: make room first (the step "
+            "writes a whole new generation before it deletes anything)")
+
+
+# ---------------------------------------------------------------------------
+# One writer per artifact directory
+# ---------------------------------------------------------------------------
+
+LOCK_NAME = ".lock"
+
+
+@contextlib.contextmanager
+def exclusive(directory, error, what):
+    """Hold `<directory>/.lock` exclusively for the duration, or refuse.
+
+    A scan checkpoints its state every few thousand blocks; a merge
+    loads that state, fuses for hours, and writes the dict it loaded
+    back with the runs it consumed removed. Run together on one
+    directory, whichever finishes second rewrites the other's truth:
+    the state names runs the merge deleted, or the watermark falls
+    back by hours of checkpoints. Nothing in the files themselves can
+    tell the two apart afterwards, so the exclusion has to be taken
+    up front, by the process, and refused loudly when it is not free.
+
+    `flock` is advisory and released by the kernel when the process
+    dies, so a crash leaves no stale lock to clean. A filesystem that
+    cannot lock (some network mounts) is warned about and not refused:
+    the lock is a guard against a mistake, not a part of the format.
+    """
+    # The lock is taken before the command opens the directory, so a
+    # first scan finds it not there yet: created here, empty, which is
+    # what the scan would have done a moment later.
+    os.makedirs(directory, exist_ok=True)
+    path = os.path.join(directory, LOCK_NAME)
+    fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o644)
+    try:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise error(
+                f"{directory}: another command holds this artifact "
+                f"({LOCK_NAME} is locked) — scan, merge and rewind on one "
+                f"directory are mutually exclusive; this {what} waits "
+                "until the other command has finished") from None
+        except OSError as e:
+            print(f"  warning: {path}: cannot lock ({e.strerror}); "
+                  f"make sure no other command works on this directory "
+                  f"while this {what} runs", file=sys.stderr)
+        yield
+    finally:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+        except OSError:
+            pass
+        os.close(fd)
+
+
+def locked(param, error, what):
+    """Decorator: run the function under `exclusive` on the directory
+    named by its parameter `param`; a None there means the plug is off
+    and nothing is locked. The signature is kept, so callers and the
+    CLI seam see the function they always saw."""
+    def deco(fn):
+        sig = inspect.signature(fn)
+
+        @functools.wraps(fn)
+        def wrapper(*args, **kwargs):
+            bound = sig.bind(*args, **kwargs)
+            bound.apply_defaults()
+            directory = bound.arguments[param]
+            if directory is None:
+                return fn(*args, **kwargs)
+            with exclusive(directory, error, what):
+                return fn(*args, **kwargs)
+        return wrapper
+    return deco

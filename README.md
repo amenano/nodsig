@@ -348,13 +348,17 @@ here; treat the table as orders of magnitude, not a forecast, and expect a
 local node to be single-core-bound rather than network-bound.
 
 All of it is resumable, and none of it needs watching: every long command
-writes checkpoints and continues from them when re-run.
+writes checkpoints and continues from them when re-run. One command per
+artifact directory at a time: a scan and a merge on the same directory
+exclude each other, and the second one is refused while the first holds
+the directory's `.lock`.
 
 **Reaching your node.** Two flags, and neither carries a secret. `--rpc` is the
 node's URL and defaults to `http://127.0.0.1:8332`; `--cookie-file` is the path
 to the `.cookie` your node writes in its data directory (`~/.bitcoin/.cookie`
-on a default mainnet setup), read from the file at each call so it stays
-current and never appears in `ps`. If the node lives on another machine,
+on a default mainnet setup), read from the file when the command starts and
+read again if the node answers 401 (Core rewrites the cookie at every restart),
+so it stays current and never appears in `ps`. If the node lives on another machine,
 forward the port to your own and keep using the local URL:
 
 ```sh
@@ -661,7 +665,9 @@ Both are invisible on a test chain and unmissable on the real one.
 **A fusion wants headroom.** Fusing an index generation, or an archive, writes
 a new generation, commits it, and only then deletes the old one. Plan for free
 space of roughly the size of what is being fused, on top of what it already
-occupies. That is the price of the guarantee: a machine killed mid-fusion
+occupies; for the FIRST `archive merge` after a scan that is the whole run
+pile, about twice the sealed size (`merge` prints both numbers and refuses,
+before writing, if the space is not there). That is the price of the guarantee: a machine killed mid-fusion
 leaves the previous generation whole, and the artifact is never in a state that
 has to be believed.
 

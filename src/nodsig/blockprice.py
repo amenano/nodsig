@@ -47,7 +47,7 @@ from decimal import Decimal, ROUND_HALF_EVEN
 from nodsig import outpoint_index as oi
 from nodsig import priceseries as ps
 from nodsig.artifact import producer
-from nodsig.recio import atomic_json, sha_file, checked_name
+from nodsig.recio import atomic_json, sha_file, checked_name, durable_replace
 
 FORMAT_TAG = "blockprice-v1"
 BIN_NAME = "blockprice.bin"
@@ -150,7 +150,7 @@ def run_build(index_dir, out_dir, series_dirs, out=None):
     tmp = bin_path + ".tmp"
     with open(tmp, "wb") as f:
         f.write(data)
-    os.replace(tmp, bin_path)
+    durable_replace(tmp, bin_path)
     meta = {
         "format": FORMAT_TAG,
         "kind": "external input, derived",

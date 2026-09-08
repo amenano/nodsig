@@ -560,6 +560,50 @@ def test_join_refuses_bad_vout():
         print("ok  join guard: vout past the output count fails loudly")
 
 
+def test_a_wrong_recorded_sha_stops_the_fusion(built):
+    """The previous spender_of generation is read through a verified
+    stream whose digest is compared only when the reader runs past the
+    last record. The fusion took exactly n_old slots and never did, so
+    a flipped byte rode into the next generation, was sealed there,
+    and the only file whose sha would have told was deleted. The
+    fusion now drains its source, and a wrong recorded sha stops it."""
+    tmp, graph, _index, _ = built
+    grown = os.path.join(tmp, "index_sha")
+    oi.run_build(graph, grown, end_height=2)
+    path = os.path.join(grown, oi.STATE_NAME)
+    st = json.load(open(path))
+    st["files"]["spender_of"]["sha256"] = "ff" * 32
+    with open(path, "w") as f:
+        json.dump(st, f)
+    try:
+        oi.run_build(graph, grown)
+        fail("an append fused a spender_of generation whose recorded sha "
+             "is wrong")
+    except oi.OutpointError as e:
+        check("sha256" in str(e), f"the refusal must name the digest: {e}")
+    print("ok  drain: a wrong sha on the previous generation stops the "
+          "append")
+
+
+def test_the_join_reads_the_resolver_to_its_end():
+    """Same shape for the resolver: the last spend rarely names the last
+    txid, so the tail, and the digest check that lives past it, was
+    never reached. A resolver that fails at its end must fail the join."""
+    txid = b"\x11" * 32
+    def resolver():
+        yield txid + (0).to_bytes(5, "big") + (2).to_bytes(3, "big")
+        yield b"\x22" * 32 + (2).to_bytes(5, "big") + (1).to_bytes(3, "big")
+        raise oi.OutpointError("tail: sha256 mismatch")
+    spends = [txid + (1).to_bytes(4, "big") + (9).to_bytes(5, "big")]
+    try:
+        list(oi.resolve_join(iter(spends), resolver(), True,
+                             {"unresolved_spends": 0}))
+        fail("the join stopped before the resolver's end")
+    except oi.OutpointError as e:
+        check("tail" in str(e), f"unexpected error: {e}")
+    print("ok  drain: the join reads the resolver past the last spend")
+
+
 def test_lookup(built):
     _, _, index, txids = built
     buf = io.StringIO()

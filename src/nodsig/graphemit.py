@@ -124,7 +124,7 @@ import sys
 from nodsig.artifact import (WallClock, identity_fingerprint,
                              make_identity, producer, seal_manifest)
 from nodsig.blockparse import read_compactsize, write_compactsize
-from nodsig.recio import atomic_json, checked_name
+from nodsig.recio import atomic_json, checked_name, durable_replace
 
 STATE_NAME = "state.json"
 MANIFEST_NAME = "manifest.json"
@@ -286,7 +286,16 @@ class GraphEmitter:
         # below joins it to a path: the state is untrusted input the
         # moment this process did not write it.
         for run in self.runs:
-            _run_path(self.dir, run["name"])
+            path = _run_path(self.dir, run["name"])
+            actual = os.path.getsize(path) if os.path.exists(path) else -1
+            if "bytes" in run and actual != run["bytes"]:
+                raise GraphError(
+                    f"{path}: the state names this run with "
+                    f"{run['bytes']:,} bytes but the disk holds "
+                    f"{actual:,} — the run was lost after the state was "
+                    "written (power loss?); heights "
+                    f"{run['start']:,}..{run['end']:,} have to be "
+                    "scanned again into a graph that stops before them")
 
         # Crash leftovers: run files the state does not name. A crash
         # leaves a run or two unnamed; a directory of runs with NO state
@@ -438,7 +447,7 @@ class GraphEmitter:
             for record in self.buffer:
                 f.write(record)
                 digest.update(record)
-        os.replace(tmp, path)
+        durable_replace(tmp, path)
         entry = {"name": name, "start": self.seg_start,
                  "end": through_height, "sha256": digest.hexdigest()}
         entry.update(self.pending)
@@ -467,7 +476,7 @@ class GraphEmitter:
             if self.clock is not None:
                 self.clock.stamp(st)
             json.dump(st, f, indent=1)
-        os.replace(tmp, os.path.join(self.dir, STATE_NAME))
+        durable_replace(tmp, os.path.join(self.dir, STATE_NAME))
 
     def totals(self):
         """The archive's counts — always a sum over runs, never a
@@ -576,6 +585,23 @@ class GraphDigest:
             self.skipped = [s for s in state["skipped"]
                             if s[1] < start_height]
             self.contiguous = False
+            # The host may also resume PAST this state: a stretch was
+            # scanned without --graph-digest, or the file came from an
+            # older scan. The emitter refuses that gap; the digest
+            # measures, so it names it instead: every reference run
+            # wholly inside it goes to `skipped`, where the report will
+            # say "not verified" rather than fold it into a clean total.
+            behind = state["last_height"]
+            if behind < start_height - 1:
+                gap = [[run["start"], run["end"]] for run in self.ref
+                       if run["start"] > behind
+                       and run["end"] < start_height]
+                self.skipped.extend(gap)
+                print(f"  graph digest: this check stopped at height "
+                      f"{behind:,} and the scan resumes from "
+                      f"{start_height:,}: {len(gap)} reference "
+                      "interval(s) in between will be reported as not "
+                      "verified", file=sys.stderr)
         elif start_height > 1:
             # A digest measures the stream from height 1. Asked to join
             # one it never saw, it would look like this check while
@@ -709,7 +735,8 @@ def _digest_report(state, stream_fingerprint=None):
             print(f"    heights {r['start']:,}..{r['end']:,}")
     for start, end in state["skipped"]:
         print(f"  not verified: heights {start:,}..{end:,} "
-              "(a restart fell inside this interval)")
+              "(a restart fell inside this interval, or the check was "
+              "off while it was scanned)")
     if state["beyond"]:
         print(f"  not verified: {state['beyond']:,} heights past the "
               "reference archive's watermark (the chain grew)")

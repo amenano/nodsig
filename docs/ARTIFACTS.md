@@ -259,6 +259,10 @@ held to within half a percent, which is what fixed-width records buy.
 | `<locks>/`, `<checkpoint>/`, CSVs | small enough not to plan for |
 
 Add headroom on top: a fusion writes a new generation before deleting the old.
+The FIRST fusion of a scan is the largest: it fuses the whole run pile, which
+holds every sighting and is about twice the size of what it will seal (on the
+real chain 7.7 G revelations in the runs against 3.6 G records sealed). `merge`
+prints both numbers and refuses before the first byte if the space is not free.
 
 ## All of it is shareable
 

@@ -224,7 +224,7 @@ from nodsig.artifact import (WallClock, declared_parent,
 from nodsig.hashing import hash160, warn_if_slow_ripemd160
 from nodsig.genstore import GenStore, new_state_fields
 from nodsig.recio import (IO_CHUNK, atomic_json, budgeted_slab, checked_name,
-                          read_fixed, sha_file)
+                          durable_replace, read_fixed, sha_file)
 from nodsig.recsort import SortedFile, bisect_blob
 from nodsig.reuse_scan import SAT
 
@@ -496,6 +496,7 @@ def _phase_scan(graph_dir, store, end_height, flush_records,
             if buf:
                 with open(_positional_path(index_dir, name), "ab") as f:
                     f.write(buf)
+                    os.fsync(f.fileno())
                 state["sizes"][name] += len(buf)
                 buf.clear()
 
@@ -633,6 +634,12 @@ def resolve_join(spends, resolver, tolerate_unresolved, totals):
                 f"input spends {ptxid[::-1].hex()}:{vout} but that tx "
                 f"has {n_out} outputs — corrupt graph")
         yield (first_out + vout).to_bytes(ORD, "big") + s[36:41]
+    # The resolver's digest is checked by its reader only at the end of
+    # the file; the last spend rarely names the last txid, so without
+    # this the tail was never read and the sha never compared. The
+    # tail is sequential and already paid for in the worst case.
+    for _ in r_iter:
+        pass
 
 
 def _phase_resolve(store, flush_records, tolerate_unresolved):
@@ -832,6 +839,15 @@ def _fuse_spender_of(store, n_out, cut_tx=None):
         extra_sha.update(ebuf)
         ef.write(ebuf)
 
+    # The previous generation's digest is settled only when its reader
+    # runs past the last record: a loop that takes exactly n_old slots
+    # never does, and a flipped byte would ride into the new generation
+    # and be sealed there, the old file gone. Drain it. On a rewind the
+    # tail is the part being cut, read and discarded for the same
+    # reason: a digest is a promise about the whole file or nothing.
+    for _ in slots:
+        pass
+
     # An edge naming an output the index does not have is corruption,
     # not an anomaly to record: it would be a spend of something that
     # was never created.
@@ -903,7 +919,7 @@ def _phase_seal(index_dir, state, graph_dir, clock):
     tmp = lad_path + ".tmp"
     with open(tmp, "wb") as f:
         f.write(ladder)
-    os.replace(tmp, lad_path)
+    durable_replace(tmp, lad_path)
     state["caches"]["tx_first_out"] = {
         "file": "tx_first_out.lad", "every": TFO_LADDER_EVERY,
         "sha256": hashlib.sha256(ladder).hexdigest()}

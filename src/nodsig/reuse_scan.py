@@ -89,7 +89,7 @@ from nodsig.hashing import hash160, warn_if_slow_ripemd160
 
 # Atomic state/checkpoint writes (tmp + rename) come from the I/O kernel.
 from nodsig.recio import (IO_CHUNK, atomic_json, budgeted_slab,
-                          read_slabs)
+                          durable_replace, locked, read_slabs)
 
 # Distribution statistics (order stats, Gini, Lorenz, histogram) shared
 # with reveal_archive and curve_deltas: one implementation, so a median
@@ -607,21 +607,41 @@ class RpcClient:
     """Minimal JSON-RPC client for Bitcoin Core, standard library only.
 
     Calls are sent in batches (one HTTP round-trip for many blocks) to
-    amortize latency over the tunnel. Transient network failures are
-    retried with growing pauses: on a run of days a WiFi hiccup must
-    not cost the run (the checkpoint would save it anyway, but there is
-    no reason to die for a hiccup). What is NOT retried is a JSON-RPC
-    error from the node itself: that means the request is wrong (bad
-    auth, unknown block) and retrying would not change it.
+    amortize latency over the tunnel. Transient failures are retried
+    with growing pauses: a WiFi hiccup, or a 5xx from a node warming up
+    after a restart or shedding load ("work queue depth exceeded"). On
+    a run of days neither must cost the run (the checkpoint would save
+    it anyway, but there is no reason to die for a hiccup). What is NOT
+    retried is a DEFINITE answer: a 401/403/404 (wrong credentials,
+    rpcallowip, wrong path) or a JSON-RPC error from the node itself
+    (unknown block). Asking again gives the same answer, and three
+    minutes of backoff followed by "unreachable" sent the operator to
+    check the tunnel instead of the credential.
+
+    The one definite answer with a second chance is a 401 when the
+    credential came from a cookie file: Core rewrites `.cookie` at every
+    restart, and a scan of days meets restarts. `reauth` re-reads it
+    once, so a rotated cookie costs one round-trip instead of the
+    stretch since the last checkpoint.
 
     The client deliberately verifies nothing about content: integrity
     of the blocks is the scanner's job (hashes recomputed from bytes),
     which is why the transport needs no trust.
     """
 
-    def __init__(self, url, auth, retries=8):
+    def __init__(self, url, auth, retries=8, reauth=None):
         self.url = url
         self.retries = retries
+        self.reauth = reauth
+        self._set_auth(auth)
+
+    def _post(self, payload):
+        req = urllib.request.Request(self.url, data=payload,
+                                     headers=self.headers)
+        with urllib.request.urlopen(req, timeout=120) as resp:
+            return json.load(resp)
+
+    def _set_auth(self, auth):
         token = base64.b64encode(auth.encode()).decode()
         self.headers = {"Authorization": f"Basic {token}",
                         "Content-Type": "application/json"}
@@ -633,6 +653,7 @@ class RpcClient:
             for i, (m, p) in enumerate(calls)
         ]).encode()
         last_err = None
+        reauthed = False
         for attempt in range(self.retries):
             if attempt:
                 pause = min(2 ** attempt, 60)
@@ -640,11 +661,29 @@ class RpcClient:
                       f"({last_err})", file=sys.stderr)
                 time.sleep(pause)
             try:
-                req = urllib.request.Request(self.url, data=payload,
-                                             headers=self.headers)
-                with urllib.request.urlopen(req, timeout=120) as resp:
-                    replies = json.load(resp)
+                try:
+                    replies = self._post(payload)
+                except urllib.error.HTTPError as e:
+                    if e.code != 401 or self.reauth is None or reauthed:
+                        raise
+                    reauthed = True
+                    print("  RPC answered 401: re-reading the cookie "
+                          "(rotated at a bitcoind restart?)",
+                          file=sys.stderr)
+                    self._set_auth(self.reauth())
+                    replies = self._post(payload)   # at once, no pause
                 break
+            except urllib.error.HTTPError as e:
+                # HTTPError is a URLError too: caught first, because a
+                # status code is an answer, not an outage.
+                if e.code < 500:
+                    raise ScanError(
+                        f"RPC answered HTTP {e.code} {e.reason}: "
+                        "wrong credentials (a cookie rotated at a "
+                        "bitcoind restart?), rpcallowip, or a wrong "
+                        "path — not retried, the answer would not "
+                        "change") from None
+                last_err = f"HTTP {e.code} {e.reason}"
             except (urllib.error.URLError, TimeoutError, OSError,
                     json.JSONDecodeError) as e:
                 last_err = e
@@ -968,6 +1007,7 @@ def _load_manifest(locks_dir):
     return manifest
 
 
+@locked("checkpoint_dir", ScanError, "scan")
 def run_scan(locks_dir, rpc_url, auth, end_height, checkpoint_dir,
              batch_size=25, checkpoint_every=10_000,
              faces=True, cosigners=True, client=None, graph_dir=None,
@@ -1061,7 +1101,7 @@ def run_scan(locks_dir, rpc_url, auth, end_height, checkpoint_dir,
         if _fingerprint(locks) == state["fingerprint"]:
             for pending in pendings:
                 if os.path.exists(pending):
-                    os.replace(pending, pending[:-len(".new")])
+                    durable_replace(pending, pending[:-len(".new")])
         else:
             if not any(os.path.exists(p) for p in pendings):
                 raise ScanError("checkpoint fingerprint mismatch: bitmaps "
@@ -1135,7 +1175,7 @@ def run_scan(locks_dir, rpc_url, auth, end_height, checkpoint_dir,
             tmp = os.path.join(checkpoint_dir, f"hits_{t}.bin.tmp")
             with open(tmp, "wb") as f:
                 f.write(bytes(locks[t].hits))
-            os.replace(tmp, os.path.join(checkpoint_dir,
+            durable_replace(tmp, os.path.join(checkpoint_dir,
                                          f"hits_{t}.bin.new"))
         fp = _fingerprint(locks)
         atomic_json(state_path, {
@@ -1152,7 +1192,7 @@ def run_scan(locks_dir, rpc_url, auth, end_height, checkpoint_dir,
             "fingerprint": fp,
         })
         for t in TYPE_ORDER:
-            os.replace(os.path.join(checkpoint_dir, f"hits_{t}.bin.new"),
+            durable_replace(os.path.join(checkpoint_dir, f"hits_{t}.bin.new"),
                        os.path.join(checkpoint_dir, f"hits_{t}.bin"))
         new_curve = not os.path.exists(curve_path)
         with open(curve_path, "a") as f:
@@ -1587,7 +1627,8 @@ def build_client(url, rest, cookie_file):
     if rest:
         return RestClient(url), None
     auth = resolve_auth(cookie_file)
-    return RpcClient(url, auth), auth
+    reauth = (lambda: resolve_auth(cookie_file)) if cookie_file else None
+    return RpcClient(url, auth, reauth=reauth), auth
 
 
 def main(argv=None):

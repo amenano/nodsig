@@ -448,6 +448,68 @@ def test_verify(tmp, blocks):
           "the claimed watermark is refused")
 
 
+def test_scan_and_merge_exclude_each_other(archive):
+    """A merge started while a scan checkpoints into the same directory
+    used to win or lose a race hours later: the state loaded before the
+    fusion was written back over the scan's, naming runs the merge had
+    deleted or moving the watermark back. The directory's `.lock` makes
+    the second command refuse at once. The lock is held by the process,
+    so a crash cannot leave it behind."""
+    from nodsig.recio import exclusive
+    with exclusive(archive, ra.ScanError, "test"):
+        try:
+            ra.run_merge(archive)
+            fail("a merge ran on a directory another command holds")
+        except ra.ScanError as e:
+            check(".lock" in str(e), f"the refusal must name the lock: {e}")
+    ra.run_merge(archive)          # free again: nothing to fuse, no error
+    print("ok  exclusion: a held directory refuses a second command, "
+          "and is free once the first is done")
+
+
+def test_merge_refuses_without_the_space_and_a_lost_run(tmp, blocks):
+    """Two guards on the scan path. The first fusion of a scan reads
+    the whole run pile, about twice what it seals, and used to find a
+    full disk hours in; it now names the bytes and refuses first. And
+    a run the state names with a size the disk does not hold was lost
+    after the state was written: refused at the next resume, not at
+    the fusion with "sha256 mismatch"."""
+    from nodsig import recio
+    archive = os.path.join(tmp, "archive_guards")
+    server, url = trs.serve(blocks)
+    try:
+        ra.run_scan(url, "user:pass", 4, archive, batch_size=2,
+                    checkpoint_every=2)
+        real = recio.shutil.disk_usage
+        class _Usage:
+            total = used = 0
+            free = 1
+        recio.shutil.disk_usage = lambda _p: _Usage
+        try:
+            ra.run_merge(archive)
+            fail("a merge started without the space for it")
+        except ra.ScanError as e:
+            check("free" in str(e), f"the refusal must name the space: {e}")
+        finally:
+            recio.shutil.disk_usage = real
+        check(not any(n.startswith("archive_") for n in os.listdir(archive)),
+              "the refusal must come before the first byte")
+
+        run = ra._load_state(archive)["runs"][0]
+        with open(ra._run_path(archive, run["name"]), "ab") as f:
+            f.truncate(0)
+        try:
+            ra.run_scan(url, "user:pass", 4, archive, batch_size=2,
+                        checkpoint_every=2)
+            fail("a resume accepted a run the disk lost")
+        except ra.ScanError as e:
+            check("lost" in str(e), f"the refusal must say what happened: {e}")
+    finally:
+        server.shutdown()
+    print("ok  guards: no space is refused before writing; a lost run is "
+          "refused at resume")
+
+
 def test_verify_reports_unfused_runs(tmp, blocks):
     """An archive with runs beyond its merged base is queryable and NOT
     sealed. The audit must say so: the fingerprint it just verified

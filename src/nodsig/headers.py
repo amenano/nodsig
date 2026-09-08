@@ -469,6 +469,7 @@ class HeaderEmitter:
                 continue
             with open(_path(self.dir, name), "ab") as f:
                 f.write(buf)
+                os.fsync(f.fileno())
             self.sizes[name] += len(buf)
             buf.clear()
 
