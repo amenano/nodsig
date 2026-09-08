@@ -1,0 +1,71 @@
+{
+ "note": "public data: the key of the genesis coinbase (65 bytes, lead 04, y odd); every digest is hash160",
+ "genesis_key_65": "04678afdb0fe5548271967f1a67130b7105cd6a828e03909a67962e0ea1f61deb649f6bc3f4cef38c4f35504e51ec112de5c384df7ba0b8d578a4c702b6bf11d5f",
+ "compressed_of": [
+  {
+   "input": "04678afdb0fe5548271967f1a67130b7105cd6a828e03909a67962e0ea1f61deb649f6bc3f4cef38c4f35504e51ec112de5c384df7ba0b8d578a4c702b6bf11d5f",
+   "output": "03678afdb0fe5548271967f1a67130b7105cd6a828e03909a67962e0ea1f61deb6"
+  },
+  {
+   "input": "07678afdb0fe5548271967f1a67130b7105cd6a828e03909a67962e0ea1f61deb649f6bc3f4cef38c4f35504e51ec112de5c384df7ba0b8d578a4c702b6bf11d5f",
+   "output": "03678afdb0fe5548271967f1a67130b7105cd6a828e03909a67962e0ea1f61deb6"
+  },
+  {
+   "input": "06678afdb0fe5548271967f1a67130b7105cd6a828e03909a67962e0ea1f61deb649f6bc3f4cef38c4f35504e51ec112de5c384df7ba0b8d578a4c702b6bf11d5f",
+   "output": "03678afdb0fe5548271967f1a67130b7105cd6a828e03909a67962e0ea1f61deb6"
+  }
+ ],
+ "uncompressed_of": [
+  {
+   "input": "03678afdb0fe5548271967f1a67130b7105cd6a828e03909a67962e0ea1f61deb6",
+   "output": "04678afdb0fe5548271967f1a67130b7105cd6a828e03909a67962e0ea1f61deb649f6bc3f4cef38c4f35504e51ec112de5c384df7ba0b8d578a4c702b6bf11d5f"
+  }
+ ],
+ "canonical_key": [
+  {
+   "input": "04678afdb0fe5548271967f1a67130b7105cd6a828e03909a67962e0ea1f61deb649f6bc3f4cef38c4f35504e51ec112de5c384df7ba0b8d578a4c702b6bf11d5f",
+   "xonly": false,
+   "digest_canon": "9f81322cc88622ca4ccb2a52a21e2888727aa535",
+   "digest_seen": "62e907b15cbf27d5425399ebf6f0fb50ebb88f18",
+   "form": "uncompressed"
+  },
+  {
+   "input": "03678afdb0fe5548271967f1a67130b7105cd6a828e03909a67962e0ea1f61deb6",
+   "xonly": false,
+   "digest_canon": "9f81322cc88622ca4ccb2a52a21e2888727aa535",
+   "digest_seen": "9f81322cc88622ca4ccb2a52a21e2888727aa535",
+   "form": "compressed"
+  },
+  {
+   "input": "07678afdb0fe5548271967f1a67130b7105cd6a828e03909a67962e0ea1f61deb649f6bc3f4cef38c4f35504e51ec112de5c384df7ba0b8d578a4c702b6bf11d5f",
+   "xonly": false,
+   "digest_canon": "9f81322cc88622ca4ccb2a52a21e2888727aa535",
+   "digest_seen": "517e3c6448dae41cd4064748436d5c79e7d58e94",
+   "form": "uncompressed"
+  },
+  {
+   "input": "678afdb0fe5548271967f1a67130b7105cd6a828e03909a67962e0ea1f61deb6",
+   "xonly": true,
+   "digest_canon": "ac0e8403e9a0cb10a798b9092c2bc62959588de0",
+   "digest_seen": null,
+   "form": "xonly"
+  },
+  {
+   "input": "678afdb0fe5548271967f1a67130b7105cd6a828e03909a67962e0ea1f61deb6",
+   "xonly": false,
+   "digest_canon": null,
+   "digest_seen": null,
+   "form": null
+  },
+  {
+   "input": "3000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+   "xonly": false,
+   "digest_canon": null,
+   "digest_seen": null,
+   "form": null
+  }
+ ],
+ "not_on_curve": [
+  "020000000000000000000000000000000000000000000000000000000000000005"
+ ]
+}

@@ -43,6 +43,26 @@ def test_hashing_vectors():
                 f"{fname}({v['input'][:16]}…): {got} != {v['output']}")
 
 
+def test_keyforms_vectors():
+    """The identity of a public key, on public data: the genesis key in
+    its three spellings and its x-only form give the digests the format
+    pages print."""
+    from nodsig import keyforms as kf
+    data = _load("keyforms")
+    for v in data["compressed_of"]:
+        assert kf.compressed_of(bytes.fromhex(v["input"])).hex() == v["output"]
+    for v in data["uncompressed_of"]:
+        assert kf.uncompressed_of(bytes.fromhex(v["input"])).hex() == v["output"]
+    for v in data["canonical_key"]:
+        got = kf.canonical_key(bytes.fromhex(v["input"]), xonly=v["xonly"])
+        if v["form"] is None:
+            assert got is None
+        else:
+            d, seen, form = got
+            assert (d.hex(), seen.hex() if seen else None, form) == \
+                (v["digest_canon"], v["digest_seen"], v["form"])
+
+
 def test_compactsize_vectors():
     for v in _load("compactsize")["vectors"]:
         value, hexbytes = v["value"], v["hex"]
