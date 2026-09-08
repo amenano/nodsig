@@ -414,9 +414,10 @@ nodsig index   build --graph <graph> --index <index> --end <H2>
 nodsig derived build --index <index> --out <derived>
 
 # 3. the tables that follow a parent, by re-running the same build:
-#    each re-emits its rows against the grown parent and the fusion
-#    collapses what was already there (a re-run against an unchanged
-#    seal says "nothing to do" and costs nothing)
+#    each reads the grown parent and emits only the rows above its own
+#    seal, which the fusion appends after what was already there (a
+#    re-run against an unchanged seal says "nothing to do" and costs
+#    nothing)
 nodsig firstspend  build --derived <derived> --out <firstspend>
 nodsig firstreveal build --archive <archive> --out <firstreveal>
 ```

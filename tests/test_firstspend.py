@@ -318,15 +318,39 @@ def test_between_refuses_bad_range(tmp):
 def test_append_equals_rebuild(tmp):
     # A table sealed over height-4 derivatives, then the parent grows to
     # the full chain: re-running build must equal a fresh build over the
-    # grown parent, byte for byte. This is the path where the pass
-    # re-emits every row the previous generation already holds, and the
-    # fusion must collapse the exact duplicates rather than keep both.
+    # grown parent, byte for byte. The append re-reads history but emits
+    # ONLY the first spends at or above the sealed parent's transaction
+    # count (F096): the runs the fusion sees hold exactly those rows,
+    # none of the ones the previous generation already had.
     d4 = build_pipeline(tmp, name="ap4", end=4)
     out = os.path.join(tmp, "fs_appended")
     fs.run_build(d4, out)
+    n_tx4 = dv._load_manifest(d4)["build"]["transactions"]
+    rows = _expected_rows()
+    above = [r for r in rows if int.from_bytes(r[:5], "big") >= n_tx4]
+    # In this chain the blocks past 4 spend locks already spent, so the
+    # grown table has the same rows and the append has NOTHING to emit
+    # (a re-emitting pass would hand the fusion every row again).
+    check(len(above) < len(rows),
+          "the fixture must have first spends below the seal")
 
     d5 = build_pipeline(tmp, name="ap5")
-    fp_append = fs.run_build(d5, out)
+    seen = {}
+    fused = fs.GenStore.fuse
+
+    def spy(self, *a, **kw):
+        category = a[2] if len(a) > 2 else kw["category"]
+        seen["run_bytes"] = sum(os.path.getsize(p)
+                                for p in self.run_paths(category))
+        return fused(self, *a, **kw)
+    fs.GenStore.fuse = spy
+    try:
+        fp_append = fs.run_build(d5, out)
+    finally:
+        fs.GenStore.fuse = fused
+    check(seen["run_bytes"] == len(above) * fs.FS_REC,
+          f"the append's runs hold {seen['run_bytes'] // fs.FS_REC} rows, "
+          f"not the {len(above)} first spends above the sealed parent")
     fresh = os.path.join(tmp, "fs_fresh5")
     fp_fresh = fs.run_build(d5, fresh)
     check(fp_append == fp_fresh,

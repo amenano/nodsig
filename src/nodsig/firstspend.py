@@ -65,6 +65,11 @@ def _new_state():
         "coverage": None,               # the parent's, copied at open
         "source_fingerprint": None,     # binds an OPEN build to its parent
         "run_seq": 0,
+        # An APPEND emits only the first spends at or above the sealed
+        # parent's transaction count (0 on a fresh build: everything).
+        # A first spend never moves, so every lower one is already a
+        # row of the previous generation.
+        "emit_from": 0,
         **new_state_fields(),
     }
 
@@ -144,19 +149,24 @@ def run_build(derived_dir, out_dir, flush_records=8_000_000):
             "interrupted: finish it with `rewind` before building again")
     if state["phase"] == "sealed":
         # An APPEND: the derivatives grew, so the pass reopens from the
-        # start of history against the new parent. A first spend never
-        # moves, so a lock already placed re-emits the same row and the
-        # merge's equal-key handling keeps one; but re-reading is the
-        # honest road and it is cheap next to the fusion.
+        # start of history against the new parent (a group's minimum
+        # needs the whole group, and history is one sequential read),
+        # but it EMITS only the first spends the sealed parent did not
+        # have: those at or above its transaction count. A first spend
+        # never moves, so every lower one is already a row of the
+        # previous generation, and the runs hold the new rows only.
+        # Those all sort after the base (rows are keyed by spender), so
+        # the fusion moves the base in one stretch instead of settling
+        # a collision per row.
         if parent_fp == state["source_fingerprint"]:
             print("nothing to do: the table already covers this "
                   "derivatives seal", file=sys.stderr)
             return _load_manifest(out_dir)["fingerprint"]
-        # The append re-emits every row and fuses it WITH the previous
-        # generation, which only holds if the new parent extends the
-        # old one: a parent that went back, or changed at the same
-        # height, leaves rows no rebuild would produce, and the seal
-        # would not notice. That is a rewind or a rebuild, not an append.
+        # Fusing new rows WITH the previous generation only holds if the
+        # new parent extends the old one: a parent that went back, or
+        # changed at the same height, leaves rows no rebuild would
+        # produce, and the seal would not notice. That is a rewind or a
+        # rebuild, not an append.
         if coverage["to"] <= state["coverage"]["to"]:
             raise FirstSpendError(
                 f"the derivatives given cover heights up to "
@@ -167,6 +177,7 @@ def run_build(derived_dir, out_dir, flush_records=8_000_000):
         state["phase"] = "scan"
         state["hist_pos"] = 0
         state["source_fingerprint"] = None
+        state["emit_from"] = _load_manifest(out_dir)["build"]["transactions"]
 
     if state["source_fingerprint"] is None:
         state["source_fingerprint"] = parent_fp
@@ -183,11 +194,12 @@ def run_build(derived_dir, out_dir, flush_records=8_000_000):
         store.write_state()
     if state["phase"] == "merge":
         # dedup="last" over the WHOLE record: only exact duplicates
-        # collapse. The append path relies on it — the pass re-emits
-        # every row the previous generation already holds — and
-        # dedup=None would keep both copies (it counts equal keys, it
-        # does not collapse them), which the structural verify would
-        # then refuse as an out-of-order file.
+        # collapse, and a correct pass produces none (an append emits
+        # rows the base does not hold, a resume re-reads only the open
+        # group). dedup=None would keep both copies of one if it ever
+        # arose (it counts equal keys, it does not collapse them), which
+        # the structural verify would then refuse as an out-of-order
+        # file; collapsing keeps the bytes those of a rebuild.
         _, delete = store.fuse(LOGICAL, (FS_REC, FS_KEY, FS_EVERY),
                                LOGICAL, dedup="last", dedup_len=FS_REC)
         state["phase"] = "seal"
@@ -195,6 +207,7 @@ def run_build(derived_dir, out_dir, flush_records=8_000_000):
     if state["phase"] == "seal":
         manifest = _seal(store, n_tx, parent_fmt, parent_fp)
         state["phase"] = "sealed"
+        state["emit_from"] = 0
         store.write_state()
         _print_manifest(manifest, out=sys.stdout)
     return _load_manifest(out_dir)["fingerprint"]
@@ -216,6 +229,15 @@ def _phase_scan(store, hist_path, hist_sha, hist_rec, flush_records):
     seen_in_group = 0                    # records of the open group so far
     cur_lock = None
     cur_first = None
+    # A table sealed by 1.x has no `emit_from`; it can only be appended
+    # to here, and an append sets it before the scan.
+    emit_from = state.get("emit_from", 0)
+
+    def close_group():
+        # The group's minimum is its first spend; below `emit_from` the
+        # previous generation already holds the row (see run_build).
+        if cur_first is not None and cur_first >= emit_from:
+            buf.append(cur_first.to_bytes(ORD, "big") + cur_lock)
 
     def flush():
         if not buf:
@@ -245,8 +267,8 @@ def _phase_scan(store, hist_path, hist_sha, hist_rec, flush_records):
         lock = rec[:20]
         spender = int.from_bytes(rec[20 + ORD:20 + ORD + ORD], "big")
         if lock != cur_lock:
-            if cur_lock is not None and cur_first is not None:
-                buf.append(cur_first.to_bytes(ORD, "big") + cur_lock)
+            if cur_lock is not None:
+                close_group()
             # the group that just closed is now accounted for
             consumed += seen_in_group
             seen_in_group = 0
@@ -258,9 +280,8 @@ def _phase_scan(store, hist_path, hist_sha, hist_rec, flush_records):
         seen_in_group += 1
         if spender != UNSPENT and (cur_first is None or spender < cur_first):
             cur_first = spender
-    # close the last open group
-    if cur_lock is not None and cur_first is not None:
-        buf.append(cur_first.to_bytes(ORD, "big") + cur_lock)
+    if cur_lock is not None:
+        close_group()                    # the last open group
     consumed += seen_in_group
     flush()
     state["hist_pos"] = consumed
