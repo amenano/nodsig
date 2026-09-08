@@ -72,8 +72,8 @@ from nodsig.artifact import (WallClock, identity_fingerprint, make_identity,
                              producer, seal_manifest, verify_sealed,
                              declared_parent)
 from nodsig.hashing import hash160
-from nodsig.recio import atomic_json, read_fixed, sha_file
-from nodsig.reuse_scan import looks_like_pubkey
+from nodsig.recio import atomic_json, read_fixed, sha_file, read_json
+from nodsig.keyforms import looks_like_key as looks_like_pubkey
 
 STATE_NAME = "state.json"
 MANIFEST_NAME = "manifest.json"
@@ -318,8 +318,7 @@ def _load_state(witness_dir):
     if not os.path.exists(path):
         raise WitnessError(f"no {STATE_NAME} in {witness_dir}: not a witness "
                            "table (or `resolve` never checkpointed)")
-    with open(path) as f:
-        state = json.load(f)
+    state = read_json(path, WitnessError)
     if state.get("format") != FORMAT_TAG:
         raise WitnessError("unknown witness table format")
     return state
@@ -329,8 +328,7 @@ def _load_manifest(witness_dir):
     if not os.path.exists(path):
         raise WitnessError(f"no {MANIFEST_NAME} in {witness_dir}: this table "
                            "was never sealed, so it cannot be verified")
-    with open(path) as f:
-        return json.load(f)
+    return read_json(path, WitnessError)
 
 
 def _heights_of_groups(nonces_dir, min_count, keep):

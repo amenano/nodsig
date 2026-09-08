@@ -124,7 +124,7 @@ import sys
 from nodsig.artifact import (WallClock, identity_fingerprint,
                              make_identity, producer, seal_manifest)
 from nodsig.blockparse import read_compactsize, write_compactsize
-from nodsig.recio import atomic_json, checked_name, durable_replace
+from nodsig.recio import atomic_json, checked_name, durable_replace, read_json
 
 STATE_NAME = "state.json"
 MANIFEST_NAME = "manifest.json"
@@ -758,8 +758,7 @@ def read_digest_report(state_dir):
     if not os.path.exists(path):
         raise GraphError(f"no {DIGEST_STATE_NAME} in {state_dir}: no graph "
                          "digest was run against this scan")
-    with open(path) as f:
-        state = json.load(f)
+    state = read_json(path, GraphError)
     if state.get("format") != FORMAT_TAG:
         raise GraphError("unknown graph digest state format")
     return _digest_report(state, state.get("stream_sha256"))
@@ -774,8 +773,7 @@ def _load_state(graph_dir):
     if not os.path.exists(path):
         raise GraphError(f"no {STATE_NAME} in {graph_dir}: not a graph "
                          "archive (or the scan never checkpointed)")
-    with open(path) as f:
-        state = json.load(f)
+    state = read_json(path, GraphError)
     if state.get("format") not in READABLE_TAGS:
         raise GraphError(f"unknown graph archive format "
                          f"{state.get('format')!r}")

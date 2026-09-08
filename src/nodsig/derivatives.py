@@ -182,6 +182,7 @@ from nodsig.genstore import GenStore, new_state_fields
 from nodsig.outpoint_index import ORD, OutpointError
 from nodsig.hashing import hash160
 from nodsig.recio import (IO_CHUNK, atomic_json, budgeted_slab, checked_name,
+                          read_json,
                           durable_replace, read_fixed, read_slabs)
 from nodsig.recsort import SortedFile
 from nodsig.reuse_scan import SAT
@@ -276,8 +277,7 @@ def _load_state(derived_dir, required=True, accept=(FORMAT_TAG,)):
             raise OutpointError(f"no {STATE_NAME} in {derived_dir}: "
                                 "run `build` first")
         return None
-    with open(path) as f:
-        state = json.load(f)
+    state = read_json(path, OutpointError)
     found = state.get("format")
     if found not in accept:
         if found in READ_TAGS:
@@ -297,8 +297,7 @@ def _load_manifest(derived_dir, accept=(FORMAT_TAG,)):
         raise OutpointError(f"no {MANIFEST_NAME} in {derived_dir}: "
                             "the derivatives are not sealed — run "
                             "`build`")
-    with open(path) as f:
-        manifest = json.load(f)
+    manifest = read_json(path, OutpointError)
     if manifest.get("format") not in accept:
         raise OutpointError("unknown derivatives manifest format")
     return manifest
@@ -1150,19 +1149,10 @@ class Derived:
 
     def _sorted_file(self, name, rec, key_len):
         if name not in self._sorted:
-            entry = self.build["files"][name]
-            cache = self.build["caches"][name]
-            ladder_path = os.path.join(
-                self.dir, checked_name(cache["file"], OutpointError))
-            with open(ladder_path, "rb") as f:
-                blob = f.read()
-            if hashlib.sha256(blob).hexdigest() != cache["sha256"]:
-                raise OutpointError(f"{cache['file']}: corrupted ladder")
-            path = os.path.join(self.dir,
-                                checked_name(entry["file"], OutpointError))
-            self._sorted[name] = SortedFile(
-                path, rec, key_len,
-                entry["records"], blob, cache["every"], error=OutpointError)
+            self._sorted[name] = SortedFile.open(
+                self.dir, self.build["files"][name],
+                self.build["caches"][name],
+                (rec, key_len, LADDERS[name][2]), error=OutpointError)
         return self._sorted[name]
 
     def close(self):

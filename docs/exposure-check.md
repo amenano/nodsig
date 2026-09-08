@@ -158,7 +158,6 @@ What you should not do is accept it on someone's word. Check it:
 ```sh
 nodsig archive verify --archive <archive-dir>          # bytes, ladders, fingerprint
 nodsig archive verify --archive <archive-dir> --deep   # …and every record
-nodsig archive v1-digests --archive <archive-dir>      # …and against the published v1 numbers
 ```
 
 The first re-reads every byte against the manifest, rebuilds each search ladder
@@ -179,7 +178,7 @@ costs a read and it is the cheapest statement anyone can make that two
 independent builds of this archive describe the same history.
 
 The recipe both follow is written out in
-[`formats/RevealArchive-v2.md`](formats/RevealArchive-v2.md), for anyone who
+[`formats/RevealArchive-v3.md`](formats/RevealArchive-v3.md), for anyone who
 would rather check by hand or from another implementation.
 
 ## What the answer means, and what it does not

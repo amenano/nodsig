@@ -605,17 +605,14 @@ claimed coverage, whose highest value then holds the watermark to a floor. It
 costs a second read of the archive, so it is a flag and not the default, and
 without it the report says the coverage was taken on trust rather than staying
 silent about it. The recipe, for anyone writing their own reader, is in
-[`docs/formats/RevealArchive-v2.md`](docs/formats/RevealArchive-v2.md).
+[`docs/formats/RevealArchive-v3.md`](docs/formats/RevealArchive-v3.md).
 
-`archive v1-digests` is the check the other two cannot be: it confronts the
-archive with the *published* one. It strips everything the format gained since
-v1 (the first-seen height, the count of keys inside a script, the key's
-serialized form) and prints one sha256 per category over what is left, which
-must equal the digest the sealed v1 archive recorded. Verify says an archive is
-internally sound; this says it is the same history someone else's build
-already described. The `v1` in that command's name is the **archive's format**,
-the one published in July 2026, and not a version of this tool: see the two
-scales under Stability.
+The 1.x releases had a third check, `archive v1-digests`, that confronted an
+archive with the one *published* in July 2026 by projecting it back to that
+first layout. It is gone with 2.0.0: the filter this version adds changes what
+the archive collects, so no projection of a new archive can reproduce those
+numbers, which stay reproducible with the release that wrote them. Two builds
+of the same release are confronted by fingerprint.
 
 **Stability.** The **formats are the contract**; the CLI is convenience. Within
 a major version the commands named above do not change, so text written

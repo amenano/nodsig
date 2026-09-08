@@ -78,7 +78,6 @@ that built it. They can therefore be published, handed over, and checked:
 ```sh
 nodsig archive verify --archive <archive-dir>          # bytes, ladders, fingerprint
 nodsig archive verify --archive <archive-dir> --deep   # …and every record
-nodsig archive v1-digests --archive <archive-dir>      # …and against the published v1 numbers
 ```
 
 So the cost is not necessarily "three days of scanning plus 87 GB". It can be

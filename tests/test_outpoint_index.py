@@ -52,7 +52,9 @@ from nodsig import reveal_archive as ra
 from nodsig.artifact import (make_identity, seal_manifest,
                              sha_and_ladder)
 import test_blockparse as tbw
+import test_graphemit as tge
 import test_reuse_scan as trs
+from nodsig import blockparse as bp
 from nodsig.hashing import hash160
 from nodsig.reuse_scan import SAT
 
@@ -540,8 +542,11 @@ def test_unresolved_policy(tmp):
     tolerant = os.path.join(tmp, "index_tolerant")
     oi.run_build(graph, tolerant, tolerate_unresolved=True)
     manifest = json.load(open(os.path.join(tolerant, oi.MANIFEST_NAME)))
-    check(manifest["build"]["totals"]["unresolved_spends"] == 5,
-          "the reuse chain has exactly 5 fake prevouts")
+    fake = sum(len(tx.inputs)
+               for b in tge.parsed_chain(trs.build_chain()).values()
+               for tx in b.transactions if not bp.is_coinbase(tx))
+    check(manifest["build"]["totals"]["unresolved_spends"] == fake,
+          f"the reuse chain has exactly {fake} fake prevouts")
     check(manifest["build"]["spends"] == 0, "no spend should have resolved")
     print("ok  join policy: unknown prevouts stop the build unless "
           "tolerated, and then they are counted")

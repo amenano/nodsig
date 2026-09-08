@@ -126,18 +126,72 @@ def test_scan_content(tmp, blocks):
           f"expected provenance map")
     check(rs.hash160(trs.PUB5) not in keys, "unrevealed key archived")
 
-    # Candidate scripts: the real redeem/witness scripts must be
-    # there; so are the over-collected candidates (PUB1/PUB3 pushed
-    # last), harmless by construction — asserted to pin the behavior.
+    # Candidate scripts: the real redeem/witness scripts, and nothing
+    # else. PUB1 (the last scriptSig push of the P2PKH spend) and PUB3
+    # (the last witness item of the P2WPKH spend) used to land here as
+    # over-collected candidates; the shape filter keeps them out and
+    # counts them.
     s20 = archive_records(archive, "scripts20")
-    check(set(s20) == {rs.hash160(trs.REDEEM), rs.hash160(trs.PUB1)},
+    check(set(s20) == {rs.hash160(trs.REDEEM)},
           "scripts20 content differs from the crafted spends")
     s32 = archive_records(archive, "scripts32")
-    check(set(s32) == {hashlib.sha256(trs.WSCRIPT).digest(),
-                       hashlib.sha256(trs.PUB3).digest()},
+    check(set(s32) == {hashlib.sha256(trs.WSCRIPT).digest()},
           "scripts32 content differs from the crafted spends")
+    check(state["stats"]["filtered_key_shaped"] == 2,
+          f"two key-shaped candidates were filtered: {state['stats']}")
     print("ok  scan: watermark, provenance bits, exact content")
     return archive
+
+
+def test_scan_content_v3(tmp, blocks):
+    """Height 5 holds what only the v3 archive sees: a key published in
+    a pay-to-pubkey output and two in a bare multisig (OUT), a 65-byte
+    key whose compressed face is recorded under OTHER_FACE, a hybrid
+    lead accepted, a taproot script path revealing its internal key and
+    its leaf key (XONLY), and a scriptSig that is one well-formed DER
+    signature, which by position is a candidate script and by shape is
+    not."""
+    from nodsig import keyforms as kf
+    server, url = trs.serve(blocks)
+    archive = os.path.join(tmp, "archive_v3")
+    try:
+        ra.run_scan(url, "user:pass", 5, archive,
+                    batch_size=2, checkpoint_every=2)
+    finally:
+        server.shutdown()
+    keys = archive_records(archive, "keys", with_height=True)
+    comp_u5 = kf.compressed_of(trs.PUBU5)
+    comp_h = kf.compressed_of(trs.PUBH)
+    expect = {
+        rs.hash160(trs.PUBU5): (ra.FLAG_OUT | ra.FLAG_UNCOMPRESSED, 5),
+        rs.hash160(comp_u5): (ra.FLAG_OTHER_FACE, 5),
+        rs.hash160(trs.PUB6): (ra.FLAG_OUT, 5),
+        rs.hash160(trs.PUB7): (ra.FLAG_OUT, 5),
+        rs.hash160(trs.PUBH): (ra.FLAG_SIG | ra.FLAG_UNCOMPRESSED, 5),
+        rs.hash160(comp_h): (ra.FLAG_OTHER_FACE, 5),
+        rs.hash160(b"\x02" + trs.XINT): (ra.FLAG_WIT | ra.FLAG_XONLY, 5),
+        rs.hash160(b"\x02" + trs.XLEAF): (ra.FLAG_INNER_WIT | ra.FLAG_XONLY,
+                                          5),
+    }
+    for digest, want in expect.items():
+        check(keys.get(digest) == want,
+              f"key {digest.hex()[:12]}…: {keys.get(digest)} != {want}")
+    check(rs.hash160(trs.PUB5) not in keys, "unrevealed key archived")
+    s20 = archive_records(archive, "scripts20")
+    check(set(s20) == {rs.hash160(trs.REDEEM)},
+          "a DER signature or a hybrid key reached scripts20")
+    s32 = archive_records(archive, "scripts32")
+    check(set(s32) == {hashlib.sha256(trs.WSCRIPT).digest()},
+          "a control block or a leaf reached scripts32")
+    st = read_state(archive)["stats"]
+    check(st["out_keys"] == 3 and st["filtered_signature_shaped"] == 1
+          and st["filtered_control_or_annex"] == 1
+          and st["filtered_key_shaped"] == 3,
+          f"the filter counters must say what was dropped: {st}")
+    ra.run_merge(archive)
+    ra.run_verify(archive, deep=True)
+    print("ok  scan v3: outputs, other face, hybrid, x-only, and the "
+          "shape filter, with its counters")
 
 
 def test_stale_run_cleanup(tmp, blocks):
@@ -510,6 +564,23 @@ def test_merge_refuses_without_the_space_and_a_lost_run(tmp, blocks):
           "refused at resume")
 
 
+def test_a_broken_state_file_is_a_named_refusal(tmp):
+    """Twenty loaders opened and parsed by hand; a truncated state.json
+    (a kill during a write, a bad copy) died in a json traceback in
+    some of them and in a bare FileNotFoundError in one. One reader
+    now, and the failure keeps the artifact's own type."""
+    d = os.path.join(tmp, "broken_archive")
+    os.makedirs(d)
+    with open(os.path.join(d, ra.STATE_NAME), "w") as f:
+        f.write('{"format": "reveal-archive-v2", "runs": [')
+    try:
+        ra._load_state(d)
+        fail("a truncated state was read")
+    except ra.ScanError as e:
+        check("truncated" in str(e), f"the refusal must say why: {e}")
+    print("ok  loaders: a broken JSON is the artifact's own refusal")
+
+
 def test_verify_reports_unfused_runs(tmp, blocks):
     """An archive with runs beyond its merged base is queryable and NOT
     sealed. The audit must say so: the fingerprint it just verified
@@ -770,6 +841,41 @@ def test_the_curve_is_refused_under_a_narrow_perimeter(tmp, locks_dir,
     print("ok  curve: refused under a narrow perimeter, the table is not")
 
 
+def test_the_two_roads_meet_on_the_forms_v3_sees(tmp, blocks):
+    """Height 5 holds the sightings the 2.0.0 extraction added (keys in
+    outputs, the other face, a hybrid, x-only taproot keys) and the
+    candidates the shape filter drops. The reuse scan and the archive
+    walk the chain separately and must still meet on one fingerprint,
+    under every perimeter."""
+    base5 = os.path.join(tmp, "base5")
+    os.makedirs(base5)
+    locks5 = trs.test_prepare(base5, base_hash_hex=blocks[5][0])
+    server, url = trs.serve(blocks)
+    archive = os.path.join(tmp, "archive_roads5")
+    try:
+        ra.run_scan(url, "user:pass", 5, archive, batch_size=2,
+                    checkpoint_every=2)
+        for label, faces, cosigners in [("full", True, True),
+                                        ("narrow", False, False),
+                                        ("no-cosigners", True, False)]:
+            cp = os.path.join(tmp, f"cp5_{label}")
+            fp_scan = rs.run_scan(locks5, url, "user:pass", 5, cp,
+                                  batch_size=2, checkpoint_every=2,
+                                  faces=faces, cosigners=cosigners)
+            fp_arch = ra.run_crosscheck(
+                archive, locks5, faces=faces, cosigners=cosigners,
+                reuse_state_path=os.path.join(cp, rs.STATE_NAME))
+            check(fp_arch == fp_scan,
+                  f"cross-check at 5 ({label}): fingerprints differ")
+    finally:
+        server.shutdown()
+    st = read_state(archive)["stats"]
+    check(st["out_keys"] == 3 and st["filtered_key_shaped"] == 3,
+          f"the archive must have seen height 5: {st}")
+    print("ok  cross-check at 5: both roads meet on the v3 sightings, on "
+          "all three perimeters")
+
+
 def test_derive(tmp, blocks, locks_dir):
     server, url = trs.serve(blocks)
     archive = os.path.join(tmp, "arch_derive")
@@ -1016,18 +1122,18 @@ def test_lookup(archive):
     print("ok  lookup: found with provenance, ladder meets blind bisect")
 
 
-# The frozen reveal-archive-v2 fingerprint of the synthetic chain. Unlike the
+# The frozen reveal-archive-v3 fingerprint of the synthetic chain. Unlike the
 # determinism tests (which check that two builds AGREE), this pins the absolute
 # value, so a format change that alters every build identically is still
 # caught. Update deliberately if the format or the fixture chain changes.
 GOLDEN_ARCHIVE_FINGERPRINT = \
-    "6bcd01817bdceec9f80dd275c127f6ad263e754aeaf2bb4032c06bc647997019"
+    "dac96458c68ea80a42e445392ecf7e939d6d564551e4396c8c13435b8fcc2318"
 
 
 def test_golden_fingerprint(archive):
     fp = ra._load_manifest(archive)["fingerprint"]
     check(fp == GOLDEN_ARCHIVE_FINGERPRINT,
-          f"reveal-archive-v2 fingerprint drifted from the frozen value: {fp}")
+          f"reveal-archive-v3 fingerprint drifted from the frozen value: {fp}")
     print("ok  golden: the synthetic archive fingerprint is unchanged")
 
 
@@ -1036,6 +1142,7 @@ def main():
         blocks = trs.build_chain()
         locks_dir = trs.test_prepare(tmp, base_hash_hex=blocks[4][0])
         archive = test_scan_content(tmp, blocks)
+        test_scan_content_v3(tmp, blocks)
         test_stale_run_cleanup(tmp, blocks)
         test_merge_determinism(tmp, blocks, archive)
         test_merge_crash_recovery(tmp, blocks)
@@ -1259,13 +1366,12 @@ def form_chain():
     return blocks
 
 
-def test_the_form_bit_and_the_v1_projection(tmp):
-    """A 65-byte sighting carries FLAG_UNCOMPRESSED and a 33-byte one
-    does not; the deep audit accepts the fifth bit; and `v1-digests`
-    projects the records back to the published v1 bytes, matched here
-    against a mirror that re-reads the merged files raw. The masks are
-    pinned HERE: a flag added without teaching the projection fails in
-    this test, not in the confrontation with the sealed v1 artifact."""
+def test_the_form_bit_and_the_other_face(tmp):
+    """A 65-byte sighting carries FLAG_UNCOMPRESSED and its compressed
+    face is recorded beside it under OTHER_FACE, at the same height; a
+    33-byte one carries neither; the deep audit accepts every bit of
+    the eight and refuses the one pairing that cannot exist."""
+    from nodsig import keyforms as kf
     server, url = trs.serve(form_chain())
     archive = os.path.join(tmp, "form")
     try:
@@ -1274,36 +1380,27 @@ def test_the_form_bit_and_the_v1_projection(tmp):
     finally:
         server.shutdown()
 
-    recs = archive_records(archive, "keys")
-    check(recs[rs.hash160(PUBU)] == ra.FLAG_SIG | ra.FLAG_UNCOMPRESSED,
+    recs = archive_records(archive, "keys", with_height=True)
+    check(recs[rs.hash160(PUBU)] == (ra.FLAG_SIG | ra.FLAG_UNCOMPRESSED, 2),
           "the 65-byte sighting must carry the form bit")
-    check(recs[rs.hash160(trs.PUB1)] == ra.FLAG_SIG,
-          "a compressed sighting must not carry the form bit")
-
-    try:
-        ra.run_v1_digests(archive)
-        fail("the v1 projection accepted an unfused archive")
-    except rs.ScanError:
-        pass
+    check(recs[rs.hash160(kf.compressed_of(PUBU))] == (ra.FLAG_OTHER_FACE, 2),
+          "the compressed face must be recorded at the same height")
+    check(recs[rs.hash160(trs.PUB1)] == (ra.FLAG_SIG, 2),
+          "a compressed sighting must carry neither form bit")
 
     ra.run_merge(archive)
     ra.run_verify(archive, deep=True)
-
-    got = ra.run_v1_digests(archive)
     manifest = ra._load_manifest(archive)
-    for cat in ra.CAT_ORDER:
-        width = ra.CATEGORIES[cat]
-        rw = ra.rec_width(cat)
-        with open(os.path.join(archive, ra._cat_file(manifest, cat)),
-                  "rb") as f:
-            raw = f.read()
-        mirror = hashlib.sha256()
-        for off in range(0, len(raw), rw):
-            mirror.update(raw[off:off + width])
-            mirror.update(bytes((raw[off + width]
-                                 & (15 if cat == "keys" else 0),)))
-        check(got[cat] == mirror.hexdigest(),
-              f"{cat}: the v1 projection drifted from the raw mirror")
+    path = os.path.join(archive, ra._cat_file(manifest, "keys"))
+    with open(path, "r+b") as f:
+        f.seek(20)
+        f.write(bytes([ra.FLAG_UNCOMPRESSED | ra.FLAG_XONLY]))
+    try:
+        ra.run_verify(archive, deep=True)
+        fail("a record both 65-byte and x-only passed the deep audit")
+    except rs.ScanError:
+        pass
+    print("ok  forms: the form bit, the other face, and the audit's rule")
 
 
 # ---------------------------------------------------------------------------

@@ -103,7 +103,7 @@ That answer was printed by the build that sealed the archive quoted at the
 foot of this page, and the record has gained two fields since: the line now
 carries the height the digest was **first** seen at, and, for a key pushed in
 the 65-byte serialization, that it was uncompressed. The shape of the answer
-is in [`formats/RevealArchive-v2.md`](formats/RevealArchive-v2.md); this page
+is in [`formats/RevealArchive-v3.md`](formats/RevealArchive-v3.md); this page
 keeps the output it actually got, and will be re-taken from the next build
 rather than edited into a prediction.
 
@@ -568,10 +568,11 @@ None of that goes stale, because none of it is a copy.
 
 What stays here is what a frozen number is actually good for: a worked example,
 and the historical record of the first publication. The other one in this
-repository is the same species — the three v1 digests in
-[RevealArchive-v2](formats/RevealArchive-v2.md), published in July 2026 by a
-build predating the format, which `archive v1-digests` confronts a fresh scan
-with. Both are anchors to a moment. Neither is a promise about the next build.
+repository was the same species — the three v1 digests published in July 2026
+by a build predating the archive's format, which the 1.x releases could
+confront a fresh scan with (2.0.0 cannot: its filter changes what the archive
+collects, and the numbers stay reproducible with the release that wrote them).
+Both are anchors to a moment. Neither is a promise about the next build.
 
 What the rule rules out is **copies**, not a list. A single document naming
 known artifacts — height, formats, fingerprint — for somebody who wants to

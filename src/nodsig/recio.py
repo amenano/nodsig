@@ -160,6 +160,23 @@ def sha_file(path):
     return digest.hexdigest()
 
 
+def read_json(path, error):
+    """A state, manifest or meta file, as a dict, or the artifact's own
+    error when it cannot be read: a file that is not there, and a file
+    that does not parse (a kill during a write that was not atomic, a
+    truncated copy), are both refusals in the caller's own type, not a
+    traceback from json. Twenty loaders used to open and parse by hand,
+    and one had already drifted into raising a bare FileNotFoundError."""
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except OSError as e:
+        raise error(f"{path}: cannot read ({e.strerror})") from None
+    except json.JSONDecodeError as e:
+        raise error(f"{path}: not valid JSON ({e}): the file is truncated "
+                    "or was not written by this tool") from None
+
+
 def fsync_dir(path):
     """Make a rename in `path` durable. Skipped where the filesystem
     refuses (some network mounts): the rename is then as durable as the

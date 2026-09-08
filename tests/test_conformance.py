@@ -231,15 +231,20 @@ DOCUMENTED_ELSEWHERE = {
     "nodsig-identity-v3": "artifact.IDENTITY_TAG, the fingerprint recipe",
     "nodsig-statement-v1": "artifact.STATEMENT_TAG",
     "graph-v1": "historical: the earlier seal, which still decodes",
+    "reveal-archive-v1": "historical: the first published archive, named "
+                         "by the v3 page as what the v2 projection reproduced",
+    "reuse-hits-v1": "historical: the v1 identity of a burnt set, a literal "
+                     "in reuse_scan until 2.0.0",
     "address-book-v1": "historical: superseded by v2, named in the changelog",
     "check-report-v1": "historical: superseded by v2",
     "address-book-v3": "forward reference: what a breaking change would be called",
     "check-report-v3": "forward reference: the 2.0.0 report, page written "
                        "before the code",
-    "reveal-archive-v3": "forward reference: the 2.0.0 format, page written "
-                         "before the code that emits it",
+    "reveal-archive-v2": "historical: the 1.x archive, read by the release "
+                         "that wrote it",
     "nonces-witness-v2": "forward reference: same",
-    "firstreveal-v2": "forward reference: same",
+    "firstreveal-v1": "historical: the 1.x table, read by the release that "
+                      "wrote it",
     "locks-v2": "forward reference: same",
     "reuse-scan-v2": "forward reference: same",
     "reuse-hits-v2": "forward reference: same",

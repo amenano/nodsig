@@ -44,6 +44,7 @@ import platform
 import sys
 
 from nodsig import __version__
+from nodsig.recio import read_json
 
 MANIFEST_NAME = "manifest.json"
 
@@ -75,8 +76,7 @@ def _manifest(directory):
     path = os.path.join(directory, MANIFEST_NAME)
     if not os.path.exists(path):
         return None
-    with open(path) as f:
-        return json.load(f)
+    return read_json(path, ReportError)
 
 
 def _bytes_on_disk(directory):

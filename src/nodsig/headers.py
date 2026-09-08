@@ -139,7 +139,8 @@ from nodsig.artifact import (WallClock, identity_fingerprint,
                              make_identity, producer, seal_manifest,
                              verify_sealed)
 from nodsig.hashing import sha256d
-from nodsig.recio import atomic_json, read_fixed, read_slabs, sha_file
+from nodsig.recio import (atomic_json, read_fixed, read_json, read_slabs,
+                          sha_file)
 
 STATE_NAME = "state.json"
 MANIFEST_NAME = "manifest.json"
@@ -503,8 +504,7 @@ def _load_state(headers_dir):
     if not os.path.exists(path):
         raise HeaderError(f"no {STATE_NAME} in {headers_dir}: not a header "
                           "archive (or the scan never checkpointed)")
-    with open(path) as f:
-        state = json.load(f)
+    state = read_json(path, HeaderError)
     if state.get("format") != FORMAT_TAG:
         raise HeaderError("unknown header archive format")
     if state["last_height"] is None:
@@ -518,8 +518,7 @@ def _load_manifest(headers_dir):
     if not os.path.exists(path):
         raise HeaderError(f"no {MANIFEST_NAME} in {headers_dir}: run "
                           "`headers fingerprint` first")
-    with open(path) as f:
-        return json.load(f)
+    return read_json(path, HeaderError)
 
 
 class HeaderReader:

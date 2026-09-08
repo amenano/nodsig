@@ -10,7 +10,7 @@ no `Result<T>` envelope.
   [Graph-v2](../formats/Graph-v2.md),
   [OutpointIndex-v3](../formats/OutpointIndex-v3.md),
   [OutpointDerived-v3](../formats/OutpointDerived-v3.md),
-  [RevealArchive-v2](../formats/RevealArchive-v2.md),
+  [RevealArchive-v3](../formats/RevealArchive-v3.md),
   [Nonces-v3](../formats/Nonces-v3.md),
   [Nonces-witness-v1](../formats/Nonces-witness-v1.md).
 - **Reference impl:** `build`/`verify`/`stats`/`rewind` of each tool, over three

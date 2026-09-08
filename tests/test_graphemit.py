@@ -108,7 +108,7 @@ def test_emission_content(tmp, blocks):
     finally:
         server.shutdown()
 
-    reference = parsed_chain(blocks)
+    reference = {h: b for h, b in parsed_chain(blocks).items() if h <= 4}
     heights = []
     for rec in ge.iter_blocks(graph):
         h = rec["height"]

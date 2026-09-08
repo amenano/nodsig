@@ -65,6 +65,9 @@ NO_CLI = {
     "diststats.py",
     "genstore.py",         # the append-and-fuse store
     "hashing.py",
+    "keyforms.py",         # the identity of a key
+    "progress.py",         # the pace of a pass
+    "sightings.py",        # what a key sighting is, for both roads
     "linkage.py",
     "priceseries.py",   # reads and writes a format, not a command line
     "recio.py",
@@ -159,8 +162,9 @@ def test_provenance_names_only_the_archive_bits():
     came from. This is the rule whose breach shipped in a public input
     format, so the allowed set is written by name.
     """
-    allowed = {"reveal_archive.py", "RevealArchive-v2.md",
-               "RevealArchive-v3.md",   # the archive's own page, 2.0.0
+    allowed = {"reveal_archive.py",
+               "RevealArchive-v3.md",   # the archive's own page
+               "sightings.py",          # where the bits are defined now
                "ExposureLookup.md", "AGENTS.md",
                "AddressBook-v2.md",     # explains the rename it made
                "CheckReport-v2.md",     # same

@@ -6,7 +6,7 @@ that appeared in an unlocking context in confirmed blocks — answered from loca
 disk, with **where** a key was seen and **when** it was first seen.
 
 - **Layer:** L1 (in-process). See [ARCHITECTURE](../ARCHITECTURE.md).
-- **Reads format:** [RevealArchive-v2](../formats/RevealArchive-v2.md).
+- **Reads format:** [RevealArchive-v3](../formats/RevealArchive-v3.md).
 - **Reference impl:** `RevealArchiveExposure.query` + the `lookup` command.
 - **Independent of** the outpoint index/derivatives: this reads the reveal
   archive only.
@@ -90,7 +90,7 @@ RevealWhere = {                 // meaningful only for category KEY; all false o
 - `first_height` is the **lowest** height the digest was ever seen at (sightings
   merge by `min`). It is a first-reveal claim and nothing more. (The same claim
   restated in time order, for window reads, is the
-  [`FirstReveal-v1`](../formats/FirstReveal-v1.md) artifact; this lookup stays
+  [`FirstReveal-v2`](../formats/FirstReveal-v2.md) artifact; this lookup stays
   the one road for a single digest.)
 - `revealed = false` ⇒ not present up to the watermark (definite negative, with
   the off-chain/mempool qualification above).
@@ -132,13 +132,14 @@ result (and the archive fingerprint where merged).
   `first_height` big-endian. A lookup is a binary search on record boundaries,
   no full load. Performance strategy; reproduce the membership and the fields
   however you like.
-- The **published v1** archive had the same records without the height, and with
-  the scripts byte reserved and zero. `archive v1-digests` projects a v2 archive
-  back to that layout, which is how new code is confronted with the historical
-  artifact; a port that wants the same confrontation needs the same masks
-  (see RevealArchive-v2).
+- The **published v1** archive had the same records without the height, and
+  with the scripts byte reserved and zero; the 1.x releases projected their
+  archive back to that layout to confront the historical numbers. A v3 archive
+  cannot (its filter changes what is collected), so that confrontation is not
+  part of this contract any more: two builds of one release meet by
+  fingerprint.
 - A merged file may carry a **ladder sidecar** that turns the search into one
-  bucket read (see RevealArchive-v2). It is an optional accelerator, excluded
+  bucket read (see RevealArchive-v3). It is an optional accelerator, excluded
   from the fingerprint: with or without it the answer is identical.
 - Appendability: the merged file of a category plus zero or more run files of
   that category; a correct lookup consults all of them. Take both file names

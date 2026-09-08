@@ -28,7 +28,7 @@ error keeps the index's or the archive's type.
 import hashlib
 import os
 
-from nodsig.recio import IO_CHUNK, RecordError, durable_replace
+from nodsig.recio import IO_CHUNK, RecordError, checked_name, durable_replace
 
 
 def write_run(path, records):
@@ -107,6 +107,36 @@ class SortedFile:
         self.every = every
         self.error = error
         self._fd = None
+
+    @classmethod
+    def open(cls, directory, entry, cache, spec, error=RecordError,
+             records=None):
+        """The one road from a manifest to a reader: `entry` and
+        `cache` are the manifest's `build.files[<name>]` and
+        `build.caches[<name>]`, `spec` is the format's own (record
+        width, key length, ladder step). The ladder is read, its digest
+        confronted with the manifest, and its step confronted with the
+        format's: a ladder sampled with another step is intact and
+        wrong, and a lookup through it lands in the wrong bucket and
+        answers short. Both names are checked before they are joined
+        (recio.checked_name). `records` overrides the count when the
+        manifest keeps it under another key."""
+        rec, key_len, expect_every = spec
+        ladder_path = os.path.join(directory,
+                                   checked_name(cache["file"], error, "cache"))
+        with open(ladder_path, "rb") as f:
+            blob = f.read()
+        if hashlib.sha256(blob).hexdigest() != cache["sha256"]:
+            raise error(f"{cache['file']}: corrupted ladder")
+        if expect_every is not None and cache["every"] != expect_every:
+            raise error(
+                f"{cache['file']}: declares a step of {cache['every']} "
+                f"records, but the format fixes it at {expect_every}: a "
+                "search through it would land in the wrong bucket")
+        path = os.path.join(directory, checked_name(entry["file"], error))
+        return cls(path, rec, key_len,
+                   entry["records"] if records is None else records,
+                   blob, cache["every"], error=error)
 
     def _fdesc(self):
         if self._fd is None:

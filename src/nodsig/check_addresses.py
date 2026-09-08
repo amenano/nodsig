@@ -123,7 +123,7 @@ from nodsig import reveal_archive as ra
 from nodsig import witness as wit
 from nodsig.capability import Source, Result, Status
 from nodsig.hashing import hash160, sha256d
-from nodsig.reuse_scan import SAT, resolve_auth
+from nodsig.reuse_scan import add_node_args, SAT, resolve_auth
 from nodsig.recio import checked_name
 
 # ---------------------------------------------------------------------------
@@ -1411,14 +1411,9 @@ def main(argv=None):
                         "repeated-nonce points its census resolved, "
                         "which is a different and much cheaper "
                         "question than `nodsig nonces address`)")
-    p.add_argument("--rpc", help="node RPC URL (enables balance; the "
-                                 "node is only contacted if given)")
-    p.add_argument("--cookie-file", help="path to the node's .cookie file: "
-                                         "read from the file, out of the "
-                                         "argv and always current "
-                                         "(recommended). Without a cookie: "
-                                         "NODSIG_RPC_AUTH=user:password in "
-                                         "the environment.")
+    add_node_args(p, rest=False, rpc_default=None,
+                  rpc_help="node RPC URL (enables balance; the node is only "
+                           "contacted if given)")
     p.add_argument("--linkage-depth", type=int, default=1,
                    help="how many hops the link search takes (default 1: "
                         "a direct co-spend). Depth 2 goes through one "

@@ -163,6 +163,26 @@ FAKE_SIG = b"\x30" + bytes(70)
 REDEEM = bytes([0x51, 33]) + PUB2 + bytes([0x51, 0xAE])   # 1-of-1 multisig
 WSCRIPT = bytes([0x51, 33]) + PUB4 + bytes([0x51, 0xAE])
 
+# The forms the v3 archive learned to see, all at height 5 (the tests
+# that scan to 4 never meet them): a pay-to-pubkey output with a 65-byte
+# key, a bare 1-of-2 multisig output, a hybrid-form key pushed in a
+# scriptSig, a taproot script-path spend whose leaf names an x-only key,
+# and a pay-to-pubkey spend whose scriptSig is one well-formed DER
+# signature (a candidate script by position, filtered by shape).
+PUBU5 = b"\x04" + bytes(range(10, 74))          # y ends in 0x49: odd
+PUB6 = b"\x02" + bytes(range(5, 37))
+PUB7 = b"\x03" + bytes(range(6, 38))
+PUBH = b"\x06" + bytes(range(11, 75))   # hybrid lead, y ends 0x4a: even
+XLEAF = bytes(range(40, 72))                    # an x-only leaf key
+XINT = bytes(range(41, 73))                     # an x-only internal key
+DER_SIG = (b"\x30\x44\x02\x20" + bytes([1] + [0] * 31) + b"\x02\x20"
+           + bytes([1] + [0] * 31) + b"\x01")           # strict DER, 71 bytes
+SCHNORR_SIG = bytes(range(64))
+P2PK_SPK = bytes([65]) + PUBU5 + b"\xac"
+BARE_MS_SPK = b"\x51" + bytes([33]) + PUB6 + bytes([33]) + PUB7 + b"\x52\xae"
+TAP_LEAF = bytes([32]) + XLEAF + b"\xac"
+TAP_CONTROL = b"\xc0" + XINT
+
 H1 = rs.hash160(PUB1)
 H2 = rs.hash160(REDEEM)
 S1 = hashlib.sha256(WSCRIPT).digest()
@@ -316,7 +336,8 @@ def test_locks_are_verified_against_their_manifest(tmp):
 # ---------------------------------------------------------------------------
 
 def test_extraction():
-    stats = {"malformed_scriptsig": 0, "malformed_inner_script": 0}
+    stats = {"malformed_scriptsig": 0, "malformed_inner_script": 0,
+             **rs.new_filter_stats()}
 
     def tx_in(script_sig, witness):
         return bp.TxIn(bytes(32), 0, script_sig, 0, witness)
@@ -425,6 +446,18 @@ def build_chain():
             tbw.w_input(b"\xA5" * 32, 0, b"\x4c", 0xFFFFFFFF)],
         [tbw.w_output(10, tbw.P2PKH_SPK)], 0)
     add(4, [cb, tx], [cbid, txid])
+
+    # height 5: what only the v3 archive sees. Scans to 4 never meet it.
+    hybrid_spend = bytes([71]) + FAKE_SIG + bytes([65]) + PUBH
+    tx, txid, wtxid = tbw.w_tx(
+        2, [tbw.w_input(b"\xA6" * 32, 0, hybrid_spend, 0xFFFFFFFF),
+            tbw.w_input(b"\xA7" * 32, 0, bytes([len(DER_SIG)]) + DER_SIG,
+                        0xFFFFFFFF),
+            tbw.w_input(b"\xA8" * 32, 0, b"", 0xFFFFFFFF)],
+        [tbw.w_output(10, P2PK_SPK), tbw.w_output(10, BARE_MS_SPK)], 0,
+        witnesses=[[], [], [SCHNORR_SIG, TAP_LEAF, TAP_CONTROL]])
+    cb, cbid, _ = coinbase(b"\x01h5", witness=True, commit_wtxids=[wtxid])
+    add(5, [cb, tx], [cbid, txid])
     return blocks
 
 
@@ -883,7 +916,8 @@ def test_a_definite_answer_is_not_retried_and_a_cookie_is_reread(tmp):
         _Definite.accept = _basic("u:new")
         _Definite.seen.clear()
         try:
-            rs.RpcClient(url, "u:old", retries=4).batch([("getblockhash", [1])])
+            rs.RpcClient(url, "u:old", retries=4).batch(
+                [("getblockhash", [1])])
             fail("a 401 was not raised")
         except rs.ScanError as e:
             assert "401" in str(e) and "credentials" in str(e), str(e)

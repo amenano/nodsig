@@ -65,6 +65,8 @@ def expected_rows(blocks):
     ref = tge.parsed_chain(blocks)
     rows = []
     for h in sorted(ref):
+        if h > 4:
+            continue                # the scans here stop at 4
         block = ref[h]
         n_tx = len(block.transactions)
         n_in = sum(len(t.inputs) for t in block.transactions

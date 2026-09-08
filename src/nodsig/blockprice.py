@@ -47,7 +47,8 @@ from decimal import Decimal, ROUND_HALF_EVEN
 from nodsig import outpoint_index as oi
 from nodsig import priceseries as ps
 from nodsig.artifact import identity_fingerprint, producer
-from nodsig.recio import atomic_json, sha_file, checked_name, durable_replace
+from nodsig.recio import (atomic_json, checked_name, durable_replace,
+                          read_json, sha_file)
 
 FORMAT_TAG = "blockprice-v1"
 BIN_NAME = "blockprice.bin"
@@ -212,8 +213,7 @@ def load_meta(bp_dir):
     if not os.path.exists(path):
         raise BlockPriceError(f"no {META_NAME} in {bp_dir}: run "
                               "`price build`")
-    with open(path) as f:
-        meta = json.load(f)
+    meta = read_json(path, BlockPriceError)
     if meta.get("format") != FORMAT_TAG:
         raise BlockPriceError(f"not a {FORMAT_TAG} table: {bp_dir}")
     return meta

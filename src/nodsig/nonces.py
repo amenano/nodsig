@@ -116,7 +116,8 @@ from nodsig.artifact import (WallClock, make_identity, producer,
                              seal_manifest, verify_sealed)
 from nodsig.blockparse import scriptsig_pushes
 from nodsig.genstore import GenStore, new_state_fields
-from nodsig.recio import atomic_json, checked_name, locked, read_fixed
+from nodsig.recio import (atomic_json, checked_name, locked, read_fixed,
+                          read_json)
 from nodsig.recsort import SortedFile
 
 FORMAT_TAG = "nonces-v3"
@@ -884,8 +885,7 @@ def _load_state(nonces_dir, accept=(FORMAT_TAG,)):
     if not os.path.exists(path):
         raise NonceError(f"no {STATE_NAME} in {nonces_dir}: not a nonce "
                          "archive (build one with `archive scan --nonces`)")
-    with open(path) as f:
-        state = json.load(f)
+    state = read_json(path, NonceError)
     found = state.get("format")
     if found not in accept:
         if found in READ_TAGS:
@@ -907,8 +907,7 @@ def _load_manifest(nonces_dir, required=True):
                 f"no {MANIFEST_NAME} in {nonces_dir}: the archive has not "
                 "been sealed yet, run `nonces merge`")
         return None
-    with open(path) as f:
-        return json.load(f)
+    return read_json(path, NonceError)
 
 
 def _merged_entry(state):
@@ -942,13 +941,8 @@ def open_sorted(nonces_dir, state=None):
     blob = b""
     every = LADDER_EVERY
     if cache is not None:
-        ladder_path = os.path.join(
-            nonces_dir, checked_name(cache["file"], NonceError))
-        with open(ladder_path, "rb") as f:
-            blob = f.read()
-        if hashlib.sha256(blob).hexdigest() != cache["sha256"]:
-            raise NonceError(f"{cache['file']}: corrupted ladder")
-        every = cache["every"]
+        return SortedFile.open(nonces_dir, entry, cache, LADDERS[LOGICAL],
+                               error=NonceError)
     path = os.path.join(nonces_dir, checked_name(entry["file"], NonceError))
     return SortedFile(path, REC,
                       POINT_LEN, entry["records"], blob, every,
@@ -2066,6 +2060,8 @@ def _report(out, t, blocks, txs, inputs, nbytes, records, sorted_records,
 # ---------------------------------------------------------------------------
 
 def main(argv=None):
+    # The CLI seam: the argument helpers live with the node client.
+    from nodsig.reuse_scan import add_node_args
     p = argparse.ArgumentParser(
         description="The archive of published signature nonce points: "
                     "seal it, audit it, and read the repetitions.")
@@ -2106,14 +2102,7 @@ def main(argv=None):
                    help="outpoint index: which heights to read")
     a.add_argument("--derived", required=True,
                    help="its derivatives: which outputs were spent, by whom")
-    a.add_argument("--rpc", default="http://127.0.0.1:8332",
-                   help="the node, which is where the signatures still are: "
-                        "no artifact keeps unlocking data")
-    a.add_argument("--rest", action="store_true",
-                   help="use the binary REST interface (needs -rest=1)")
-    a.add_argument("--cookie-file",
-                   help="Bitcoin Core .cookie file (the secret never "
-                        "travels on the command line)")
+    add_node_args(a)
     a.add_argument("--nonces",
                    help="a census, to also say whether the same point was "
                         "published by signatures that are not this lock's")
@@ -2126,13 +2115,7 @@ def main(argv=None):
     rs.add_argument("--nonces", required=True, help="the sealed census")
     rs.add_argument("--witness", required=True,
                     help="the witness table to build (a new directory)")
-    rs.add_argument("--rpc", default="http://127.0.0.1:8332",
-                    help="the node: the signatures live only in the blocks")
-    rs.add_argument("--rest", action="store_true",
-                    help="use the binary REST interface (needs -rest=1)")
-    rs.add_argument("--cookie-file",
-                    help="Bitcoin Core .cookie file (the secret never "
-                         "travels on the command line)")
+    add_node_args(rs)
     rs.add_argument("--min-count", type=int, default=2,
                     help="resolve points sighted at least this many times "
                          "(default %(default)s)")
@@ -2148,13 +2131,7 @@ def main(argv=None):
                          "from what this audit just re-derived")
 
     b = sub.add_parser("bench", help="time the extraction over real blocks")
-    b.add_argument("--rpc-url", default="http://127.0.0.1:8332",
-                   help="node RPC/REST endpoint")
-    b.add_argument("--rest", action="store_true",
-                   help="use the binary REST interface (needs -rest=1)")
-    b.add_argument("--cookie-file",
-                   help="Bitcoin Core .cookie file (RPC only; the secret "
-                        "never travels on the command line)")
+    add_node_args(b)
     b.add_argument("--start", type=int, required=True,
                    help="first height to measure")
     b.add_argument("--count", type=int, default=10_000,
@@ -2201,7 +2178,7 @@ def main(argv=None):
         if args.count < 1 or args.stride < 1:
             raise SystemExit("--count and --stride must be positive")
         from nodsig.reuse_scan import build_client
-        client, _ = build_client(args.rpc_url, args.rest, args.cookie_file)
+        client, _ = build_client(args.rpc, args.rest, args.cookie_file)
         run_bench(client, args.start, args.count, stride=args.stride,
                   batch_size=args.batch_size, sort_batch=args.sort_batch,
                   project_inputs=args.project_inputs,

@@ -42,7 +42,8 @@ import time
 from decimal import Decimal, InvalidOperation
 
 from nodsig.artifact import producer
-from nodsig.recio import atomic_json, sha_file, checked_name, durable_replace
+from nodsig.recio import (atomic_json, checked_name, durable_replace,
+                          read_json, sha_file)
 
 FORMAT_TAG = "price-series-v1"
 CSV_NAME = "series.csv"
@@ -192,8 +193,7 @@ def load_meta(series_dir):
     if not os.path.exists(path):
         raise PriceSeriesError(f"no {META_NAME} in {series_dir}: not a "
                                "price series (run `price import`)")
-    with open(path) as f:
-        meta = json.load(f)
+    meta = read_json(path, PriceSeriesError)
     if meta.get("format") != FORMAT_TAG:
         raise PriceSeriesError(f"not a {FORMAT_TAG} series: {series_dir}")
     return meta

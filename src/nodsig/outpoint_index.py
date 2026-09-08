@@ -218,12 +218,14 @@ from array import array
 from datetime import datetime, timezone
 
 from nodsig import graphemit as ge
+from nodsig.progress import Pace
 from nodsig.artifact import (WallClock, declared_parent,
                              identity_fingerprint, make_identity, producer,
                              seal_manifest, sha_and_ladder, verify_sealed)
 from nodsig.hashing import hash160, warn_if_slow_ripemd160
 from nodsig.genstore import GenStore, new_state_fields
 from nodsig.recio import (IO_CHUNK, atomic_json, budgeted_slab, checked_name,
+                          read_json,
                           durable_replace, read_fixed, sha_file)
 from nodsig.recsort import SortedFile, bisect_blob
 from nodsig.reuse_scan import SAT
@@ -412,8 +414,7 @@ def _load_state(index_dir, required=True, accept=(FORMAT_TAG,)):
             raise OutpointError(f"no {STATE_NAME} in {index_dir}: "
                                 "run `build` first")
         return None
-    with open(path) as f:
-        state = json.load(f)
+    state = read_json(path, OutpointError)
     found = state.get("format")
     if found not in accept:
         if found in READ_TAGS:
@@ -522,12 +523,7 @@ def _phase_scan(graph_dir, store, end_height, flush_records,
         state["n_tx"], state["n_out"] = n_tx, n_out
         store.write_state()
 
-    started = time.monotonic()
-    done_since_start = 0
-    # Two rates, and the ETA from the last interval: see the matching
-    # comment in reveal_archive's scan loop for why the stretch
-    # average alone misleads across resumes.
-    mark_t, mark_done = started, 0
+    pace = Pace(end_height)
     for rec in ge.iter_blocks(graph_dir, from_height=start,
                               to_height=end_height):
         h = rec["height"]
@@ -570,20 +566,11 @@ def _phase_scan(graph_dir, store, end_height, flush_records,
             flush_runs(h)
         if sum(map(len, pos_buf.values())) >= 64 * 2**20:
             flush_positional()
-        done_since_start += 1
+        pace.add()
         if h % checkpoint_every == 0 or h == end_height:
             checkpoint(h)
-            now = time.monotonic()
-            step = ((done_since_start - mark_done) / (now - mark_t)
-                    if now > mark_t else 0.0)
-            avg = (done_since_start / (now - started)
-                   if now > started else 0.0)
-            mark_t, mark_done = now, done_since_start
-            eta_h = (end_height - h) / step / 3600 if step else 0
             print(f"scan @ {h:>9,}: {n_tx:,} tx, {n_out:,} outputs "
-                  f"| {step:.1f} blk/s now, {avg:.1f} avg, "
-                  f"~{eta_h:.1f} h left (flat-cost extrapolation)",
-                  file=sys.stderr)
+                  f"| {pace.text(h)}", file=sys.stderr)
     return end_height
 
 
@@ -1422,8 +1409,7 @@ def _load_manifest(index_dir, accept=(FORMAT_TAG,)):
     if not os.path.exists(path):
         raise OutpointError(f"no {MANIFEST_NAME} in {index_dir}: the "
                             "index is not sealed — run `build`")
-    with open(path) as f:
-        manifest = json.load(f)
+    manifest = read_json(path, OutpointError)
     if manifest.get("format") not in accept:
         raise OutpointError("unknown index manifest format")
     return manifest
@@ -1535,15 +1521,10 @@ class Index:
         """The SortedFile for one of the searchable artifacts, opened
         lazily with its ladder verified and resident."""
         if logical not in self._sorted:
-            rec, key_len, _ = (MERGED.get(logical)
-                               or LEGACY_MERGED[logical])
-            entry = self.build["files"][logical]
-            blob, every = self._ladder(logical)
-            path = os.path.join(self.dir,
-                                checked_name(entry["file"], OutpointError))
-            self._sorted[logical] = SortedFile(
-                path, rec, key_len,
-                entry["records"], blob, every, error=OutpointError)
+            spec = MERGED.get(logical) or LEGACY_MERGED[logical]
+            self._sorted[logical] = SortedFile.open(
+                self.dir, self.build["files"][logical],
+                self.build["caches"][logical], spec, error=OutpointError)
         return self._sorted[logical]
 
     # -- the questions -----------------------------------------------------

@@ -406,7 +406,7 @@ def test_truncate_appended(tmp):
 # ---------------------------------------------------------------------------
 # The gallop: same answer, arrived at in stretches.
 
-def reference(streams, rec, key_len, dedup_len, every, dedup):
+def reference(streams, rec, key_len, dedup_len, every, dedup, combine=None):
     """What a fusion must produce, worked out the obvious way: put every
     record in order, group the ones sharing the dedup prefix, keep what
     the rule says to keep, sample every `every`-th survivor.
@@ -424,7 +424,13 @@ def reference(streams, rec, key_len, dedup_len, every, dedup):
             j += 1
         dups += j - i
         log += [(rows[k], rows[k + 1]) for k in range(i, j)]
-        out += rows[j:j + 1] if dedup == "last" else rows[i:j + 1]
+        if combine is not None:
+            kept = rows[i]
+            for k in range(i + 1, j + 1):
+                kept = combine(kept, rows[k])
+            out.append(kept)
+        else:
+            out += rows[j:j + 1] if dedup == "last" else rows[i:j + 1]
         i = j + 1
     ladder = b"".join(r[:key_len] for k, r in enumerate(out)
                       if k % every == 0)
@@ -432,7 +438,7 @@ def reference(streams, rec, key_len, dedup_len, every, dedup):
 
 
 def fuse_one_way(tmp, gallop, base_rows, runs_rows, rec, key_len,
-                 dedup_len, every, dedup, slab, want_log):
+                 dedup_len, every, dedup, slab, want_log, combine=None):
     """One fusion, with the previous generation as a cursor (the gallop)
     or as one more stream (the plain road). Returns everything the
     fusion is answerable for."""
@@ -455,7 +461,7 @@ def fuse_one_way(tmp, gallop, base_rows, runs_rows, rec, key_len,
     log = [] if want_log else None
     records, sha, lad_sha, dups = merge_to_file(
         sources, out, rec, key_len, lad, every, dedup, dedup_len,
-        dup_log=log, base=base)
+        dup_log=log, base=base, combine=combine)
 
     with open(out, "rb") as f:
         body = f.read()
@@ -537,6 +543,77 @@ def test_gallop_answers_exactly_as_the_plain_fusion(tmp):
           f"the bulk path ran only {len(taken)} times: a matrix that never "
           "reaches it proves nothing about it")
     print(f"ok  gallop: 160 randomized fusions match the reference on both "
+          f"roads ({len(taken)} bulk stretches taken)")
+
+
+def _archive_like(a, b):
+    """The reveal archive's rule on two sightings of one digest: flags
+    OR-ed, the lowest first height kept. Associative and commutative,
+    which is what lets the fusion meet the pair in any order."""
+    return a[:4] + bytes([a[4] | b[4]]) + min(a[5:], b[5:])
+
+
+def test_gallop_combines_equal_keys_as_the_archive_does(tmp):
+    """The third rule for equal keys: reduce them. The reveal archive
+    used to fuse by hand, record by record through three generator
+    layers, because the shared fusion knew only "keep last" and "keep
+    both"; with `combine` it gallops like the index does, and the bytes,
+    the ladder and the count must be the reference's on both roads."""
+    rng = random.Random(20260908)
+    taken = []
+    real = genstore._adjacent_equal
+
+    def counting(*args):
+        taken.append(1)
+        return real(*args)
+
+    rec, key_len = 8, 4                     # digest | flags | height:u24
+
+    def rows(n, span):
+        out = []
+        for _ in range(n):
+            key = bytes(rng.randrange(span) for _ in range(key_len))
+            out.append(key + bytes([1 << rng.randrange(5)])
+                       + rng.randrange(1, 1 << 24).to_bytes(3, "big"))
+        return sorted(out)
+
+    genstore._adjacent_equal = counting
+    try:
+        for case in range(80):
+            span = rng.choice((2, 5, 256))
+            slab = rng.choice((rec, rec * 3, rec * 17, 8 << 20))
+            every = rng.choice((1, 4, 1024))
+            base_rows = rows(rng.choice((0, 5, 40, 700)), span)
+            # A previous generation holds unique keys, as the archive's
+            # does; the runs may repeat them and each other.
+            seen, unique = set(), []
+            for r in base_rows:
+                if r[:key_len] not in seen:
+                    seen.add(r[:key_len])
+                    unique.append(r)
+            runs_rows = [rows(rng.choice((0, 3, 30)), span)
+                         for _ in range(rng.randint(0, 3))]
+            want = reference([unique] + runs_rows, rec, key_len, key_len,
+                             every, None, combine=_archive_like)
+            for gallop in (False, True):
+                got = fuse_one_way(tmp, gallop, unique, runs_rows, rec,
+                                   key_len, key_len, every, None, slab,
+                                   False, combine=_archive_like)
+                for name, a, b in zip(("bytes", "ladder", "dups"), want, got):
+                    check(a == b, f"case {case} "
+                          f"({'gallop' if gallop else 'plain'}, span={span} "
+                          f"slab={slab} every={every}): {name} differs")
+    finally:
+        genstore._adjacent_equal = real
+    check(len(taken) > 20, f"the bulk path ran only {len(taken)} times")
+    try:
+        merge_to_file([], os.path.join(tmp, "x.bin"), rec, key_len,
+                      os.path.join(tmp, "x.lad"), 4, "last",
+                      combine=_archive_like)
+        fail("combine together with dedup was accepted")
+    except ValueError:
+        pass
+    print(f"ok  gallop: reduced equal keys match the reference on both "
           f"roads ({len(taken)} bulk stretches taken)")
 
 
@@ -672,6 +749,7 @@ TESTS = (test_fusion_generations_and_ladder,
          test_drop_runs_defers_deletion,
          test_truncate_appended,
          test_gallop_answers_exactly_as_the_plain_fusion,
+         test_gallop_combines_equal_keys_as_the_archive_does,
          test_gallop_refuses_a_stretch_it_cannot_express,
          test_gallop_still_verifies_the_base,
          test_sift_keeps_the_plain_road,

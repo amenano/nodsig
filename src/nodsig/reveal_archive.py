@@ -104,9 +104,6 @@ Subcommands:
                 without a second pass over the chain.
     lookup      is this 20/32-byte digest in the archive? The seed of
                 check_addresses.py's complete answer.
-    v1-digests  one sha256 per category over the records projected to
-                the published v1 layout, which is what confronts this
-                code with the historical artifact.
 
 Everything is standard library; the node is only asked for public
 chain data, read-only, over either of its interfaces. No addresses of
@@ -123,6 +120,14 @@ import time
 from array import array
 
 from nodsig import blockparse
+from nodsig.sightings import (FLAG_INNER_SIG, FLAG_INNER_WIT, FLAG_OTHER_FACE,
+                              FLAG_OUT, FLAG_SIG, FLAG_UNCOMPRESSED, FLAG_WIT,
+                              FLAG_XONLY, FLAGS_DEFINED, FLAGS_FULL_ONLY,
+                              MAX_INNER_KEYS, burns_for, candidate_shape,
+                              is_control_block, key_records, leaf_xonly_keys,
+                              new_filter_stats, output_keys, script_records,
+                              taproot_body)
+from nodsig.progress import Pace
 from nodsig.artifact import (WallClock, make_identity, producer,
                              seal_manifest, verify_sealed)
 from nodsig.blockparse import ParseError, script_pushes, scriptsig_pushes
@@ -130,7 +135,9 @@ from nodsig.blockparse import ParseError, script_pushes, scriptsig_pushes
 # Slab I/O for the fixed-width record files (runs, merged archive): the
 # read/write budget, the sha-verifying reader, atomic writes — shared with
 # the outpoint index, one implementation of the mechanics for both.
+from nodsig.genstore import _BaseCursor, merge_to_file
 from nodsig.recio import (IO_CHUNK, atomic_json, budgeted_slab, checked_name,
+                          read_json,
                           durable_replace, locked, preflight_space,
                           read_fixed)
 
@@ -162,37 +169,21 @@ from nodsig import nonces
 # pipeline: the per-input walk, the storage, and the matching are
 # written here again, because they are what the cross-check is meant to
 # check.
-from nodsig.reuse_scan import (LOCK_TYPES, TYPE_ORDER, SAT, BlockFetcher, LockSet,
+from nodsig.reuse_scan import (add_coemission_args, add_node_args,
+                               add_window_args,
+                               LOCK_TYPES, TYPE_ORDER, SAT, BlockFetcher, LockSet,
                         RpcClient, ScanError, _fingerprint, build_client,
-                        fingerprint_of_bitmaps, hash160, looks_like_pubkey,
+                        fingerprint_of_bitmaps, hash160,
                         warn_if_slow_ripemd160,
                         _load_manifest as _load_locks_manifest)
 
 STATE_NAME = "state.json"
 MANIFEST_NAME = "manifest.json"
-FORMAT_TAG = "reveal-archive-v2"
+FORMAT_TAG = "reveal-archive-v3"
 RUNS_DIR = "runs"
 
-# Provenance bits of a key sighting. "Direct" = pushed as itself in
-# the unlocking data; "inner" = found inside a revealed candidate
-# script (a multisig cosigner whose script just went public).
-FLAG_SIG = 1          # direct, in a scriptSig
-FLAG_WIT = 2          # direct, in a witness
-FLAG_INNER_SIG = 4    # inside the last scriptSig push (redeem script)
-FLAG_INNER_WIT = 8    # inside the last witness item (witness script)
-# Form bit, not provenance: the key's serialized form was the 65-byte
-# uncompressed one. The form is a function of the digest's preimage
-# (hash160 of the 33-byte string and of the 65-byte one are different
-# digests), so every sighting of one digest agrees on this bit and the
-# OR merge cannot change it: append == rebuild is untouched. It rides
-# a bit that was idle, on information the extraction already holds
-# (the length test in looks_like_pubkey) and that the archive cannot
-# recover later, because it stores the hash and never the key.
-FLAG_UNCOMPRESSED = 16
-# The four bits the published v1 archive defined: what the v1
-# projection (run_v1_digests) masks a keys byte down to.
-V1_KEY_FLAGS = FLAG_SIG | FLAG_WIT | FLAG_INNER_SIG | FLAG_INNER_WIT
-FLAGS_DEFINED = V1_KEY_FLAGS | FLAG_UNCOMPRESSED
+# The eight bits of a `keys` record, and the classifier both roads
+# share, live in sightings.py; they are re-exported here by name.
 
 # category → width of the stored digest. A record is
 #
@@ -215,7 +206,6 @@ FLAGS_DEFINED = V1_KEY_FLAGS | FLAG_UNCOMPRESSED
 CATEGORIES = {"keys": 20, "scripts20": 20, "scripts32": 32}
 CAT_ORDER = ["keys", "scripts20", "scripts32"]
 HEIGHT_BYTES = 3            # 16.7M heights, ~318 years of chain
-MAX_INNER_KEYS = 255
 
 
 def rec_width(cat):
@@ -227,6 +217,20 @@ def _reduce(cat, byte_a, height_a, byte_b, height_b):
     """Merge two sightings of the same digest."""
     byte = (byte_a | byte_b) if cat == "keys" else max(byte_a, byte_b)
     return byte, min(height_a, height_b)
+
+
+def _combine_keys(a, b):
+    """`_reduce` on two whole `keys` records: flags OR-ed, the lowest
+    first height kept. The height is big-endian, so the byte minimum is
+    the numeric one."""
+    return a[:20] + bytes([a[20] | b[20]]) + min(a[21:], b[21:])
+
+
+def _combine_scripts(a, b):
+    """`_reduce` on two whole script records (20- or 32-byte digest):
+    the larger inner-keys count, the lowest first height."""
+    w = len(a) - 4
+    return a[:w] + bytes([max(a[w], b[w])]) + min(a[w + 1:], b[w + 1:])
 
 # Every K-th key of a merged file is sampled into a `.lad` sidecar at merge
 # time, so a lookup bisects the resident ladder and reads ONE bucket (here
@@ -257,17 +261,21 @@ def extract_revelations(tx_in, stats, sig_pushes=None):
     """Everything one input reveals, as (category, digest, flags).
 
     The walk mirrors the shapes of the standard spends (and is the
-    same over-collecting strategy as reuse_scan's, restated here
-    independently): every pubkey-shaped push or witness item is a
-    revealed key; the LAST scriptSig push is a candidate redeem
-    script and the LAST witness item a candidate witness script;
-    pubkey-shaped pushes inside those candidates are revealed keys
-    too, tagged as inner. Malformed scripts are counted and skipped,
-    never guessed at.
+    same strategy as reuse_scan's, restated there independently): every
+    key-shaped push of the scriptSig and every key-shaped witness item
+    outside the taproot signature slots is a revealed key, keyed by
+    the identity `keyforms` decides once (the compressed digest under
+    OTHER_FACE when the form seen was another); the LAST scriptSig push
+    is a candidate redeem script and the LAST witness item a candidate
+    witness script, each kept only when its shape allows it to be a
+    script; key-shaped pushes inside a kept candidate are revealed keys
+    too, tagged as inner. A taproot script path reveals its internal
+    key (in the control block) and the keys its leaf names, both
+    x-only. Malformed scripts are counted and skipped, never guessed at.
 
     `sig_pushes` lets the caller pass the scriptSig pushes it has
-    already parsed (see `scriptsig_pushes`). Passing them must not
-    change the answer, only the cost.
+    already parsed. Passing them must not change the answer, only the
+    cost.
     """
     out = []
 
@@ -275,46 +283,59 @@ def extract_revelations(tx_in, stats, sig_pushes=None):
         sig_pushes = scriptsig_pushes(tx_in, stats)
 
     for p in sig_pushes:
-        if looks_like_pubkey(p):
-            out.append(("keys", hash160(p), _key_flags(p, FLAG_SIG)))
-    for item in tx_in.witness:
-        if looks_like_pubkey(item):
-            out.append(("keys", hash160(item), _key_flags(item, FLAG_WIT)))
+        key_records(out, p, FLAG_SIG)
 
-    # (candidate script, category of its hash, inner-key flag)
+    witness = tx_in.witness
+    slots, key_path = nonces._taproot_slots(witness)
+    for item in witness:
+        if not any(item is slot for slot in slots):
+            key_records(out, item, FLAG_WIT)
+
+    # (candidate script, category, inner-key flag, sits in a slot)
     candidates = []
     if sig_pushes:
-        candidates.append((sig_pushes[-1], "scripts20", FLAG_INNER_SIG))
-    if tx_in.witness:
-        candidates.append((tx_in.witness[-1], "scripts32", FLAG_INNER_WIT))
+        candidates.append((sig_pushes[-1], "scripts20", FLAG_INNER_SIG,
+                           False))
+    if witness:
+        last = witness[-1]
+        candidates.append((last, "scripts32", FLAG_INNER_WIT,
+                           any(last is slot for slot in slots)))
 
-    for script, cat, inner_flag in candidates:
-        try:
-            inner = script_pushes(script)
-        except ParseError:
-            stats["malformed_inner_script"] += 1
-            inner = []
-        keys = [p for p in inner if looks_like_pubkey(p)]
+    for script, cat, inner_flag, in_slot in candidates:
+        if candidate_shape(script, stats, in_slot, key_path,
+                           len(witness)) is not None:
+            continue
         # The script's own record carries HOW MANY keys were found inside
-        # it, in the byte that used to be reserved and zero. The count is
-        # already in hand here and costs nothing to keep; recovering it
-        # later would mean another pass over the chain, because the
-        # archive stores the script's hash and never the script.
-        n = min(len(keys), MAX_INNER_KEYS)
-        if cat == "scripts20":
-            out.append((cat, hash160(script), n))
-        else:
-            out.append((cat, hashlib.sha256(script).digest(), n))
-        for p in keys:
-            out.append(("keys", hash160(p), _key_flags(p, inner_flag)))
+        # it. The count is already in hand and costs nothing to keep;
+        # recovering it later would mean another pass over the chain,
+        # because the archive stores the script's hash and never the
+        # script.
+        script_records(out, script, cat, inner_flag, stats)
+
+    # A taproot script path: the internal key is bytes 1..33 of the
+    # control block, the leaf names its own keys. Neither item is a
+    # candidate script (the control block cannot be one, the leaf is
+    # walked for keys instead of being hashed).
+    body = taproot_body(witness)
+    if len(body) >= 2 and is_control_block(body[-1]):
+        key_records(out, body[-1][1:33], FLAG_WIT, xonly=True)
+        for x in leaf_xonly_keys(body[-2]):
+            key_records(out, x, FLAG_INNER_WIT, xonly=True)
     return out
 
 
-def _key_flags(pubkey, provenance):
-    """The record byte of one key sighting: the provenance bit the
-    caller found it under, plus the form bit when the key came in the
-    65-byte uncompressed serialization."""
-    return provenance | (FLAG_UNCOMPRESSED if len(pubkey) == 65 else 0)
+def extract_output_revelations(tx_out, stats):
+    """The keys one output publishes: pay-to-pubkey (`<key> OP_CHECKSIG`)
+    and bare multisig (`OP_m <keys> OP_n OP_CHECKMULTISIG`). Such a key
+    is public from the block that created the output, spent or not, and
+    every lock built on it is exposed from that height. A taproot output
+    publishes its key by construction and no lock hides behind it: it
+    yields nothing here."""
+    out = []
+    for push in output_keys(tx_out.script_pubkey):
+        if key_records(out, push, FLAG_OUT):
+            stats["out_keys"] += 1
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -410,10 +431,13 @@ def _load_state(archive_dir, required=True):
             raise ScanError(f"no {STATE_NAME} in {archive_dir}: "
                             "run `scan` first")
         return None
-    with open(path) as f:
-        state = json.load(f)
+    state = read_json(path, ScanError)
     if state.get("format") != FORMAT_TAG:
-        raise ScanError("unknown archive state format")
+        raise ScanError(
+            f"archive state says {state.get('format')!r}, not "
+            f"{FORMAT_TAG!r}: an earlier format is read by the release "
+            "that wrote it (v1.9.0 for reveal-archive-v2), and a fresh "
+            "scan writes this one")
     return state
 
 
@@ -421,10 +445,12 @@ def _load_manifest(archive_dir):
     path = os.path.join(archive_dir, MANIFEST_NAME)
     if not os.path.exists(path):
         return None
-    with open(path) as f:
-        manifest = json.load(f)
+    manifest = read_json(path, ScanError)
     if manifest.get("format") != FORMAT_TAG:
-        raise ScanError("unknown archive manifest format")
+        raise ScanError(
+            f"archive manifest says {manifest.get('format')!r}, not "
+            f"{FORMAT_TAG!r}: an earlier format is read by the release "
+            "that wrote it")
     return manifest
 
 
@@ -530,7 +556,7 @@ def run_scan(rpc_url, auth, end_height, archive_dir,
 
     stats = {"transactions": 0, "inputs": 0,
              "malformed_scriptsig": 0, "malformed_inner_script": 0,
-             "revelations": 0}
+             "revelations": 0, **new_filter_stats()}
     runs = []                      # [{name, category, records, sha256}]
     start_height = 1               # the genesis coinbase reveals nothing
     prev_hash = None
@@ -540,6 +566,8 @@ def run_scan(rpc_url, auth, end_height, archive_dir,
     clock = WallClock("scan", state)
     if state is not None:
         stats.update(state["stats"])
+        for name, zero in new_filter_stats().items():
+            stats.setdefault(name, zero)
         runs = state["runs"]
         start_height = state["last_height"] + 1
         prev_hash = bytes.fromhex(state["last_block_hash"])[::-1]
@@ -664,14 +692,7 @@ def run_scan(rpc_url, auth, end_height, archive_dir,
         clock.stamp(st)
         atomic_json(state_path, st)
 
-    started = time.monotonic()
-    done_since_start = 0
-    # Two rates on purpose. The stretch average restarts from zero at
-    # every resume and, on a chain whose per-block cost only grows, an
-    # average seeded by light blocks stays permanently above the true
-    # pace: two stretches of different length printing one "blk/s" are
-    # not comparable. The last checkpoint interval is what "now" means.
-    mark_t, mark_done = started, 0
+    pace = Pace(end_height)
     fetcher = BlockFetcher(client, feed_from, end_height, batch_size,
                            prefetch=prefetch, depth=prefetch_depth)
     for window, hashes, raws in fetcher:
@@ -699,6 +720,14 @@ def run_scan(rpc_url, auth, end_height, archive_dir,
 
             for tx in block.transactions:
                 stats["transactions"] += 1
+                # Outputs first, coinbase included: a key published in
+                # a scriptPubKey is in view from this block.
+                for tx_out in tx.outputs:
+                    for cat, digest, byte in extract_output_revelations(
+                            tx_out, stats):
+                        buffers[cat].append((digest, byte, h))
+                        buffered += 1
+                        stats["revelations"] += 1
                 if blockparse.is_coinbase(tx):
                     continue
                 for tx_in in tx.inputs:
@@ -715,7 +744,7 @@ def run_scan(rpc_url, auth, end_height, archive_dir,
                     if nonce_emitter:
                         nonce_emitter.add_input(h, tx_in, pushes)
 
-        done_since_start += len(window)
+        pace.add(len(window))
         if buffered >= flush_records:
             flush(window[-1])
         if nonce_emitter:
@@ -724,28 +753,20 @@ def run_scan(rpc_url, auth, end_height, archive_dir,
         if (window[-1] % checkpoint_every < batch_size
                 or window[-1] == end_height):
             checkpoint(window[-1], blockparse.hash_hex(prev_hash))
-            now = time.monotonic()
-            step = ((done_since_start - mark_done) / (now - mark_t)
-                    if now > mark_t else 0.0)
-            avg = (done_since_start / (now - started)
-                   if now > started else 0.0)
-            mark_t, mark_done = now, done_since_start
-            # The ETA extrapolates at constant per-block cost, which on
-            # this chain is optimistic by construction; the tag says so
-            # rather than letting the number claim more than it checked.
-            eta_h = ((end_height - window[-1]) / step / 3600
-                     if step else 0)
             print(f"checkpoint @ {window[-1]:>7,}: "
                   f"{stats['revelations']:,} revelations in "
-                  f"{len(runs)} runs "
-                  f"| {step:.1f} blk/s now, {avg:.1f} avg, "
-                  f"~{eta_h:.1f} h left (flat-cost extrapolation)",
+                  f"{len(runs)} runs | {pace.text(window[-1])}",
                   file=sys.stderr)
 
     print(f"\narchive covers heights 1..{end_height} "
           f"({stats['revelations']:,} revelations, {len(runs)} runs; "
           f"malformed scriptSigs: {stats['malformed_scriptsig']}, "
-          f"malformed inner scripts: {stats['malformed_inner_script']})")
+          f"malformed inner scripts: {stats['malformed_inner_script']}; "
+          f"keys in outputs: {stats['out_keys']:,}; candidates filtered by "
+          f"shape: {stats['filtered_key_shaped']:,} keys, "
+          f"{stats['filtered_signature_shaped']:,} signatures, "
+          f"{stats['filtered_control_or_annex']:,} control blocks or "
+          "annexes)")
     if graph_digest_dir:
         emitter.report()
     print("run `merge` to fuse the runs and fingerprint the archive.")
@@ -816,45 +837,42 @@ def run_merge(archive_dir):
              "files": {}, "caches": {}}
     digests = {}
     for cat in CAT_ORDER:
-        sources = _archive_sources(archive_dir, cat, state, manifest)
         out_name = f"archive_{cat}_g{generation:04d}.bin"
         out_path = os.path.join(archive_dir, out_name)
-        tmp = out_path + ".tmp"
-        digest = hashlib.sha256()
-        records = 0
-        buf = bytearray()          # rows leave in slabs, see IO_CHUNK
-        ladder = bytearray()       # every K-th key, sampled on the way
-        with open(tmp, "wb") as f:
-            for h, fl, ht in _merged_stream(sources, cat):
-                if records % ARCHIVE_LADDER_EVERY == 0:
-                    ladder += h
-                buf += h
-                buf.append(fl)
-                buf += ht.to_bytes(HEIGHT_BYTES, "big")
-                records += 1
-                if len(buf) >= IO_CHUNK:
-                    f.write(buf)
-                    digest.update(buf)
-                    buf.clear()
-            if buf:
-                f.write(buf)
-                digest.update(buf)
-        durable_replace(tmp, out_path)
-        build["files"][cat] = {"file": out_name, "records": records}
-        digests[cat] = digest.hexdigest()
-
-        # The ladder sidecar: written next to the file, recorded in the
-        # manifest, and deliberately OUT of the fingerprint (it is a cache).
         lad_name = f"archive_{cat}_g{generation:04d}.lad"
         lad_path = os.path.join(archive_dir, lad_name)
-        tmp_lad = lad_path + ".tmp"
-        with open(tmp_lad, "wb") as f:
-            f.write(ladder)
-        durable_replace(tmp_lad, lad_path)
+        # The shared fusion, with the previous generation as a cursor:
+        # an append inserts a few million records into billions, and the
+        # stretches nothing interleaves move as slabs instead of passing
+        # one by one through three generator layers. The reduction on
+        # equal digests (flags OR-ed, lowest height) is the archive's
+        # own, handed in as `combine`; the bytes, the ladder and the
+        # count are the ones the per-record walk produced, which the
+        # suite pins and which was checked on the sealed chain-scale
+        # archive before this road replaced the other.
+        runs = [(_run_path(archive_dir, run["name"]), run["sha256"])
+                for run in state["runs"] if run["category"] == cat]
+        slab = budgeted_slab(len(runs) + 1)
+        base = None
+        if manifest is not None:
+            base_path = os.path.join(archive_dir, _cat_file(manifest, cat))
+            base = _BaseCursor(base_path, rec_width(cat),
+                               _cat_sha(manifest, cat), slab, ScanError)
+        sources = [read_fixed(path, rec_width(cat), expect_sha=sha,
+                              slab_bytes=slab, error=ScanError)
+                   for path, sha in runs]
+        records, digest_hex, lad_sha, _dups = merge_to_file(
+            sources, out_path, rec_width(cat), CATEGORIES[cat], lad_path,
+            ARCHIVE_LADDER_EVERY, None, base=base,
+            combine=_combine_keys if cat == "keys" else _combine_scripts)
+        build["files"][cat] = {"file": out_name, "records": records}
+        digests[cat] = digest_hex
+        # The ladder sidecar: written next to the file, recorded in the
+        # manifest, and deliberately OUT of the fingerprint (it is a cache).
         build["caches"][cat] = {
             "file": lad_name,
             "every": ARCHIVE_LADDER_EVERY,
-            "sha256": hashlib.sha256(ladder).hexdigest()}
+            "sha256": lad_sha}
         print(f"{cat:<10} {records:>14,} records")
 
     # The identity: the three category digests in fixed order, plus the
@@ -952,7 +970,8 @@ def _audit_records(archive_dir, manifest):
                     f"file is sorted and deduplicated by construction, so "
                     f"a search through it can stop above a digest that is "
                     f"in there and report it absent")
-            if cat == "keys" and byte & ~FLAGS_DEFINED:
+            if cat == "keys" and (byte & FLAG_UNCOMPRESSED
+                                  and byte & FLAG_XONLY):
                 raise ScanError(
                     f"{name}: record {records:,} ({digest.hex()}) carries "
                     f"flag bits {byte:#04x}, outside the five this "
@@ -1041,47 +1060,14 @@ def _apply_revelation(locks, cat, h, fl, faces, cosigners, height=None):
 
     `height` is the record's `first_height`, passed through to the
     LockSets only when a caller has asked them to remember it (see
-    `LockSet.track_burn_heights`). Nothing else here depends on it: the
-    burn rules are about provenance bits, not about when.
-
-    The archive itself has no perimeter: it stores every sighting with
-    its provenance bits. The mapping below restates reuse_scan's
-    declared rules — a revealed key burns all its faces (both hash160
-    forms plus the P2SH-wrapped one) under the full perimeter, or only
-    the exact form it was seen in under --no-faces; inner (cosigner)
-    sightings count only with cosigners on; candidate redeem and
-    witness scripts burn their own hash always, that being the base
-    criterion, not an extension. Burning is idempotent, so applying
-    the same record twice (a digest sighted in many intervals) cannot
-    inflate anything.
+    `LockSet.track_burn_heights`). The rules are `sightings.burns_for`,
+    the one map both roads apply; burning is idempotent, so applying
+    the same record twice cannot inflate anything.
     """
-    if cat == "keys":
-        effective = fl & (FLAG_SIG | FLAG_WIT)
-        if cosigners:
-            effective |= fl & (FLAG_INNER_SIG | FLAG_INNER_WIT)
-        if not effective:
-            return False           # revealed only as a cosigner, excluded
-        if faces:
-            locks["p2pkh"].burn(h, height)
-            locks["p2wpkh"].burn(h, height)
-            locks["p2sh"].burn(hash160(b"\x00\x14" + h), height)
-        else:
-            # Narrow reading: the exact form only. Inner keys count as
-            # the form of the script that revealed them, like
-            # reuse_scan does: a redeem cosigner is a `1…` sighting,
-            # a witness-script cosigner a `bc1q…` one.
-            sig = fl & FLAG_SIG or (cosigners and fl & FLAG_INNER_SIG)
-            wit = fl & FLAG_WIT or (cosigners and fl & FLAG_INNER_WIT)
-            if sig:
-                locks["p2pkh"].burn(h, height)
-            if wit:
-                locks["p2wpkh"].burn(h, height)
-        return True
-    if cat == "scripts20":
-        locks["p2sh"].burn(h, height)
-    else:
-        locks["p2wsh"].burn(h, height)
-    return True
+    burns = burns_for(cat, h, fl, faces, cosigners)
+    for t, lock in burns:
+        locks[t].burn(lock, height)
+    return bool(burns)
 
 
 def _load_locksets(locks_dir):
@@ -1200,65 +1186,6 @@ def run_crosscheck(archive_dir, locks_dir, faces=True, cosigners=True,
         print("CHECK PASSED: the two independent roads meet "
               "on the same fingerprint.")
     return fp
-
-
-# ---------------------------------------------------------------------------
-# v1-digests — the archive projected back to the published v1 form
-# ---------------------------------------------------------------------------
-
-def run_v1_digests(archive_dir):
-    """One sha256 per category, over the records projected to the v1
-    layout: `digest | byte` with no height, the keys byte masked to
-    the four provenance bits v1 defined, the scripts byte zeroed (it
-    was reserved then).
-
-    This is the check that ties the new code to the historical
-    artifact: an archive rebuilt from the chain by THIS code, projected
-    here, must reproduce the per-category digests the sealed v1 archive
-    published. Same chain, same digests, with everything the format
-    gained since (the height, the inner-key count, the form bit) taken
-    out of the comparison by construction. The masks are pinned by a
-    test: widening a flag without teaching this projection would break
-    the confrontation, and the test says so before the chain does.
-
-    Defined on the FUSED base only. A pending run would make the
-    digests describe neither the v1 artifact nor this archive, so the
-    presence of any is a refusal, not a warning.
-
-    Returns {category: hex digest}, and prints them.
-    """
-    state = _load_state(archive_dir)
-    manifest = _load_manifest(archive_dir)
-    if manifest is None:
-        raise ScanError("no manifest: run `archive merge` first, the "
-                        "v1 projection is defined on the fused base")
-    if state["runs"]:
-        raise ScanError(f"{len(state['runs'])} unfused runs beyond the "
-                        "fused base: run `archive merge` first")
-    print(f"=== v1 projection "
-          f"(heights 1..{state['last_height']:,}) ===")
-    out = {}
-    for cat in CAT_ORDER:
-        mask = V1_KEY_FLAGS if cat == "keys" else 0
-        digest = hashlib.sha256()
-        buf = bytearray()
-        n = 0
-        path = os.path.join(archive_dir, _cat_file(manifest, cat))
-        for h, byte, _ht in _read_records(path, cat,
-                                          expect_sha=_cat_sha(manifest,
-                                                              cat)):
-            buf += h
-            buf.append(byte & mask)
-            n += 1
-            if len(buf) >= IO_CHUNK:
-                digest.update(buf)
-                buf.clear()
-        digest.update(buf)
-        out[cat] = digest.hexdigest()
-        print(f"{cat:<10} {n:>13,} records  {out[cat]}")
-    print("confront these with the per-category digests the sealed v1 "
-          "archive recorded")
-    return out
 
 
 # ---------------------------------------------------------------------------
@@ -1567,15 +1494,8 @@ def _open_merged(archive_dir, manifest, cat):
     cache = manifest["build"]["caches"].get(cat)
     if cache is None:
         return None
-    path = os.path.join(archive_dir, _cat_file(manifest, cat))
-    with open(os.path.join(archive_dir,
-                           checked_name(cache["file"], ScanError)), "rb") as f:
-        blob = f.read()
-    if hashlib.sha256(blob).hexdigest() != cache["sha256"]:
-        raise ScanError(f"{cache['file']}: corrupted ladder")
-    return SortedFile(path, rec_width(cat), CATEGORIES[cat],
-                      manifest["build"]["files"][cat]["records"],
-                      blob, cache["every"], error=ScanError)
+    return SortedFile.open(archive_dir, manifest["build"]["files"][cat],
+                           cache, ARCHIVE_LADDERS[cat], error=ScanError)
 
 
 def _merged_sighting(archive_dir, manifest, cat, key, reader):
@@ -1670,6 +1590,12 @@ def run_lookup(archive_dir, hex_digests):
                         where.append("inside a redeem script")
                     if fl & FLAG_INNER_WIT:
                         where.append("inside a witness script")
+                    if fl & FLAG_OUT:
+                        where.append("published in an output")
+                    if fl & FLAG_OTHER_FACE:
+                        where.append("seen in its other serialization")
+                    if fl & FLAG_XONLY:
+                        where.append("seen as a taproot internal or leaf key")
                     if fl & FLAG_UNCOMPRESSED:
                         where.append("uncompressed form")
                 if cat != "keys" and fl:
@@ -1694,78 +1620,16 @@ def main(argv=None):
     sub = p.add_subparsers(dest="cmd", required=True)
 
     ps = sub.add_parser("scan", help="stream the chain into the archive")
-    ps.add_argument("--rpc", default="http://127.0.0.1:8332",
-                    help="node address (default: %(default)s; a remote node "
-                        "is reached through a local tunnel). Also the "
-                        "address --rest uses: the node serves both on the "
-                        "same port")
-    ps.add_argument("--rest", action="store_true",
-                    help="fetch the blocks over the node's binary REST "
-                         "interface (needs bitcoind -rest=1) instead of "
-                         "JSON-RPC: the blocks arrive verbatim rather than "
-                         "as hex inside JSON, which is about half the bytes "
-                         "on the wire, and this path needs no credential at "
-                         "all. Recommended for a full scan; REST has no "
-                         "batching, so pair it with --prefetch-depth")
-    ps.add_argument("--cookie-file",
-                    help="path to the node's .cookie file (e.g. ~/.bitcoin/"
-                         ".cookie): read from the file, stays out of the "
-                         "argv and is always current. Without a cookie: "
-                         "NODSIG_RPC_AUTH=user:password in the environment.")
+    add_node_args(ps)
     ps.add_argument("--end", type=int, required=True,
                     help="last height to archive (the snapshot's height, "
                          "so the cross-check compares like with like)")
     ps.add_argument("--archive", required=True, help="archive directory")
-    ps.add_argument("--batch", type=int, default=25,
-                    help="blocks per fetch window: one JSON-RPC batch, "
-                         "or that many blocks asked for over REST")
-    ps.add_argument("--checkpoint-every", type=int, default=10_000,
-                    help="blocks between checkpoints")
     ps.add_argument("--flush-records", type=int, default=8_000_000,
                     help="buffered revelations before a run is flushed "
                          "(memory knob)")
-    ps.add_argument("--graph",
-                    help="ALSO co-emit the raw transaction graph "
-                         "(graph-v2) into this directory while "
-                         "scanning — the blocks are fetched and parsed "
-                         "anyway; off by default (~300-400 GB on the "
-                         "full chain, see graphemit.py)")
-    ps.add_argument("--graph-digest", metavar="GRAPH",
-                    help="INSTEAD of --graph: serialize the same graph "
-                         "records and hash them without writing them, "
-                         "checking interval by interval that this code "
-                         "still emits the bytes the graph archive in "
-                         "this directory already holds. Costs no disk "
-                         "and no extra pass; fingerprint that archive "
-                         "first, since the check trusts the per-run "
-                         "digests its state records")
-    ps.add_argument("--headers",
-                    help="ALSO co-emit the header archive (headers-v2) "
-                         "into this directory: 88 B per block plus the "
-                         "coinbase scripts, ~150 MB for the whole chain, "
-                         "and the scan's integrity checks become "
-                         "repeatable offline (see headers.py). A fresh "
-                         "archive starts at genesis, so the scan fetches "
-                         "height 0 for it")
-    ps.add_argument("--nonces",
-                    help="ALSO co-emit the nonce census (nonces-v3) into "
-                         "this directory: one 16-byte record per "
-                         "signature, ~55 GB for the whole chain, and the "
-                         "repeated nonce points it sorts together are "
-                         "keys recoverable from public data (see "
-                         "nonces.py). Costs about +10%% of this scan's "
-                         "per-input CPU, measured")
-    ps.add_argument("--no-prefetch", action="store_true",
-                    help="fetch and parse strictly in series (the "
-                         "prudent fallback; by default the next batch "
-                         "downloads while this one is parsed)")
-    ps.add_argument("--prefetch-depth", type=int, default=1,
-                    help="batches in flight at once (default: "
-                         "%(default)s, one ahead of the parser). Above 1 "
-                         "means that many connections fetching at the "
-                         "same time, which pays off over --rest, where "
-                         "latency is per block; over JSON-RPC the batch "
-                         "already amortizes it")
+    add_window_args(ps)
+    add_coemission_args(ps, nonces=True)
 
     pv = sub.add_parser("verify", help="re-read a sealed archive "
                                        "against its manifest (full audit)")
@@ -1833,13 +1697,6 @@ def main(argv=None):
     pl.add_argument("digests", nargs="+",
                     help="hex digests, 20 bytes (hash160) or 32 (sha256)")
 
-    p1 = sub.add_parser("v1-digests",
-                        help="per-category sha256 of the records "
-                             "projected to the v1 layout (no height, "
-                             "v1 flag bits only): the confrontation "
-                             "with a sealed v1 archive's digests")
-    p1.add_argument("--archive", required=True)
-
     args = p.parse_args(argv)
     try:
         if args.cmd == "scan":
@@ -1874,8 +1731,6 @@ def main(argv=None):
                        allow_base_mismatch=args.allow_base_mismatch)
         elif args.cmd == "curve":
             run_archive_curve(args.archive, args.out, every=args.every)
-        elif args.cmd == "v1-digests":
-            run_v1_digests(args.archive)
         else:
             run_lookup(args.archive, args.digests)
     except (ScanError, ParseError, graphemit.GraphError,

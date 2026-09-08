@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""FirstReveal-v1: the sixth artifact, when a key was first revealed.
+"""FirstReveal-v2: the sixth artifact, when a key was first revealed.
 
 Built from the archive's keys partition alone. The tests reuse the reuse
 suite's synthetic chain, whose reveals are known by hand (they are the
@@ -53,18 +53,30 @@ REVEALS = {2: (trs.PUB1,), 3: (trs.PUB3, trs.PUB4), 4: (trs.PUB2,)}
 
 
 def _expected_rows():
-    """The model's first reveals, as sorted 23-byte records."""
-    recs = [h.to_bytes(3, "big") + hash160(pub)
-            for h, pubs in REVEALS.items() for pub in pubs]
+    """The model's first reveals, as sorted (height, digest) pairs."""
+    recs = [(h, hash160(pub)) for h, pubs in REVEALS.items() for pub in pubs]
     recs.sort()
     return recs
 
 
+def _expected_files(cov_to=4):
+    """keys.bin and first_off.bin the model implies."""
+    rows = [(h, d) for h, d in _expected_rows() if h <= cov_to]
+    keys = b"".join(d for _h, d in rows)
+    offs = []
+    for h in range(1, cov_to + 2):
+        offs.append(sum(1 for hh, _d in rows if hh < h))
+    return keys, b"".join(o.to_bytes(5, "big") for o in offs)
+
+
 def _read_firstreveal(out_dir):
     manifest = fr._load_manifest(out_dir)
-    entry = manifest["build"]["files"]["firstreveal"]
-    with open(os.path.join(out_dir, entry["file"]), "rb") as f:
-        return manifest, f.read()
+    out = []
+    for name in ("keys", "first_off"):
+        entry = manifest["build"]["files"][name]
+        with open(os.path.join(out_dir, entry["file"]), "rb") as f:
+            out.append(f.read())
+    return manifest, tuple(out)
 
 
 def _merged_archive(tmp, blocks, name, end=4):
@@ -85,18 +97,21 @@ def test_build_matches_model(tmp, archive):
     out = os.path.join(tmp, "firstreveal")
     fp = fr.run_build(archive, out)
 
-    manifest, data = _read_firstreveal(out)
-    want = b"".join(_expected_rows())
-    check(data == want,
-          f"firstreveal bytes differ from the model: got {data.hex()}, "
-          f"want {want.hex()}")
+    manifest, (keys, offs) = _read_firstreveal(out)
+    want_keys, want_offs = _expected_files()
+    check(keys == want_keys,
+          f"keys.bin differs from the model: got {keys.hex()}, "
+          f"want {want_keys.hex()}")
+    check(offs == want_offs,
+          f"first_off.bin differs from the model: got {offs.hex()}, "
+          f"want {want_offs.hex()}")
     rows = manifest["build"]["rows"]
     check(rows == len(_expected_rows()),
           f"row count {rows} != {len(_expected_rows())} revealed keys")
     am = ra._load_manifest(archive)
     check(rows == am["build"]["files"]["keys"]["records"],
           "rows differ from the parent's keys records: not a 1:1 map")
-    check(hash160(trs.PUB5) not in data,
+    check(hash160(trs.PUB5) not in keys,
           "a never-revealed key grew a row")
     check(fp == manifest["fingerprint"], "run_build returned a stray fp")
     # provenance: the parent is the archive, declared and not sealed in.
@@ -142,8 +157,7 @@ def test_append_equals_rebuild(tmp, blocks):
     out = os.path.join(tmp, "fr_grown_table")
     fr.run_build(d, out)
     _, before = _read_firstreveal(out)
-    check(before == b"".join(r for r in _expected_rows()
-                             if int.from_bytes(r[:3], "big") <= 2),
+    check(before == _expected_files(cov_to=2),
           "the height-2 table is not the model's height-2 prefix")
 
     server, url = trs.serve(blocks)
@@ -207,7 +221,7 @@ def test_verify_passes_and_catches_corruption(tmp, archive):
 
     manifest = fr._load_manifest(out)
     data_file = os.path.join(
-        out, manifest["build"]["files"]["firstreveal"]["file"])
+        out, manifest["build"]["files"]["keys"]["file"])
     with open(data_file, "r+b") as f:
         f.seek(0)
         b = f.read(1)

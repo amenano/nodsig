@@ -107,14 +107,7 @@ def main(argv=None):
                                      "from it instead of asking a node "
                                      "(--rpc and --cookie-file are then "
                                      "unused)")
-    p.add_argument("--rpc", default="http://127.0.0.1:8332",
-                   help="node RPC URL (default: %(default)s; a remote node "
-                        "is reached through a local tunnel)")
-    p.add_argument("--cookie-file", help="path to the node's .cookie file "
-                                         "(read from the file, out of the "
-                                         "argv). Without a cookie: "
-                                         "NODSIG_RPC_AUTH=user:password in "
-                                         "the environment.")
+    rs.add_node_args(p, rest=False)
     p.add_argument("--out", help="write CSV height,unix,mediantime,utc here")
     args = p.parse_args(argv)
 

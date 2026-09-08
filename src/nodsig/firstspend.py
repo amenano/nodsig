@@ -29,7 +29,8 @@ from nodsig.artifact import (WallClock, declared_parent, identity_fingerprint,
                              make_identity, producer, seal_manifest,
                              verify_sealed)
 from nodsig.genstore import GenStore, new_state_fields
-from nodsig.recio import atomic_json, read_fixed, sha_file, checked_name
+from nodsig.recio import (atomic_json, checked_name, read_fixed, read_json,
+                          sha_file)
 from nodsig.recsort import SortedFile
 
 FORMAT_TAG = "firstspend-v1"
@@ -82,8 +83,7 @@ def _load_state(out_dir, required=True):
                                   "`build` first")
         return None
     import json
-    with open(path) as f:
-        state = json.load(f)
+    state = read_json(path, FirstSpendError)
     if state.get("format") != FORMAT_TAG:
         raise FirstSpendError(f"not a {FORMAT_TAG} state: {out_dir}")
     return state
@@ -95,8 +95,7 @@ def _load_manifest(out_dir):
         raise FirstSpendError(f"no {MANIFEST_NAME} in {out_dir}: the table "
                               "is not sealed — run `build`")
     import json
-    with open(path) as f:
-        manifest = json.load(f)
+    manifest = read_json(path, FirstSpendError)
     if manifest.get("format") != FORMAT_TAG:
         raise FirstSpendError("unknown firstspend manifest format")
     return manifest
@@ -503,16 +502,10 @@ def _verify_against_parent(out_dir, manifest, hist, out):
     independently through its ladder."""
     derived_dir, hist_path, hist_sha, hist_rec = hist
     dman = dv._load_manifest(derived_dir, accept=(dv.FORMAT_TAG,))
-    hentry = dman["build"]["files"]["history"]
-    hcache = dman["build"]["caches"]["history"]
-    ladder_path = os.path.join(
-        derived_dir, checked_name(hcache["file"], FirstSpendError))
-    with open(ladder_path, "rb") as f:
-        blob = f.read()
-    if hashlib.sha256(blob).hexdigest() != hcache["sha256"]:
-        raise FirstSpendError("the parent's history ladder is corrupt")
-    sf = SortedFile(hist_path, hist_rec, dv.HIST_KEY, hentry["records"],
-                    blob, hcache["every"], error=FirstSpendError)
+    sf = SortedFile.open(derived_dir, dman["build"]["files"]["history"],
+                         dman["build"]["caches"]["history"],
+                         (hist_rec, dv.HIST_KEY, dv.HIST_EVERY),
+                         error=FirstSpendError)
     try:
         entry = manifest["build"]["files"][LOGICAL]
         rows = manifest["build"]["rows"]
@@ -550,19 +543,10 @@ def _verify_against_parent(out_dir, manifest, hist, out):
 
 def _sorted_firstspend(out_dir, manifest):
     """A SortedFile over the sealed table, its ladder verified."""
-    entry = manifest["build"]["files"][LOGICAL]
-    cache = manifest["build"]["caches"][LOGICAL]
-    ladder_path = os.path.join(
-        out_dir, checked_name(cache["file"], FirstSpendError))
-    with open(ladder_path, "rb") as f:
-        blob = f.read()
-    if hashlib.sha256(blob).hexdigest() != cache["sha256"]:
-        raise FirstSpendError(f"{cache['file']}: corrupted ladder")
-    path = os.path.join(out_dir,
-                        checked_name(entry["file"], FirstSpendError))
-    return SortedFile(path, FS_REC, FS_KEY,
-                      manifest["build"]["rows"], blob, cache["every"],
-                      error=FirstSpendError)
+    return SortedFile.open(out_dir, manifest["build"]["files"][LOGICAL],
+                           manifest["build"]["caches"][LOGICAL],
+                           LADDERS[LOGICAL], error=FirstSpendError,
+                           records=manifest["build"]["rows"])
 
 
 def run_between(out_dir, index_dir, from_h, to_h, out=sys.stdout):

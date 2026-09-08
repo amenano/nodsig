@@ -208,18 +208,19 @@ record and holds the declared coverage to what those records prove. Passing the
 parent (`--graph`, `--index`) makes the audit confirm the declared ancestry
 instead of taking it on trust.
 
-Two confrontations that verify cannot make on its own:
+One confrontation that verify cannot make on its own:
 
 ```sh
 nodsig headers crosscheck --headers <headers> --index <index>
-nodsig archive v1-digests --archive <archive>
 ```
 
-The first recomputes every block's Merkle root from the index's txids and
-confronts it with the header: the strongest cheap statement about the pair, and
-its reference is the chain itself. The second projects the archive back to the
-published v1 layout and prints one sha256 per category, which is how a new
-build is confronted with a historical one.
+It recomputes every block's Merkle root from the index's txids and confronts
+it with the header: the strongest cheap statement about the pair, and its
+reference is the chain itself. (The archive's confrontation with the numbers
+published by 1.x, `archive v1-digests`, is gone with 2.0.0: the filter that
+version adds changes what the archive collects, so no projection of a new
+archive can reproduce them. Two builds of the same release are confronted by
+fingerprint.)
 
 Once they pass, one page describes the lot:
 
@@ -506,7 +507,6 @@ they read, time or explain something you already have.
 | `archive curve` | first revelations per window of heights: the archive alone, no locks | 3 |
 | `archive verify` | re-read a sealed archive against its manifest; `--deep` reads every record | 5 |
 | `archive crosscheck` | the two roads compared bit for bit | second road |
-| `archive v1-digests` | the fused base projected back to the published v1 layout | 5 |
 | `archive lookup` | was this digest ever revealed, where, and when first | 6 |
 | `graph fingerprint` | seal the graph (and audit every byte doing it) | 3 |
 | `graph digest` | read back the result of a `--graph-digest` check | - |
@@ -585,5 +585,4 @@ of on the boundaries your download batch size happened to produce.
    comparison refuses rather than averaging them.
 3. **Merge before reading.** `nonces groups`, `nonces lookup` and
    `archive lookup` do consult unfused runs, so they answer correctly either
-   way, but only a merged artifact has a fingerprint, and `archive v1-digests`
-   is defined on the fused base alone.
+   way, but only a merged artifact has a fingerprint.

@@ -41,7 +41,7 @@ PUBLIC_SURFACE = {
     "census": None,
     "reuse": ("prepare", "scan", "stats"),
     "archive": ("scan", "merge", "verify", "crosscheck", "derive", "curve",
-                "lookup", "v1-digests"),
+                "lookup"),
     "nonces": ("merge", "verify", "rewind", "groups", "lookup",
                "address", "bench",
                "resolve", "witness-verify"),

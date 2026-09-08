@@ -18,7 +18,7 @@ per ARTEFACT, stable by contract.
 
     nodsig census                 the UTXO-set census
     nodsig reuse      prepare|scan|stats
-    nodsig archive    scan|merge|verify|crosscheck|derive|lookup|v1-digests
+    nodsig archive    scan|merge|verify|crosscheck|derive|curve|lookup
     nodsig nonces     merge|verify|rewind|groups|lookup|address|bench
                       resolve|witness-verify
     nodsig headers    fingerprint|verify|crosscheck|stats|show

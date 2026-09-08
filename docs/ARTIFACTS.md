@@ -18,13 +18,13 @@ placeholders: every one of them is a path you choose on the command line.
 |---|---|---|
 | graph | `graph-v2` | — |
 | headers | `headers-v2` | — |
-| revelation archive | `reveal-archive-v2` | — |
+| revelation archive | `reveal-archive-v3` | — |
 | nonce census | `nonces-v3` | `nonces-v2` |
 | nonce witness table | `nonces-witness-v1` | — |
 | outpoint index | `outpoint-index-v3` | `outpoint-index-v2` |
 | outpoint derivatives | `outpoint-derived-v3` | `outpoint-derived-v2` |
 | first-spend table | `firstspend-v1` | — |
-| first-reveal table | `firstreveal-v1` | — |
+| first-reveal table | `firstreveal-v2` | — |
 | block stats | `block-stats-v2` | — |
 | price series (external input) | `price-series-v1` | — |
 | block price (external input, derived) | `blockprice-v1` | — |
@@ -153,11 +153,11 @@ published with this project were produced: run once, agreed, reported.
 | `<locks>/` | `locks-v1` | The current locks: sorted digests of unspent outputs, one file per type | `reuse prepare` | `reuse scan`, `archive crosscheck` |
 | ├ `locks_{p2pkh,p2sh,p2wpkh,p2wsh}.bin` | sorted records | One lock type per file | `reuse prepare` | as above |
 | └ `manifest.json` | `locks-v1` | Pins the snapshot's base hash (so a scan stops at that height) and each file's record count and sha256, which every reader checks before burning a lock | `reuse prepare` | as above |
-| `<archive>/` | `reveal-archive-v2` | Every key and script ever revealed, appendable | `archive scan` | `archive merge/verify/derive/crosscheck/lookup/v1-digests`, `check` |
-| ├ `runs/…_keys.bin` | records | `hash160` of public keys revealed in a scriptSig or witness | `archive scan` | as above |
+| `<archive>/` | `reveal-archive-v3` | Every key and script ever revealed, appendable | `archive scan` | `archive merge/verify/derive/crosscheck/curve/lookup`, `check` |
+| ├ `runs/…_keys.bin` | records | `hash160` of public keys revealed in a scriptSig, a witness, an output or a taproot leaf, one identity per point | `archive scan` | as above |
 | ├ `runs/…_scripts20.bin` | records | `hash160` of candidate redeem scripts | `archive scan` | as above |
 | ├ `runs/…_scripts32.bin` | records | `sha256` of candidate witness scripts | `archive scan` | as above |
-| └ `manifest.json` | `reveal-archive-v2` | The canonical fingerprint, written by `merge` | `archive merge` | `archive verify` |
+| └ `manifest.json` | `reveal-archive-v3` | The canonical fingerprint, written by `merge` | `archive merge` | `archive verify` |
 | `curve.csv` | CSV | One row per height step: this **is** the reuse curve over time | `archive derive --curve` | `curve deltas` |
 | `<headers>/` | `headers-v2` | The header chain the scan verified, from genesis: 88 B per height plus each coinbase script. Off by default, enabled with `--headers` (~150 MB) | `archive scan --headers` | `headers verify/crosscheck`, `curve dates` |
 | ├ `headers.bin` | records | The 80 header bytes verbatim, then the block's size and weight | `archive scan --headers` | as above |
@@ -179,8 +179,8 @@ published with this project were produced: run once, agreed, reported.
 | └ `manifest.json` | `outpoint-derived-v3` | Fingerprint and coverage; the parent index is declared in `build`, and a stale pairing is refused | `derived build` | verification |
 | `<firstspend>/` | `firstspend-v1` | The first spend of every lock, ordered by that moment (25 B: `spender_tx` \| `lock`) | `firstspend build` | `firstspend between` |
 | └ `firstspend_gNNNN.bin`, `manifest.json` | records / `firstspend-v1` | One row per lock ever spent from; the parent derivatives are **declared** in `build` | `firstspend build` | `firstspend between/verify` |
-| `<firstreveal>/` | `firstreveal-v1` | The first revelation of every key, ordered by that moment (23 B: `first_height` \| `key`) | `firstreveal build` | `firstreveal between` |
-| └ `firstreveal_gNNNN.bin`, `manifest.json` | records / `firstreveal-v1` | One row per revealed key, a 1:1 restatement of the archive's keys partition; the parent archive is **declared** in `build` | `firstreveal build` | `firstreveal between/verify` |
+| `<firstreveal>/` | `firstreveal-v2` | The first revelation of every key, ordered by that moment (20 B per row in `keys.bin`, one u40 offset per height in `first_off.bin`; was 23 B: `first_height` \| `key`) | `firstreveal build` | `firstreveal between` |
+| └ `keys.bin`, `first_off.bin`, `manifest.json` | records / `firstreveal-v2` | One row per revealed key, a 1:1 restatement of the archive's keys partition; the parent archive is **declared** in `build` | `firstreveal build` | `firstreveal between/verify` |
 | `*.lad` (inside index, derived, firstspend and firstreveal) | ladders | Search caches: one sample every few thousand keys. **Outside the fingerprint**; without them a search falls back to a blind bisection, slower and with the same answer | the builders | the readers, when present |
 | `<checkpoint>/` | `reuse-scan-v1` | *Second road only.* The direct reuse scan's state: a `hits_<type>.bin` bitmap of which locks history has opened, plus `state.json` and its own `curve.csv` | `reuse scan` | itself (resume), `archive crosscheck` |
 

@@ -80,7 +80,7 @@ repeatable with no node and no network:
 
 Check 4 commits to the wtxids, which hash the witness bytes, and the witness is
 deliberately not archived (it is signatures; what matters in it, the revealed
-keys, is what [RevealArchive-v2](./RevealArchive-v2.md) distills). Verifying it
+keys, is what [RevealArchive-v3](./RevealArchive-v3.md) distills). Verifying it
 again needs the raw blocks, which is another full pass. Stated here so that
 "three of four" is never read as four.
 

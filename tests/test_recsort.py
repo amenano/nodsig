@@ -196,6 +196,45 @@ def test_bisect_blob_answers_two_questions(tmp):
 # Standalone runner (pytest collects the same functions via the fixture)
 # ---------------------------------------------------------------------------
 
+def test_open_reads_the_manifest_shape_and_refuses_another_step(tmp):
+    """Seven readers used to repeat the nine lines from a manifest entry
+    to a SortedFile, and none confronted the ladder's step with the
+    format's: a ladder sampled with another step is intact and wrong,
+    and a lookup through it answers short. One road now, and the step
+    is checked."""
+    import hashlib
+    import json
+    from nodsig.recio import RecordError
+    rec, key_len, every = 6, 4, 2
+    rows = [k.to_bytes(4, "big") + b"\x00\x01" for k in range(0, 40, 2)]
+    path = os.path.join(tmp, "table.bin")
+    with open(path, "wb") as f:
+        f.write(b"".join(rows))
+    blob = b"".join(r[:key_len] for i, r in enumerate(rows) if i % every == 0)
+    with open(os.path.join(tmp, "table.lad"), "wb") as f:
+        f.write(blob)
+    entry = {"file": "table.bin", "records": len(rows)}
+    cache = {"file": "table.lad", "every": every,
+             "sha256": hashlib.sha256(blob).hexdigest()}
+    sf = SortedFile.open(tmp, entry, cache, (rec, key_len, every))
+    try:
+        assert [r for r in sf.find((10).to_bytes(4, "big"))] == [rows[5]]
+    finally:
+        sf.close()
+    try:
+        SortedFile.open(tmp, entry, cache, (rec, key_len, 4))
+        raise AssertionError("a ladder with another step was accepted")
+    except RecordError as e:
+        assert "step" in str(e)
+    try:
+        SortedFile.open(tmp, entry, dict(cache, file="../table.lad"),
+                        (rec, key_len, every))
+        raise AssertionError("a ladder name leaving the directory was joined")
+    except RecordError:
+        pass
+    print("ok  open: one road from the manifest, the step confronted")
+
+
 def test_slab_walk_equals_record_walk(tmp):
     """Hashing and ladder-sampling by slab must give exactly what the
     per-record walk gave.

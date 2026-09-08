@@ -81,6 +81,14 @@ import urllib.request
 from array import array
 
 from nodsig import blockparse
+from nodsig.keyforms import looks_like_key
+from nodsig.nonces import _taproot_slots as nonces_taproot_slots
+from nodsig.progress import Pace
+from nodsig.sightings import (FLAG_INNER_SIG, FLAG_INNER_WIT, FLAG_OUT,
+                              FLAG_SIG, FLAG_WIT, burns_for, candidate_shape,
+                              is_control_block, key_records, leaf_xonly_keys,
+                              new_filter_stats, output_keys, script_records,
+                              taproot_body)
 from nodsig.blockparse import ParseError, script_pushes
 
 # The hash primitives (sha256d / ripemd160 / hash160) live in their own
@@ -150,17 +158,10 @@ SAT = 100_000_000
 
 
 def looks_like_pubkey(item):
-    """True for byte strings shaped like a Bitcoin public key: 33 bytes
-    starting 0x02/0x03 (compressed) or 65 starting 0x04 (uncompressed).
-
-    Shape is all we can check without context — but a false positive is
-    harmless by construction: hashing a non-key can only match a real
-    lock if that exact byte string IS what the lock was built from,
-    which is the definition of a true hit (see the note in
-    extract_reveals)."""
-    n = len(item)
-    return ((n == 33 and item[0] in (2, 3))
-            or (n == 65 and item[0] == 4))
+    """The shape of a serialized public key, as `keyforms` decides it
+    (33 bytes with lead 02/03, 65 with lead 04/06/07). Kept under its
+    old name for the readers that grew on it."""
+    return looks_like_key(item)
 
 
 # ---------------------------------------------------------------------------
@@ -536,74 +537,74 @@ def extract_reveals(tx_in, faces, cosigners, stats):
 
     Rather than guessing what KIND of spend an input is (which would
     need the previous output), the extraction collects everything the
-    unlocking data plausibly reveals and lets the lock set decide:
-
-      - every pubkey-shaped item in the scriptSig pushes and in the
-        witness items is treated as a revealed public key;
-      - the LAST scriptSig push is a candidate redeem script (that is
-        where P2SH keeps it), so its hash160 is a candidate p2sh lock;
-      - the LAST witness item is a candidate witness script (that is
-        where P2WSH keeps it), so its sha256 is a candidate p2wsh lock;
-      - with `cosigners`, pubkey-shaped pushes INSIDE those candidate
-        scripts are revealed keys too (the co-signers of a multisig
-        whose script just went public);
-      - with `faces`, a revealed key burns all its faces: hash160 in
-        BOTH p2pkh and p2wpkh (same digest, two address forms), plus
-        the P2SH-wrapped face hash160(0x0014||hash160(key)). Without
-        `faces`, a scriptSig key burns only p2pkh and a witness key
-        only p2wpkh — the narrow reading, kept as a flag so others can
-        measure what each choice adds.
+    unlocking data plausibly reveals and lets the lock set decide. The
+    WALK is this road's own, written apart from the archive's on
+    purpose: every key-shaped scriptSig push, every key-shaped witness
+    item outside the taproot signature slots, the last scriptSig push
+    and the last witness item as candidate scripts, the keys inside a
+    kept candidate, the internal key and the leaf keys of a taproot
+    script path. What a key looks like, which candidate can be a
+    script, and what each sighting burns under `faces`/`cosigners` are
+    `sightings`' rules, shared with the archive so the cross-check
+    compares the walks and not two copies of one rule.
 
     Why over-collecting cannot inflate the count: a candidate only
     counts if its hash equals a CURRENT lock, and a hash matches only
     if the candidate bytes are the exact preimage that lock was built
-    from — at which point the revelation is real, whatever kind of
-    spend carried it. Collecting too much costs a few wasted lookups;
-    collecting too little would silently weaken the bound. Malformed
-    scripts are counted in `stats` and skipped, never guessed at.
+    from, at which point the revelation is real, whatever kind of spend
+    carried it. Malformed scripts are counted in `stats` and skipped,
+    never guessed at.
     """
-    pubkeys = []
-    scripts = []      # (candidate script bytes, revealed-as-witness?)
+    found = []          # (category, digest, flags), as the archive's
 
     try:
         sig_pushes = script_pushes(tx_in.script_sig)
     except ParseError:
         stats["malformed_scriptsig"] += 1
         sig_pushes = []
+    for p in sig_pushes:
+        key_records(found, p, FLAG_SIG)
+
+    witness = list(tx_in.witness)
+    slots, key_path = nonces_taproot_slots(witness)
+    for item in witness:
+        if not any(item is slot for slot in slots):
+            key_records(found, item, FLAG_WIT)
+
     if sig_pushes:
-        scripts.append((sig_pushes[-1], False))
-        pubkeys.extend((p, False) for p in sig_pushes
-                       if looks_like_pubkey(p))
-    if tx_in.witness:
-        scripts.append((tx_in.witness[-1], True))
-        pubkeys.extend((p, True) for p in tx_in.witness
-                       if looks_like_pubkey(p))
+        last = sig_pushes[-1]
+        if candidate_shape(last, stats) is None:
+            script_records(found, last, "scripts20", FLAG_INNER_SIG, stats)
+    if witness:
+        last = witness[-1]
+        in_slot = any(last is slot for slot in slots)
+        if candidate_shape(last, stats, in_slot, key_path,
+                           len(witness)) is None:
+            script_records(found, last, "scripts32", FLAG_INNER_WIT, stats)
+
+    body = taproot_body(witness)
+    if len(body) >= 2 and is_control_block(body[-1]):
+        key_records(found, body[-1][1:33], FLAG_WIT, xonly=True)
+        for x in leaf_xonly_keys(body[-2]):
+            key_records(found, x, FLAG_INNER_WIT, xonly=True)
 
     out = []
-    for script, from_witness in scripts:
-        if from_witness:
-            out.append(("p2wsh", hashlib.sha256(script).digest()))
-        else:
-            out.append(("p2sh", hash160(script)))
-        if cosigners:
-            try:
-                inner = script_pushes(script)
-            except ParseError:
-                stats["malformed_inner_script"] += 1
-                inner = []
-            pubkeys.extend((p, from_witness) for p in inner
-                           if looks_like_pubkey(p))
+    for cat, digest, flags in found:
+        out.extend(burns_for(cat, digest, flags, faces, cosigners))
+    return out
 
-    for key, from_witness in pubkeys:
-        h = hash160(key)
-        if faces:
-            out.append(("p2pkh", h))
-            out.append(("p2wpkh", h))
-            out.append(("p2sh", hash160(b"\x00\x14" + h)))
-        elif from_witness:
-            out.append(("p2wpkh", h))
-        else:
-            out.append(("p2pkh", h))
+
+def extract_output_reveals(tx_out, faces, cosigners, stats):
+    """The (type, lock_hash) candidates one output reveals: the keys a
+    pay-to-pubkey or bare multisig scriptPubKey publishes, in view from
+    the block that created the output."""
+    found = []
+    for push in output_keys(tx_out.script_pubkey):
+        if key_records(found, push, FLAG_OUT):
+            stats["out_keys"] += 1
+    out = []
+    for cat, digest, flags in found:
+        out.extend(burns_for(cat, digest, flags, faces, cosigners))
     return out
 
 
@@ -1148,7 +1149,7 @@ def run_scan(locks_dir, rpc_url, auth, end_height, checkpoint_dir,
         print(f"  {t:<8} {locks[t].count:>12,} locks", file=sys.stderr)
 
     stats = {"malformed_scriptsig": 0, "malformed_inner_script": 0,
-             "inputs": 0, "transactions": 0}
+             "inputs": 0, "transactions": 0, **new_filter_stats()}
 
     # --- Resume, or start fresh ---
     start_height = 1                      # genesis coinbase reveals nothing
@@ -1185,6 +1186,8 @@ def run_scan(locks_dir, rpc_url, auth, end_height, checkpoint_dir,
             locks[t].hits = hits[t]
             locks[t].recount_from_bitmap()
         stats.update(state["stats"])
+        for name, zero in new_filter_stats().items():
+            stats.setdefault(name, zero)
         start_height = state["last_height"] + 1
         prev_hash = bytes.fromhex(state["last_block_hash"])[::-1]
         base_seen_at = state.get("base_seen_at")
@@ -1289,12 +1292,7 @@ def run_scan(locks_dir, rpc_url, auth, end_height, checkpoint_dir,
         return fp
 
     # --- The loop ---
-    started = time.monotonic()
-    done_since_start = 0
-    # Two rates, and the ETA from the last interval: see the matching
-    # comment in reveal_archive's scan loop for why the stretch
-    # average alone misleads across resumes.
-    mark_t, mark_done = started, 0
+    pace = Pace(end_height)
     fetcher = BlockFetcher(client, feed_from, end_height, batch_size,
                            prefetch=prefetch, depth=prefetch_depth)
     for window, hashes, raws in fetcher:
@@ -1328,6 +1326,10 @@ def run_scan(locks_dir, rpc_url, auth, end_height, checkpoint_dir,
 
             for tx in block.transactions:
                 stats["transactions"] += 1
+                for tx_out in tx.outputs:
+                    for t, key in extract_output_reveals(tx_out, faces,
+                                                         cosigners, stats):
+                        locks[t].burn(key)
                 if blockparse.is_coinbase(tx):
                     continue              # creates coins, spends none
                 for tx_in in tx.inputs:
@@ -1336,26 +1338,16 @@ def run_scan(locks_dir, rpc_url, auth, end_height, checkpoint_dir,
                                                   cosigners, stats):
                         locks[t].burn(key)
 
-        done_since_start += len(window)
+        pace.add(len(window))
 
         if (window[-1] % checkpoint_every < batch_size
                 or window[-1] == end_height):
             fp = checkpoint(window[-1], blockparse.hash_hex(prev_hash))
-            now = time.monotonic()
-            step = ((done_since_start - mark_done) / (now - mark_t)
-                    if now > mark_t else 0.0)
-            avg = (done_since_start / (now - started)
-                   if now > started else 0.0)
-            mark_t, mark_done = now, done_since_start
-            eta_h = ((end_height - window[-1]) / step / 3600
-                     if step else 0)
             burnt = sum(locks[t].hit_sats for t in TYPE_ORDER)
             print(f"checkpoint @ {window[-1]:>7,}: "
-                    f"reuse ≥ {burnt / SAT:,.2f} BTC "
-                    f"({sum(locks[t].hit_count for t in TYPE_ORDER):,} locks) "
-                    f"| {step:.1f} blk/s now, {avg:.1f} avg, "
-                    f"~{eta_h:.1f} h left (flat-cost extrapolation) "
-                    f"| {fp[:16]}…", file=sys.stderr)
+                  f"reuse ≥ {burnt / SAT:,.2f} BTC "
+                  f"({sum(locks[t].hit_count for t in TYPE_ORDER):,} locks) "
+                  f"| {pace.text(window[-1])} | {fp[:16]}…", file=sys.stderr)
 
     # The locks were photographed at ONE block. A scan that stops short
     # of it counts less than that moment and says so; a scan that runs
@@ -1723,6 +1715,96 @@ def resolve_auth(cookie_file):
         f"process argv, readable by anyone on the machine.")
 
 
+RPC_DEFAULT = "http://127.0.0.1:8332"
+
+
+def add_node_args(parser, rest=True, rpc_default=RPC_DEFAULT, rpc_help=None):
+    """The three flags that reach a node, written once: `--rpc`, `--rest`
+    and `--cookie-file`, with the one help text for the credential rule.
+    Seven copies of it had drifted in wording and one command spelled the
+    flag `--rpc-url`; a runbook written from one `-h` failed on another.
+    `rest=False` for the commands that only speak JSON-RPC; `rpc_default`
+    None for the commands where giving the node is what enables a
+    capability."""
+    parser.add_argument(
+        "--rpc", default=rpc_default,
+        help=rpc_help or ("node address (default: %(default)s; a remote "
+                          "node is reached through a local tunnel)"
+                          + (". Also the address --rest uses: the node "
+                             "serves both on the same port" if rest else "")))
+    if rest:
+        parser.add_argument(
+            "--rest", action="store_true",
+            help="fetch the blocks over the node's binary REST interface "
+                 "(needs bitcoind -rest=1) instead of JSON-RPC: the blocks "
+                 "arrive verbatim rather than as hex inside JSON, which is "
+                 "about half the bytes on the wire, and this path needs no "
+                 "credential at all. Recommended for a full scan; REST has "
+                 "no batching, so pair it with --prefetch-depth")
+    parser.add_argument(
+        "--cookie-file",
+        help="path to the node's .cookie file (e.g. ~/.bitcoin/.cookie): "
+             "the secret is read from the file, stays OUT of the argv, and "
+             "is read again if the node rotates it. Without a cookie: "
+             "NODSIG_RPC_AUTH=user:password in the environment")
+
+
+def add_window_args(parser):
+    """How a scan fetches: `--batch`, `--checkpoint-every`,
+    `--no-prefetch`, `--prefetch-depth`. One text for the two scanners."""
+    parser.add_argument("--batch", type=int, default=25,
+                        help="blocks per fetch window: one JSON-RPC batch, "
+                             "or that many blocks asked for over REST")
+    parser.add_argument("--checkpoint-every", type=int, default=10_000,
+                        help="blocks between checkpoints")
+    parser.add_argument("--no-prefetch", action="store_true",
+                        help="fetch and parse strictly in series (the "
+                             "prudent fallback; by default the next batch "
+                             "downloads while this one is parsed)")
+    parser.add_argument("--prefetch-depth", type=int, default=1,
+                        help="batches in flight at once (default: "
+                             "%(default)s, one ahead of the parser). Above "
+                             "1 means that many connections fetching at "
+                             "the same time, which pays off over --rest, "
+                             "where latency is per block; over JSON-RPC "
+                             "the batch already amortizes it")
+
+
+def add_coemission_args(parser, nonces=False):
+    """The plugs a scan can co-emit: `--graph`, `--graph-digest`,
+    `--headers`, and for the archive scan `--nonces`."""
+    parser.add_argument(
+        "--graph",
+        help="ALSO co-emit the raw transaction graph (graph-v2) into this "
+             "directory while scanning: the blocks are fetched and parsed "
+             "anyway; off by default (~300-400 GB on the full chain, see "
+             "graphemit.py)")
+    parser.add_argument(
+        "--graph-digest", metavar="GRAPH",
+        help="INSTEAD of --graph: serialize the same graph records and "
+             "hash them without writing them, checking interval by "
+             "interval that this code still emits the bytes the graph "
+             "archive in this directory already holds. Costs no disk and "
+             "no extra pass; fingerprint that archive first, since the "
+             "check trusts the per-run digests its state records")
+    parser.add_argument(
+        "--headers",
+        help="ALSO co-emit the header archive (headers-v2) into this "
+             "directory: 88 B per block plus the coinbase scripts, ~150 MB "
+             "for the whole chain, and the scan's integrity checks become "
+             "repeatable offline (see headers.py). A fresh archive starts "
+             "at genesis, so the scan fetches height 0 for it")
+    if nonces:
+        parser.add_argument(
+            "--nonces",
+            help="ALSO co-emit the nonce census (nonces-v3) into this "
+                 "directory: one 16-byte record per signature, ~55 GB for "
+                 "the whole chain, and the repeated nonce points it sorts "
+                 "together are keys recoverable from public data (see "
+                 "nonces.py). Costs about +10%% of this scan's per-input "
+                 "CPU, measured")
+
+
 def build_client(url, rest, cookie_file):
     """The block transport a scan will use, and the credential it took.
 
@@ -1756,26 +1838,7 @@ def main(argv=None):
     ps = sub.add_parser("scan", help="run the history scan over RPC")
     ps.add_argument("--locks", required=True,
                     help="directory produced by prepare")
-    ps.add_argument("--rpc", default="http://127.0.0.1:8332",
-                    help="node address (default: %(default)s; a remote node "
-                        "is reached through a local tunnel). Also the "
-                        "address --rest uses: the node serves both on the "
-                        "same port")
-    ps.add_argument("--rest", action="store_true",
-                    help="fetch the blocks over the node's binary REST "
-                         "interface (needs bitcoind -rest=1) instead of "
-                         "JSON-RPC: the blocks arrive verbatim rather than "
-                         "as hex inside JSON, which is about half the bytes "
-                         "on the wire, and this path needs no credential at "
-                         "all. Recommended for a full scan; REST has no "
-                         "batching, so pair it with --prefetch-depth")
-    ps.add_argument("--cookie-file",
-                    help="path to the node's .cookie file (e.g. "
-                         "~/.bitcoin/.cookie): the secret is read from the "
-                         "file, stays OUT of the argv and is always the "
-                         "current one when the node rotates it. Without a "
-                         "cookie: NODSIG_RPC_AUTH=user:password in the "
-                         "environment.")
+    add_node_args(ps)
     ps.add_argument("--allow-base-mismatch", action="store_true",
                     help="scan PAST the snapshot's block anyway: the "
                          "figure then counts spends the snapshot never "
@@ -1786,51 +1849,14 @@ def main(argv=None):
                          "so the two sides of the comparison match")
     ps.add_argument("--checkpoint", required=True,
                     help="directory for state, bitmaps and the curve")
-    ps.add_argument("--batch", type=int, default=25,
-                    help="blocks per fetch window: one JSON-RPC batch, "
-                         "or that many blocks asked for over REST")
-    ps.add_argument("--checkpoint-every", type=int, default=10_000,
-                    help="blocks between checkpoints")
+    add_window_args(ps)
     ps.add_argument("--no-faces", action="store_true",
                     help="narrow perimeter: a key burns only the exact "
                          "address form it was revealed in")
     ps.add_argument("--no-cosigners", action="store_true",
                     help="narrow perimeter: ignore keys revealed inside "
                          "redeem/witness scripts")
-    ps.add_argument("--graph",
-                    help="ALSO co-emit the raw transaction graph "
-                         "(graph-v2) into this directory while "
-                         "scanning — the blocks are fetched and parsed "
-                         "anyway; off by default (~300-400 GB on the "
-                         "full chain, see graphemit.py)")
-    ps.add_argument("--graph-digest", metavar="GRAPH",
-                    help="INSTEAD of --graph: serialize the same graph "
-                         "records and hash them without writing them, "
-                         "checking interval by interval that this code "
-                         "still emits the bytes the graph archive in "
-                         "this directory already holds. Costs no disk "
-                         "and no extra pass; fingerprint that archive "
-                         "first, since the check trusts the per-run "
-                         "digests its state records")
-    ps.add_argument("--headers",
-                    help="ALSO co-emit the header archive (headers-v2) "
-                         "into this directory: 88 B per block plus the "
-                         "coinbase scripts, ~150 MB for the whole chain, "
-                         "and the scan's integrity checks become "
-                         "repeatable offline (see headers.py). A fresh "
-                         "archive starts at genesis, so the scan fetches "
-                         "height 0 for it")
-    ps.add_argument("--no-prefetch", action="store_true",
-                    help="fetch and parse strictly in series (the "
-                         "prudent fallback; by default the next batch "
-                         "downloads while this one is parsed)")
-    ps.add_argument("--prefetch-depth", type=int, default=1,
-                    help="batches in flight at once (default: "
-                         "%(default)s, one ahead of the parser). Above 1 "
-                         "means that many connections fetching at the "
-                         "same time, which pays off over --rest, where "
-                         "latency is per block; over JSON-RPC the batch "
-                         "already amortizes it")
+    add_coemission_args(ps)
 
     pt = sub.add_parser("stats", help="distribution of value across the "
                         "exposed locks (median, concentration, treemap "

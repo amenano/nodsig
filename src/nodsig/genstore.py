@@ -249,7 +249,7 @@ class _BaseCursor:
 
 def merge_to_file(sources, out_path, rec, key_len, ladder_path,
                   ladder_every, dedup, dedup_len=None, dup_log=None,
-                  base=None):
+                  base=None, combine=None):
     """Fuse sorted record streams into one file, sampling the ladder
     while writing — the cache costs no extra pass.
 
@@ -287,9 +287,21 @@ def merge_to_file(sources, out_path, rec, key_len, ladder_path,
     fusion writes, the ladder it samples and the number of duplicates
     it counts are therefore the same with the gallop and without it.
 
+    `combine`, when given, is the third rule for equal keys: two records
+    sharing the dedup prefix are REDUCED to one, `combine(kept, next)`,
+    and the reduction must be associative and commutative (the reveal
+    archive ORs its flags and keeps the lowest height), because the
+    order two equal records meet in depends on run boundaries and the
+    fusion must not. It counts a duplicate per reduction, like the
+    other two rules, and it sends a base stretch holding an equal pair
+    back to the per-record road, like `dedup="last"` does: a stretch
+    moved whole can neither drop nor reduce.
+
     Returns (records, sha256, ladder_sha256, dup_count)."""
     if dedup_len is None:
         dedup_len = key_len
+    if combine is not None and dedup is not None:
+        raise ValueError("combine replaces dedup: pass dedup=None with it")
     if dedup_len > rec:
         dedup_len = rec      # a prefix longer than the record IS the
                              # record, and saying so once keeps the
@@ -349,6 +361,11 @@ def merge_to_file(sources, out_path, rec, key_len, ladder_path,
                     dups += 1
                     if dup_log is not None and len(dup_log) < DUP_LOG_CAP:
                         dup_log.append((bytes(pending), bytes(r)))
+                    if combine is not None:
+                        pending = combine(pending, r)
+                        if from_base:
+                            head = base.peek()
+                        continue             # one bulk missed, no more
                     if keep_last:
                         pending = r          # the later record wins
                         if from_base:
@@ -369,7 +386,8 @@ def merge_to_file(sources, out_path, rec, key_len, ladder_path,
                 if clear >= MIN_BULK and off0 >= base.plain_until:
                     slab = base.slab
                     d = _adjacent_equal(slab, off0, clear, rec, dedup_len)
-                    if d == 0 or (not keep_last and dup_log is None):
+                    if d == 0 or (not keep_last and combine is None
+                                  and dup_log is None):
                         dups += d
                         moved = clear - 1
                         step = (-records) % ladder_every

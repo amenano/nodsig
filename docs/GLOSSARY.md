@@ -115,7 +115,7 @@ derivatives': "first spent from", **not** "first exposed": a key seen inside a
 revealed script (the co-signer case) is out, the same line the reveal archive
 draws. A lock never spent from has no row.
 
-### first reveal (FirstReveal-v1)
+### first reveal (FirstReveal-v2)
 When a public key was **first revealed**, ordered by that moment: the reveal
 archive's keys partition restated in time order, one 23-byte row per revealed
 key. The temporal twin of the entry above, on the exposure side: the archive
