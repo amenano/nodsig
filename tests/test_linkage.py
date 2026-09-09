@@ -254,12 +254,38 @@ def test_a_hub_is_refused_and_counted(backend, monkeypatch):
 def test_payment_arcs_are_reported_apart(backend):
     """A funded an output of D. That is a payment, not a merge."""
     entries = entries_for([address(H_A), address(H_D)])
-    arcs = backend.payment_arcs(_mine(entries))
+    arcs, bounded = backend.payment_arcs(_mine(entries))
     check(any(a["from"] == address(H_A) and a["to"] == address(H_D)
               for a in arcs), f"the arc A→D is missing: {arcs}")
     check(all("NOT the claim" in a["means"] for a in arcs),
           f"every arc must carry what it does not mean: {arcs}")
+    check(bounded == {"arc_caps_hit": 0},
+          f"nothing was capped on this chain: {bounded}")
     print("ok  payment arc: reported, with the claim it does not make")
+
+
+def test_the_arc_walk_stops_at_the_cap_and_says_so(backend, tmp):
+    """F003: the walk over an address's receipts has the same cap as
+    the walk over its spends, and the stop is counted into the block
+    the report prints, never silent."""
+    entries = entries_for([address(H_A), address(H_D)])
+    backend.cap = 0
+    arcs, bounded = backend.payment_arcs(_mine(entries))
+    check(arcs == [], f"a cap of zero resolves no receipt: {arcs}")
+    # Both addresses received coins, so the walk stopped for both.
+    check(bounded == {"arc_caps_hit": 2}, f"two walks capped: {bounded}")
+    block = lk.build(entries, backend)
+    check(block["classes"][lk.PAYMENT_ARC]["bounded_by"]
+          == {"arc_caps_hit": 2},
+          f"the block must carry what bounded the arc walk: {block}")
+    buf = io.StringIO()
+    lk.render_text(block, buf)
+    check("hit its cap for 2 address(es)" in buf.getvalue(),
+          f"the text must say the arcs are a floor: {buf.getvalue()}")
+    backend.cap = 10_000
+    arcs, bounded = backend.payment_arcs(_mine(entries))
+    check(arcs and bounded == {"arc_caps_hit": 0},
+          "with the cap lifted the arc is back and nothing was capped")
 
 
 # ---------------------------------------------------------------------------

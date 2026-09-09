@@ -738,6 +738,9 @@ def test_cli_windows(dbuilt):
     buf = io.StringIO()
     dv.run_history(derived, index, locks["A"], limit=3, out=buf)
     check("omitted" in buf.getvalue(), "--limit must say what it hid")
+    check("5 earlier events omitted" in buf.getvalue()
+          and buf.getvalue().count("\n  height ") == 3,
+          "limit 3 of 8 events: five omitted, three printed")
     buf = io.StringIO()
     dv.run_history(derived, index, b"\xEE" * 20, out=buf)
     check("never seen" in buf.getvalue(),
@@ -1077,3 +1080,110 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+def test_history_names_only_the_events_it_prints(dbuilt, monkeypatch):
+    """F094: the rows stream once and the order is resident; what
+    seeks is naming an event. With --limit the names are resolved for
+    the printed events alone, and the balance line comes out of the
+    same pass instead of a second scan."""
+    _tmp, _graph, index, derived, _txids, locks = dbuilt
+    calls = {"outpoint_of": 0, "txid_of": 0}
+    real_op, real_tx = oi.Index.outpoint_of, oi.Index.txid_of
+
+    def counted_op(self, out_ord):
+        calls["outpoint_of"] += 1
+        return real_op(self, out_ord)
+
+    def counted_tx(self, tx_ord):
+        calls["txid_of"] += 1
+        return real_tx(self, tx_ord)
+
+    def no_balance(self, lock):
+        raise AssertionError("balance must not be scanned a second time")
+
+    monkeypatch.setattr(oi.Index, "outpoint_of", counted_op)
+    monkeypatch.setattr(oi.Index, "txid_of", counted_tx)
+    monkeypatch.setattr(dv.Derived, "balance", no_balance)
+
+    full = io.StringIO()
+    dv.run_history(derived, index, locks["A"], out=full)
+    # outpoint_of names the creating txid itself, so txid_of is called
+    # once per event plus once per spend for the spender.
+    check(calls["outpoint_of"] == 8 and calls["txid_of"] == 8 + 2,
+          f"8 events named, 2 of them spends: {calls}")
+    check("balance 200.00000000" in full.getvalue(),
+          "the balance line survives the single pass")
+
+    calls["outpoint_of"] = calls["txid_of"] = 0
+    buf = io.StringIO()
+    dv.run_history(derived, index, locks["A"], limit=3, out=buf)
+    check(calls["outpoint_of"] == 3 and calls["txid_of"] <= 3 + 2,
+          f"limit 3: only the three printed events are named: {calls}")
+    # The three printed are the LAST three of the full listing, in the
+    # same order: the heap changes what is resolved, not what is shown.
+    tail = [ln for ln in full.getvalue().splitlines()
+            if ln.startswith("  height ")][-3:]
+    check([ln for ln in buf.getvalue().splitlines()
+           if ln.startswith("  height ")] == tail,
+          "the window must be the tail of the full listing")
+
+
+def test_a_forward_cursor_reads_ahead_and_refuses_to_go_back(tmp):
+    """F095: one pread per chunk instead of one per record, for a
+    walk whose offsets only grow; a walk that goes back is not that
+    walk, and the cursor says so instead of re-reading."""
+    path = os.path.join(tmp, "fwd.bin")
+    data = bytes(range(256)) * 4
+    with open(path, "wb") as f:
+        f.write(data)
+    real = os.pread
+    preads = []
+
+    def counted(fd, length, offset):
+        preads.append((offset, length))
+        return real(fd, length, offset)
+
+    import nodsig.derivatives as mod
+    saved = mod.os.pread
+    mod.os.pread = counted
+    try:
+        cur = dv._Forward(path, chunk=100)
+        try:
+            check(cur.read(0, 5) == data[0:5], "first record")
+            check(cur.read(37, 10) == data[37:47], "inside the chunk")
+            check(cur.read(95, 10) == data[95:105],
+                  "a record straddling the chunk end is served whole")
+            check(cur.read(600, 300) == data[600:900],
+                  "a request longer than the chunk is served whole")
+            check(len(preads) == 3, f"three preads for five reads: {preads}")
+            with pytest.raises(dv.OutpointError):
+                cur.read(10, 5)
+            with pytest.raises(dv.OutpointError):
+                cur.read(1000, 100)          # past the end: short read
+        finally:
+            cur.close()
+    finally:
+        mod.os.pread = saved
+
+
+def test_supply_walks_the_coinbases_forward(dbuilt, monkeypatch):
+    """F095: `supply` no longer asks the index for each coinbase's
+    outputs and spenders one seek at a time; the CSV it writes is the
+    same, byte for byte, as the one the random reads produced."""
+    tmp, _graph, index, derived, _txids, _locks = dbuilt
+    before = os.path.join(tmp, "supply-before.csv")
+    dv.run_supply(derived, index, csv_path=before, out=io.StringIO())
+
+    def refused(self, *_a):
+        raise AssertionError("supply must not seek per coinbase")
+
+    monkeypatch.setattr(oi.Index, "outputs_of_tx", refused)
+    monkeypatch.setattr(oi.Index, "spenders", refused)
+    after = os.path.join(tmp, "supply-after.csv")
+    buf = io.StringIO()
+    dv.run_supply(derived, index, csv_path=after, out=buf)
+    check(open(before).read() == open(after).read(),
+          "the forward walk must write the very same CSV")
+    check("ok  coinbase <= subsidy + fees on every block" in buf.getvalue(),
+          "and reach the same answer on the identity")

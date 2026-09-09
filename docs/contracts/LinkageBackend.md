@@ -50,12 +50,18 @@ Finding = {
 Bounded = { depth: u32, caps_hit: u32, bridges_not_expanded: u32 }
 ```
 
-### `payment_arcs(mine) -> [Arc]`
+### `payment_arcs(mine) -> ([Arc], ArcBounded)`
 
 ```
 Arc = { from: text, to: text, positions: [u32, u32],
         txid: digest32, height: u32, means: string }
+ArcBounded = { arc_caps_hit: u32 }
 ```
+
+The walk over one address's receipts has the same cap as the walk over its
+spends; `arc_caps_hit` counts the addresses the walk stopped for, and the
+report carries it as `payment_arc.bounded_by`, so a list of arcs that is a
+floor says so.
 
 ## Invariants a re-implementation MUST hold
 
@@ -109,5 +115,9 @@ and counted, and the same-key pair with and without an exposure backend.
 - Class 2 at depth 1 costs exactly what [CoSpendBackend](./CoSpendBackend.md)
   already costs: the spends of each lock, then the inputs of each spending
   transaction. There are no extra reads.
+- Class 3 resolves the creating transaction of each receipt, then that
+  transaction's inputs: one lookup per receipt, and the cap bounds the
+  receipts, so an address paid a million times is stopped like a hub and
+  counted, not walked.
 - The bridge expansion at depth 2 measures the fanout **before** walking it, so
   a hub is paid for once and abandoned, not walked and then discarded.

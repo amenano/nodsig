@@ -71,6 +71,15 @@ with `v1.9.0`.
   next interval, and reads its sidecar when there is one; its rankings are
   worded as what they are (locks and value still unspent at the snapshot, by
   era of their revelation).
+- **Three readers seek less, same bytes out.** `derived history` keeps only
+  the events it will print (the last `--limit` by height and ordinal) while
+  the rows stream, names those alone, and takes the balance from the same
+  pass instead of a second scan. `derived supply` walks the coinbases with
+  a forward cursor over three files (one read per chunk, not three seeks
+  per block); its CSV is unchanged. `check`'s payment-arc walk stops at the
+  same cap as the co-spend walk, and the report's `payment_arc` block
+  carries `bounded_by.arc_caps_hit`, so a list of arcs that is a floor
+  says so.
 - Removed: `graph fingerprint --reseal`, and every reader of an earlier
   format (below).
 

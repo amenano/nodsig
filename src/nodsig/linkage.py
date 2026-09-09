@@ -211,9 +211,12 @@ class IndexLinkage:
         return out
 
     def _received_in(self, lock):
-        """(tx_ord, out_ord) for every output that paid this lock."""
-        return [(self.index.tx_of_output(o), o)
-                for o, _spender, _v in self.derived.rows(lock)]
+        """(tx_ord, out_ord) for every output that paid this lock, in
+        ordinal order, one at a time: the walk that consumes it may
+        stop at its cap, and the rows behind the cap are then never
+        resolved."""
+        for o, _spender, _v in self.derived.rows(lock):
+            yield self.index.tx_of_output(o), o
 
     # -- class 2 --------------------------------------------------------
 
@@ -318,12 +321,25 @@ class IndexLinkage:
 
         Reported apart, and never as a merge: paying somebody is the
         most ordinary thing an address does, and reading it as shared
-        ownership would turn every purchase into a link."""
+        ownership would turn every purchase into a link.
+
+        Returns (arcs, bounded_by). The walk over one address's
+        receipts stops at the same cap as the walk over its spends
+        (`_spenders`): an address paid a million times is a hub, and
+        resolving every payer would be the price of its neighbourhood.
+        How many addresses the walk stopped for travels with the
+        answer, so a list that is a floor says so."""
         arcs = {}
+        caps_hit = 0
         for lock, (pos, entry) in mine.items():
+            seen = set()
             for tx_ord, _out in self._received_in(lock):
-                if tx_ord is None:
+                if tx_ord is None or tx_ord in seen:
                     continue
+                if len(seen) >= self.cap:
+                    caps_hit += 1
+                    break
+                seen.add(tx_ord)
                 for so in self.derived.inputs_of(tx_ord):
                     _v, funder = self.index.output(so)
                     if funder == lock or funder not in mine:
@@ -336,7 +352,7 @@ class IndexLinkage:
                         "txid": self.index.txid_of(tx_ord).hex(),
                         "height": self.index.height_of_tx(tx_ord),
                         "means": CAVEAT_PAYMENT_ARC})
-        return [arcs[k] for k in sorted(arcs)]
+        return [arcs[k] for k in sorted(arcs)], {"arc_caps_hit": caps_hit}
 
 
 # ---------------------------------------------------------------------------
@@ -366,8 +382,9 @@ def build(entries, backend, depth=1, book=None, watermark=None):
                 mine.setdefault(hash160(script_pubkey(e.address)), (i, e))
         findings, bounded = backend.common_input(mine, depth)
         classes[COMMON_INPUT] = _ok(findings, CAVEAT_COMMON_INPUT)
-        classes[PAYMENT_ARC] = _ok(backend.payment_arcs(mine),
-                                   CAVEAT_PAYMENT_ARC)
+        arcs, arc_bounded = backend.payment_arcs(mine)
+        classes[PAYMENT_ARC] = _ok(arcs, CAVEAT_PAYMENT_ARC)
+        classes[PAYMENT_ARC]["bounded_by"] = arc_bounded
         watermark = backend.watermark
 
     return {"depth_searched": bounded["depth"],
@@ -495,6 +512,11 @@ def render_text(block, out):
             print(f"- payment: {a['from']} funded an output of "
                   f"{a['to']} at height {a['height']:,} — "
                   f"{CAVEAT_PAYMENT_ARC}", file=out)
+        capped = arcs.get("bounded_by", {}).get("arc_caps_hit", 0)
+        if capped:
+            print(f"- payment: the walk over receipts hit its cap for "
+                  f"{capped} address(es), so the arcs above are a floor",
+                  file=out)
 
     for s in block["declared_separations"]:
         a, b = s["groups"]

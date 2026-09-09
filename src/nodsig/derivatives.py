@@ -1297,44 +1297,65 @@ def run_history(derived_dir, index_dir, lock, limit=100,
                 out=sys.stdout):
     """One lock's story, as a reader sees it: events in time order —
     each row of history.bin unfolds into its receive and, when spent,
-    its spend."""
+    its spend.
+
+    The rows are one sequential scan; the heights that order them are
+    resident bisects. What costs a seek is naming an event (its txid
+    and outpoint), so only the events that will be printed are named:
+    the last `limit` by (height, ordinal) are kept in a heap of that
+    size while the rows stream, and resolved after. The totals and the
+    balance come out of the same pass; `balance` is not asked again."""
+    import heapq
     derived, index = _open_pair(derived_dir, index_dir)
     try:
-        events = []              # (height, order, text)
-        received = spent = n_rows = 0
+        # (height, out_ord, kind, value, spender): the first three are
+        # the order, the rest is what printing needs besides the names.
+        heap = []
+        cap = limit if limit > 0 else None
+        received = spent = n_rows = n_events = n_utxo = sats = 0
+
+        def keep(event):
+            nonlocal n_events
+            n_events += 1
+            if cap is None or len(heap) < cap:
+                heapq.heappush(heap, event)
+            elif event > heap[0]:
+                heapq.heapreplace(heap, event)
+
         for out_ord, spender, value in derived.rows(lock):
             n_rows += 1
-            h = index.height_of_output(out_ord)
-            txid, vout, _ = index.outpoint_of(out_ord)
-            op = f"{txid[::-1].hex()}:{vout}"
             received += value
-            events.append((h, out_ord, 0,
-                           f"IN   +{value / SAT:,.8f}  {op}"))
-            if spender is not None:
-                sh = index.height_of_tx(spender)
+            keep((index.height_of_output(out_ord), out_ord, 0, value, None))
+            if spender is None:
+                n_utxo += 1
+                sats += value
+            else:
                 spent += value
-                events.append(
-                    (sh, out_ord, 1,
-                     f"OUT  -{value / SAT:,.8f}  {op} spent by "
-                     f"{index.txid_of(spender)[::-1].hex()}"))
+                keep((index.height_of_tx(spender), out_ord, 1, value,
+                      spender))
         if not n_rows:
             print(f"lock {lock.hex()}: never seen in confirmed "
                   f"history up to height {index.watermark:,}",
                   file=out)
             return
-        events.sort(key=lambda e: e[:3])
         print(f"lock {lock.hex()} — {n_rows:,} outputs, "
-              f"{len(events):,} events, index through height "
+              f"{n_events:,} events, index through height "
               f"{index.watermark:,}", file=out)
-        shown = events if len(events) <= limit else events[-limit:]
-        if len(events) > limit:
-            print(f"  … {len(events) - limit:,} earlier events "
+        shown = sorted(heap)
+        if n_events > len(shown):
+            print(f"  … {n_events - len(shown):,} earlier events "
                   "omitted (--limit)", file=out)
-        for h, _o, _k, text in shown:
+        for h, out_ord, kind, value, spender in shown:
+            txid, vout, _ = index.outpoint_of(out_ord)
+            op = f"{txid[::-1].hex()}:{vout}"
+            if kind == 0:
+                text = f"IN   +{value / SAT:,.8f}  {op}"
+            else:
+                text = (f"OUT  -{value / SAT:,.8f}  {op} spent by "
+                        f"{index.txid_of(spender)[::-1].hex()}")
             print(f"  height {h:>9,}  "
                   f"{_fmt_time(index.time_of_height(h))}  {text}",
                   file=out)
-        n_utxo, sats = derived.balance(lock)
         print(f"received {received / SAT:,.8f}  spent "
               f"{spent / SAT:,.8f}  balance {sats / SAT:,.8f} BTC "
               f"in {n_utxo} unspent output(s)", file=out)
@@ -1520,6 +1541,44 @@ def _fees_by_height(derived, index):
         yield 0                          # a coinbase), kept total
 
 
+class _Forward:
+    """A read-ahead cursor over one positional file, for a walk whose
+    offsets never decrease: `supply` visits every block's coinbase in
+    height order, and the coinbase's boundary, outputs and spender
+    slots sit in three files at offsets that only grow. One pread per
+    record would be three seeks per block, millions on the chain; one
+    pread per chunk serves every record the chunk holds, and the walk
+    becomes the sequential read the files were laid out for. Refuses
+    to go backwards instead of quietly re-reading: a walk that does is
+    not the walk this cursor is for."""
+
+    __slots__ = ("fd", "chunk", "base", "buf", "name")
+
+    def __init__(self, path, chunk=IO_CHUNK):
+        self.name = os.path.basename(path)
+        self.fd = os.open(path, os.O_RDONLY)
+        self.chunk = chunk
+        self.base = 0
+        self.buf = b""
+
+    def read(self, offset, length):
+        if offset < self.base:
+            raise OutpointError(f"{self.name}: a forward cursor was asked "
+                                f"to go back from {self.base} to {offset}")
+        end = offset + length
+        if end > self.base + len(self.buf):
+            self.base = offset
+            self.buf = os.pread(self.fd, max(self.chunk, length), offset)
+            if len(self.buf) < length:
+                raise OutpointError(f"{self.name}: short read at {offset} — "
+                                    "truncated file")
+        o = offset - self.base
+        return self.buf[o:o + length]
+
+    def close(self):
+        os.close(self.fd)
+
+
 def run_supply(derived_dir, index_dir, epoch_blocks=SUBSIDY_HALVING,
                csv_path=None, price_dir=None, out=None):
     """Check coinbase(h) <= subsidy(h) + fees(h) on every height and
@@ -1568,6 +1627,22 @@ def run_supply(derived_dir, index_dir, epoch_blocks=SUBSIDY_HALVING,
         cur = table.currency
         col = cur.lower()
     csv = open(csv_path, "w") if csv_path else None
+    # The coinbase of every height, read forward: its boundary from
+    # tx_first_out.bin, its outputs from outputs.bin and, for the CSV,
+    # its spender slots, each file behind one _Forward cursor.
+    from nodsig.outpoint_index import (SLOT_MANY, SLOT_UNSPENT, SPENDER_REC,
+                                       TFO_REC)
+    cursors = [_Forward(os.path.join(index.dir, "tx_first_out.bin")),
+               _Forward(os.path.join(index.dir, "outputs.bin"))]
+    tfo, outs = cursors
+    spo = None
+    if csv:
+        spo = _Forward(os.path.join(
+            index.dir, checked_name(index.build["files"]["spender_of"]["file"],
+                                    OutpointError)))
+        cursors.append(spo)
+    out_rec = index.out_rec
+    val = out_rec - 20
     try:
         heights = len(index.first_tx)
         tot = {"blocks": 0, "tx": 0, "fees": 0, "coinbase": 0,
@@ -1587,17 +1662,33 @@ def run_supply(derived_dir, index_dir, epoch_blocks=SUBSIDY_HALVING,
             first_tx = index.first_tx[i]
             next_tx = index.first_tx[i + 1] if i + 1 < heights \
                 else index.n_tx
-            cb_outputs = index.outputs_of_tx(first_tx)
+            first_out = index.first_out[i]
+            if first_tx + 1 < index.n_tx:
+                cb_end = int.from_bytes(
+                    tfo.read((first_tx + 1) * TFO_REC, TFO_REC), "big")
+            else:
+                cb_end = index.n_out
+            blob = outs.read(first_out * out_rec, (cb_end - first_out) * out_rec)
+            cb_outputs = [(int.from_bytes(blob[o:o + val], "big"),
+                           blob[o + val:o + out_rec])
+                          for o in range(0, len(blob), out_rec)]
             coinbase = sum(v for v, _ in cb_outputs)
             fee = next(fees)
             if csv:
-                first_out = index.first_out[i]
                 next_out = index.first_out[i + 1] if i + 1 < heights \
                     else index.n_out
                 cb_first_spend = 0
                 cb_spent = 0
+                slots = spo.read(first_out * SPENDER_REC,
+                                 len(cb_outputs) * SPENDER_REC)
                 for k, (v, _lock) in enumerate(cb_outputs):
-                    spenders = index.spenders(first_out + k)
+                    slot = slots[k * SPENDER_REC:(k + 1) * SPENDER_REC]
+                    if slot == SLOT_UNSPENT:
+                        spenders = []
+                    elif slot == SLOT_MANY:
+                        spenders = index.spenders(first_out + k)
+                    else:
+                        spenders = [int.from_bytes(slot, "big")]
                     if spenders:
                         cb_spent += v
                         lowest = min(spenders)
@@ -1708,6 +1799,8 @@ def run_supply(derived_dir, index_dir, epoch_blocks=SUBSIDY_HALVING,
                 "height(s): the index and the derivatives disagree with "
                 "consensus; do not trust these artifacts")
     finally:
+        for c in cursors:
+            c.close()
         if csv:
             csv.close()
         derived.close()
