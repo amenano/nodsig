@@ -261,18 +261,28 @@ def build_snapshot_file(path, base_hash_hex=None):
         f.write(out)
 
 
-def test_prepare(tmp, base_hash_hex=None):
+def test_prepare(tmp, base_hash_hex=None, height=None, headers_dir=None):
+    """`height` is the snapshot's height as `dumptxoutset` would print
+    it; a fixture with a fake base hash gets a fake height too, since
+    the manifest refuses to exist without one."""
     snapshot = os.path.join(tmp, "test_utxos.dat")
     locks_dir = os.path.join(tmp, "locks")
     build_snapshot_file(snapshot, base_hash_hex=base_hash_hex)
+    if headers_dir is None and height is None:
+        height = 9
     # chunk_records=3 forces several sorted runs: the external merge
     # (and its duplicate-summing) is what gets exercised, not bypassed.
-    rs.run_prepare(snapshot, locks_dir, chunk_records=3)
+    rs.run_prepare(snapshot, locks_dir, chunk_records=3,
+                   headers_dir=headers_dir, height=height)
 
     with open(os.path.join(locks_dir, rs.MANIFEST_NAME)) as f:
         manifest = json.load(f)
+    check(manifest["format"] == rs.LOCKS_TAG
+          and manifest["identity"]["coverage"]["from"]
+          == manifest["identity"]["coverage"]["to"],
+          f"a lock set is sealed over one moment: {manifest['identity']}")
     for t, (records, sats) in EXPECT_MANIFEST.items():
-        got = manifest["types"][t]
+        got = rs.locks_types(manifest)[t]
         check((got["records"], got["satoshis"]) == (records, sats),
               f"prepare {t}: {got} != {(records, sats)}")
 
@@ -297,7 +307,7 @@ def test_locks_are_verified_against_their_manifest(tmp):
     locks_dir = test_prepare(tmp)
     with open(os.path.join(locks_dir, rs.MANIFEST_NAME)) as f:
         manifest = json.load(f)
-    entry = manifest["types"]["p2pkh"]
+    entry = rs.locks_types(manifest)["p2pkh"]
     path = os.path.join(locks_dir, "locks_p2pkh.bin")
     with open(path, "rb") as f:
         whole = f.read()
@@ -778,24 +788,29 @@ def test_resume_refuses_a_different_perimeter(tmp, locks_dir):
         check(totals == EXPECT_NARROW,
               f"resumed narrow scan totals: {totals}")
 
-        # A checkpoint from before the field is read as the default
-        # perimeter, which is what those runs used.
+        # A state of an earlier format (the one that could lack the
+        # field) is refused by its tag, never read as a default: a
+        # perimeter guessed is a perimeter the fingerprint does not
+        # name.
         old = os.path.join(tmp, "cp_legacy")
         rs.run_scan(locks_dir, url, "user:pass", 2, old,
                     batch_size=2, checkpoint_every=2)
         path = os.path.join(old, rs.STATE_NAME)
         with open(path) as f:
             st = json.load(f)
+        st["format"] = "reuse-scan-v1"
         del st["perimeter"]
         with open(path, "w") as f:
             json.dump(st, f)
-        rs.run_scan(locks_dir, url, "user:pass", 4, old,
-                    batch_size=2, checkpoint_every=2)
-        totals, _ = read_totals(old)
-        check(totals == EXPECT_FULL, f"legacy resume totals: {totals}")
+        try:
+            rs.run_scan(locks_dir, url, "user:pass", 4, old,
+                        batch_size=2, checkpoint_every=2)
+            fail("a checkpoint of an earlier format was resumed")
+        except rs.ScanError as e:
+            check("reuse-scan-v1" in str(e), f"the refusal names the tag: {e}")
         print("ok  perimeter: a resume under other flags is refused, "
-              "the same flags continue, and an old checkpoint still "
-              "resumes")
+              "the same flags continue, and a checkpoint of an earlier "
+              "format is refused by its tag")
     finally:
         server.shutdown()
 
@@ -956,7 +971,7 @@ def test_the_scan_confronts_its_last_block_with_the_snapshot(tmp):
     blocks = build_chain()
     base3 = os.path.join(tmp, "base3")
     os.makedirs(base3)
-    locks = test_prepare(base3, base_hash_hex=blocks[3][0])
+    locks = test_prepare(base3, base_hash_hex=blocks[3][0], height=3)
     server, url = serve(blocks)
     try:
         try:
@@ -1097,6 +1112,11 @@ def test_stats(tmp, locks_dir):
 
     check(obj["fingerprint"] == state["fingerprint"],
           "stats fingerprint does not match the checkpoint")
+    check(obj["format"] == rs.STATS_TAG and obj["locks"] == state["locks"]
+          and obj["height"] == state["last_height"]
+          and obj["perimeter"] == state["perimeter"]
+          and obj["locks_height"] == 4,
+          f"the stats JSON names what its fingerprint is of: {obj.keys()}")
     grand = 0
     for t in rs.TYPE_ORDER:
         d = obj["types"][t]
@@ -1144,6 +1164,171 @@ def test_stats(tmp, locks_dir):
         fail("stats accepted a checkpoint whose bitmap was altered")
     except rs.ScanError:
         print("ok  stats: altered bitmap rejected by the fingerprint guard")
+
+
+
+def test_prepare_needs_the_snapshot_height(tmp):
+    """The snapshot names its block by hash only, and every reuse figure
+    is defined by that height: no height, no lock set."""
+    snapshot = os.path.join(tmp, "no_height.dat")
+    build_snapshot_file(snapshot)
+    try:
+        rs.run_prepare(snapshot, os.path.join(tmp, "locks_no_height"),
+                       chunk_records=3)
+        fail("a lock set without a height was written")
+    except rs.ScanError as e:
+        check("--headers" in str(e) and "--height" in str(e),
+              f"the refusal names both roads: {e}")
+    try:
+        rs.run_prepare(snapshot, os.path.join(tmp, "locks_two"),
+                       chunk_records=3, height=3, headers_dir=tmp)
+        fail("two sources for one height were accepted")
+    except rs.ScanError:
+        pass
+    print("ok  prepare: the height comes from exactly one of --headers and "
+          "--height")
+
+
+def test_prepare_reads_the_height_off_the_header_archive(tmp):
+    """A sealed header archive holds every block id: the snapshot's
+    height is the record whose id is the base hash, verified by the
+    archive's own chain of links, and a hash the archive does not hold
+    is a refusal."""
+    import test_headers as th
+    blocks, _model = th.headers_chain()  # a chain with a genesis, as headers need
+    hdir = th.emit(tmp, blocks, "hdr_for_prepare")
+    base3 = os.path.join(tmp, "base3_headers")
+    os.makedirs(base3)
+    locks = test_prepare(base3, base_hash_hex=blocks[3][0], headers_dir=hdir)
+    manifest = rs._load_manifest(locks)
+    check(rs.locks_height(manifest) == 3
+          and manifest["build"]["height_source"] == "headers"
+          and rs.locks_base_hash(manifest) == blocks[3][0],
+          f"the height is read off the headers: {manifest['identity']}, "
+          f"{manifest['build']['height_source']}")
+    # The same snapshot with the height declared seals the same set:
+    # the source is in `build`, the identity is the moment and the files.
+    base3b = os.path.join(tmp, "base3_declared")
+    os.makedirs(base3b)
+    declared = rs._load_manifest(
+        test_prepare(base3b, base_hash_hex=blocks[3][0], height=3))
+    check(declared["fingerprint"] == manifest["fingerprint"],
+          "the height's source must not change the lock set's name")
+    snapshot = os.path.join(tmp, "foreign.dat")
+    build_snapshot_file(snapshot)                     # a hash no chain has
+    try:
+        rs.run_prepare(snapshot, os.path.join(tmp, "locks_foreign"),
+                       chunk_records=3, headers_dir=hdir)
+        fail("a base hash the headers do not hold was accepted")
+    except rs.ScanError as e:
+        check("does not hold" in str(e), f"unexpected: {e}")
+    print("ok  prepare: the height comes off the header archive, and a "
+          "foreign hash is refused")
+
+
+def test_a_wrong_declared_height_is_caught_by_the_scan(tmp):
+    """`--height` is a claim. The scan meets the snapshot's block at its
+    real height and refuses to write a figure under the wrong one."""
+    blocks = build_chain()
+    wrong = os.path.join(tmp, "base3_wrong")
+    os.makedirs(wrong)
+    locks = test_prepare(wrong, base_hash_hex=blocks[3][0], height=2)
+    server, url = serve(blocks)
+    try:
+        rs.run_scan(locks, url, "user:pass", 3, os.path.join(tmp, "cp_wrong"),
+                    batch_size=2, checkpoint_every=2)
+        fail("a scan against a lock set with a wrong height was accepted")
+    except rs.ScanError as e:
+        check("was wrong" in str(e) and "3" in str(e) and "2" in str(e),
+              f"the refusal names both heights: {e}")
+    finally:
+        server.shutdown()
+    print("ok  scan: a declared height the chain contradicts is refused")
+
+
+def test_verify_locks_is_the_shared_audit(tmp, locks_dir):
+    fp = rs.run_verify_locks(locks_dir)
+    check(fp == rs._load_manifest(locks_dir)["fingerprint"],
+          "verify returns the fingerprint it recomputed")
+    path = os.path.join(locks_dir, rs._lock_file("p2pkh"))
+    raw = bytearray(open(path, "rb").read())
+    raw[3] ^= 0xFF
+    open(path, "wb").write(bytes(raw))
+    try:
+        rs.run_verify_locks(locks_dir)
+        fail("a rotted lock file passed the audit")
+    except rs.ScanError:
+        pass
+    print("ok  verify --locks: the four files against the manifest")
+
+
+def test_the_identity_of_a_burnt_set_names_its_moment():
+    """The same bitmaps at another height, against other locks, or under
+    another perimeter are another answer, and the fingerprint says so:
+    the previous identity let one hex string name all four."""
+    bitmaps = {t: bytearray(b"\x01\x00") for t in rs.TYPE_ORDER}
+    full = {"faces": True, "cosigners": True}
+    a = rs.fingerprint_of_bitmaps(bitmaps, "aa" * 32, 100, full)
+    check(a == rs.fingerprint_of_bitmaps(bitmaps, "aa" * 32, 100, full),
+          "the identity is a function of its inputs")
+    check(a != rs.fingerprint_of_bitmaps(bitmaps, "bb" * 32, 100, full),
+          "other locks, other name")
+    check(a != rs.fingerprint_of_bitmaps(bitmaps, "aa" * 32, 101, full),
+          "another height, another name")
+    check(a != rs.fingerprint_of_bitmaps(bitmaps, "aa" * 32, 100,
+                                         {"faces": False, "cosigners": True}),
+          "another perimeter, another name")
+    # The perimeter enters as the digest of one canonical line, which a
+    # porter recomputes from the recipe alone.
+    check(rs.perimeter_digest(full) == hashlib.sha256(
+        b"faces=1,cosigners=1").hexdigest(), "the perimeter's digest")
+    print("ok  identity: locks, height and perimeter are in the name")
+
+
+def test_the_scan_seals_its_curve_at_every_checkpoint(tmp, locks_dir):
+    """The sidecar beside curve.csv is a sealed manifest the shared
+    audit reads; it is rewritten with the state, and a lost row comes
+    back with its sidecar."""
+    from nodsig import curve as cv
+    blocks = build_chain()
+    server, url = serve(blocks)
+    cp = os.path.join(tmp, "cp_sealed")
+    try:
+        rs.run_scan(locks_dir, url, "user:pass", 4, cp, batch_size=2,
+                    checkpoint_every=2)
+        curve = os.path.join(cp, rs.CURVE_NAME)
+        meta = cv.verify(curve, cv.REUSE_TAG)
+        state = read_totals(cp)[1]
+        check(meta["build"]["road"] == "scan"
+              and meta["build"]["parent"] == {"format": rs.STATE_TAG,
+                                              "fingerprint": state["fingerprint"]}
+              and meta["build"]["grid"] == 2 and meta["build"]["rows"] == 2
+              and meta["build"]["locks"] == state["locks"]
+              and meta["build"]["perimeter"] == state["perimeter"]
+              and meta["identity"]["coverage"] == {"from": 1, "to": 4},
+              f"the sidecar says what the CSV cannot: {meta}")
+        rows = cv.read_reuse(curve, rs.TYPE_ORDER, every=2)
+        check([h for h, _, _ in rows] == [2, 4]
+              and rows[-1][2] == state["fingerprint"],
+              f"the last row's fingerprint is the table's: {rows}")
+        # A lost last row: healed from the state, and re-sealed.
+        with open(curve) as f:
+            lines = f.read().splitlines(keepends=True)
+        with open(curve, "w") as f:
+            f.writelines(lines[:-1])
+        try:
+            cv.verify(curve, cv.REUSE_TAG)
+            fail("a curve that lost a row passed the audit")
+        except cv.CurveError:
+            pass
+        rs.run_scan(locks_dir, url, "user:pass", 4, cp, batch_size=2,
+                    checkpoint_every=2)
+        check(open(curve).read() == "".join(lines), "the row is back")
+        check(cv.verify(curve, cv.REUSE_TAG)["fingerprint"]
+              == meta["fingerprint"], "and the sidecar with it")
+    finally:
+        server.shutdown()
+    print("ok  curve: sealed at every checkpoint, healed with its sidecar")
 
 
 def main():

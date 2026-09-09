@@ -55,7 +55,7 @@ def locks_dir(tmp, blocks):
     The snapshot claims the chain's tip as its base block, like a real
     `dumptxoutset` taken at the archive's target height: derive
     confronts the two hashes and refuses locks from another moment."""
-    return trs.test_prepare(tmp, base_hash_hex=blocks[4][0])
+    return trs.test_prepare(tmp, base_hash_hex=blocks[4][0], height=4)
 
 
 def _scan_archive(tmp, blocks, name):

@@ -211,10 +211,10 @@ first address comes back exposed **inside a revealed script**, which means the
 key became public through a transaction that was not a spend of that address:
 someone else revealed a script containing it, as a cosigner or under another
 face of the same key. This is exactly why the project keeps an archive of
-revelations rather than only a history of locks. It is also the one case that
-stays undated, because the archive stores digests and not heights: the event
-that exposed the key is not in your lock's history, so there is nothing to date
-it against.
+revelations rather than only a history of locks. The archive dates it too:
+every record carries the height of its first revelation. What that case lacks
+is a row in your lock's own history, because the event that exposed the key
+was somebody else's spend.
 
 ## One more check you can add: shown, or given away?
 

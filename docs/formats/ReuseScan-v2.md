@@ -11,8 +11,8 @@ burnt set), `reuse-stats-v2` (the JSON of `reuse stats`), and the sidecars
 
 - **Directories** `<locks>/` (prepare), `<checkpoint>/` (scan)
 - **Defined over** one `dumptxoutset` snapshot, photographed at one block
-- **Read by** `reuse scan`, `reuse stats`, `archive derive`, `archive
-  crosscheck`, `curve deltas`, `curve dates`
+- **Read by** `reuse scan`, `reuse verify`, `reuse stats`, `archive derive`,
+  `archive crosscheck`, `curve deltas`, `curve dates`
 - **Supersedes** `locks-v1`, `reuse-scan-v1`, `reuse-hits-v1`, which this
   release neither reads nor reproduces; the July checkpoint stays a
   historical number, reproducible with the release that wrote it
@@ -36,12 +36,20 @@ The manifest changes:
 ```
 identity:  { format: "locks-v2",
              coverage: { from: S, to: S },       // the set AFTER block S
-             base_hash: <display hex of block S>,
              files: [ {name: "locks_p2pkh.bin", sha256}, ... in TYPE_ORDER ] }
 fingerprint: the shared recipe
-build:     { producer, seconds, height_source: "headers" | "argument",
-             snapshot_entries, types: { t: {records, satoshis} } }
+build:     { producer, seconds, wall, height_source: "headers" | "argument",
+             base_hash: <display hex of block S>, snapshot_entries,
+             types: { t: {records, satoshis} }, files, caches: {} }
 ```
+
+The identity holds exactly what the shared recipe hashes: the tag, the
+moment and the four digests. The base hash is declared in `build`, like the
+parent of every other artifact: it is a claim the block confirms (the height
+in the identity and the hash describe one block, and the first consumer that
+sees the block checks the pair), and two lock sets distilled from the same
+moment of the same chain hold the same bytes whatever hash was written beside
+them.
 
 The snapshot file carries the base block's hash and not its height; `prepare`
 takes the height from one of two places, and refuses without one: `--headers
@@ -58,11 +66,14 @@ when the archive's tip is that block. `prepare` never asks a node.
 
 `<checkpoint>/state.json`, written at every checkpoint after the four
 bitmaps `hits_<type>.bin` (one bit per lock, in the lock file's order): the
-locks manifest it was made against (by fingerprint), the perimeter (`faces`,
-`cosigners`), `last_height`, `last_block_hash`, `base_hash` and
-`base_seen_at` (the height at which the snapshot's block was met, or null),
-the extraction counters, the totals per type and the `reuse-hits-v2`
-fingerprint of the bitmaps. The commit is two-phase (bitmaps under a pending
+`road` that wrote it (`scan`, or `derive` for the twin `archive derive
+--checkpoint` writes), the locks it was made against (`locks`, by
+fingerprint, and `locks_height`), the perimeter (`faces`, `cosigners`),
+`last_height`, `last_block_hash`, `base_hash` and `base_seen_at` (the height
+at which the snapshot's block was met, or null), the extraction counters, the
+totals per type and the `reuse-hits-v2` fingerprint of the bitmaps. The scan
+checkpoints on the grid exactly, block by block, so its rows land where
+`derive --curve` lands them whatever the download batch size. The commit is two-phase (bitmaps under a pending
 name, then the state, then the promotion), and one function decides which
 set the state names when a kill fell between the phases, for the resume and
 for `stats` alike. A checkpoint against other locks, another perimeter or a
@@ -82,7 +93,12 @@ the figure is a floor, and the summary says which of the three it is.
   bitmaps: [ {type: t, sha256: sha256(hits_t)} for t in TYPE_ORDER ] }
 ```
 
-hashed with the shared recipe. The v1 hashed a tag and the four bitmap
+hashed with the shared recipe, into which it maps as coverage `{H, H}` and six
+logical files in this order: `locks` (its digest is the locks-v2 fingerprint),
+`perimeter` (its digest is `sha256("faces=F,cosigners=C")` with `F` and `C`
+as `0` or `1`), then `hits_p2pkh`, `hits_p2sh`, `hits_p2wpkh`, `hits_p2wsh`
+(the sha256 of each bitmap). A logical file need not be a file; a porter
+recomputes the hex from the recipe alone. The v1 hashed a tag and the four bitmap
 digests: the same hex string then named the same answer at another height,
 against another lock file by coincidence, and two incomparable answers under
 two perimeters. A reader holding only the hex now holds the moment, the locks
@@ -103,8 +119,8 @@ add no perimeter flag.
 
 The numbers `reuse stats` prints (order statistics per type, concentration,
 Lorenz shares, the histogram bands), pinned to the `reuse-hits-v2`
-fingerprint they were computed from, with the locks fingerprint, the height
-and the perimeter repeated beside it.
+fingerprint they were computed from, with the locks fingerprint, the
+snapshot's height, the scanned height and the perimeter repeated beside it.
 
 ## The curve sidecars: `reuse-curve-v2`, `archive-curve-v2`
 
@@ -114,19 +130,22 @@ the row's `reuse-hits-v2` fingerprint. What the CSV cannot say sits in
 `curve.csv.meta.json`, sealed like blockstats and the timeline:
 
 ```
-identity:  { format: "reuse-curve-v2", coverage: {from: 1, to: H}, grid: every,
-             locks: <locks-v2 fingerprint>, perimeter: {faces, cosigners},
+identity:  { format: "reuse-curve-v2", coverage: {from: 1, to: H},
              files: [ {name: "curve.csv", sha256} ] }
 fingerprint
 build:     { producer, road: "scan" | "derive",
              parent: {format: "reuse-scan-v2", fingerprint} or
-                     {format: "reveal-archive-v3", fingerprint},
-             rows }
+                     {format: "reveal-archive-v3", fingerprint} or null,
+             grid: every, locks: <locks-v2 fingerprint>,
+             perimeter: {faces, cosigners}, rows, files, caches: {} }
 ```
 
-The parent is in `build`, outside the identity: the two roads produce the
-**same** `curve.csv` and therefore the same sidecar fingerprint, which the
-cross-check compares too. `reuse scan` rewrites the sidecar at every
+The parent, the road, the grid, the locks and the perimeter are in `build`,
+outside the identity: the two roads produce the **same** `curve.csv` and
+therefore the same sidecar fingerprint, which the cross-check compares too
+(`crosscheck --curve`), and every row of the CSV already carries the
+`reuse-hits-v2` fingerprint of its own height, which names the locks and the
+perimeter, so the CSV's digest commits to them. `reuse scan` rewrites the sidecar at every
 checkpoint beside the state; a row the state named and a kill lost is
 written back from the state on resume.
 

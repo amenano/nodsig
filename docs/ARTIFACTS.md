@@ -114,7 +114,7 @@ Not all of it. Pick by the question you came for.
 | the UTXO set by type and age | snapshot → `census` |
 | "has this key already been revealed?" | snapshot → `reuse prepare`, then `archive scan` → `archive merge` |
 | how much value sits behind revealed keys | the above, then `archive derive --locks` |
-| reuse over time, as a series | `archive derive --curve` → `curve deltas` |
+| exposure of today's coins by the height their key became public | `archive derive --curve` → `curve deltas` |
 | fees, a lock's history, co-spends | `archive scan --graph` → `index build` → `derived build` |
 | per-block statistics | `archive scan --graph` → `blockstats build` |
 | to repeat the scan's checks later, or to put real dates on a curve | `archive scan --headers` → `headers fingerprint` |
@@ -150,15 +150,16 @@ published with this project were produced: run once, agreed, reported.
 |---|---|---|---|---|
 | `<snapshot>` | `dumptxoutset` v2 | The UTXO set at one block: the pinned root of every count below | `bitcoin-cli dumptxoutset` | `census`, `reuse prepare` |
 | `census.csv` | CSV | Totals per script type and height band. **Aggregates only**: no individual coin | `census` | a human |
-| `<locks>/` | `locks-v1` | The current locks: sorted digests of unspent outputs, one file per type | `reuse prepare` | `reuse scan`, `archive crosscheck` |
+| `<locks>/` | `locks-v2` | The current locks: sorted digests of unspent outputs, one file per type, sealed with the snapshot's height | `reuse prepare` | `reuse scan`, `reuse verify`, `archive derive/crosscheck` |
 | ├ `locks_{p2pkh,p2sh,p2wpkh,p2wsh}.bin` | sorted records | One lock type per file | `reuse prepare` | as above |
-| └ `manifest.json` | `locks-v1` | Pins the snapshot's base hash (so a scan stops at that height) and each file's record count and sha256, which every reader checks before burning a lock | `reuse prepare` | as above |
+| └ `manifest.json` | `locks-v2` | The identity over the four files at the snapshot's height (from `--headers` or `--height`, checked by the first consumer that sees the block), the base hash declared beside it; every reader checks the files before burning a lock | `reuse prepare` | as above |
 | `<archive>/` | `reveal-archive-v3` | Every key and script ever revealed, appendable | `archive scan` | `archive merge/verify/derive/crosscheck/curve/lookup`, `check` |
 | ├ `runs/…_keys.bin` | records | `hash160` of public keys revealed in a scriptSig, a witness, an output or a taproot leaf, one identity per point | `archive scan` | as above |
 | ├ `runs/…_scripts20.bin` | records | `hash160` of candidate redeem scripts | `archive scan` | as above |
 | ├ `runs/…_scripts32.bin` | records | `sha256` of candidate witness scripts | `archive scan` | as above |
 | └ `manifest.json` | `reveal-archive-v3` | The canonical fingerprint, written by `merge` | `archive merge` | `archive verify` |
-| `curve.csv` | CSV | One row per height step: this **is** the reuse curve over time | `archive derive --curve` | `curve deltas` |
+| `curve.csv` | CSV + `reuse-curve-v2` sidecar | One row per height step over the snapshot's locks: the coins spendable at the snapshot whose key was public by that height, with the `reuse-hits-v2` fingerprint of the row; the sidecar seals the CSV and names the grid, the locks and the perimeter | `archive derive --curve`, `reuse scan` | `curve deltas`, `curve dates`, `archive crosscheck --curve` |
+| `revelations.csv` | CSV + `archive-curve-v2` sidecar | One row per window of heights: the points and the candidate scripts first revealed in it, no locks and no perimeter | `archive curve` | `curve dates`, a human |
 | `<headers>/` | `headers-v2` | The header chain the scan verified, from genesis: 88 B per height plus each coinbase script. Off by default, enabled with `--headers` (~150 MB) | `archive scan --headers` | `headers verify/crosscheck`, `curve dates` |
 | ├ `headers.bin` | records | The 80 header bytes verbatim, then the block's size and weight | `archive scan --headers` | as above |
 | ├ `coinbase.bin`, `coinbase_off.bin` | records | Each block's coinbase scriptSig, and where it starts | `archive scan --headers` | as above |
@@ -182,7 +183,7 @@ published with this project were produced: run once, agreed, reported.
 | `<firstreveal>/` | `firstreveal-v2` | The first revelation of every key, ordered by that moment (20 B per row in `keys.bin`, one u40 offset per height in `first_off.bin`; was 23 B: `first_height` \| `key`) | `firstreveal build` | `firstreveal between` |
 | └ `keys.bin`, `first_off.bin`, `manifest.json` | records / `firstreveal-v2` | One row per revealed key, a 1:1 restatement of the archive's keys partition; the parent archive is **declared** in `build` | `firstreveal build` | `firstreveal between/verify` |
 | `*.lad` (inside index, derived, firstspend and firstreveal) | ladders | Search caches: one sample every few thousand keys. **Outside the fingerprint**; without them a search falls back to a blind bisection, slower and with the same answer | the builders | the readers, when present |
-| `<checkpoint>/` | `reuse-scan-v1` | *Second road only.* The direct reuse scan's state: a `hits_<type>.bin` bitmap of which locks history has opened, plus `state.json` and its own `curve.csv` | `reuse scan` | itself (resume), `archive crosscheck` |
+| `<checkpoint>/` | `reuse-scan-v2` | The burnt set: a `hits_<type>.bin` bitmap of which locks history has opened, plus `state.json` (the locks, the height and the perimeter the `reuse-hits-v2` fingerprint names) and, from the scan, its own sealed `curve.csv` | `reuse scan`, `archive derive --checkpoint` | itself (resume), `reuse stats`, `archive crosscheck` |
 
 ## What the scan checks while it reads
 

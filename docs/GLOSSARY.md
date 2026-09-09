@@ -26,6 +26,14 @@ the reuse curve and `derived timeline` both take one row every 10,000 blocks
 sampled-height kind — and because the curve and the timeline sample the same
 grid, their rows join directly by height.
 
+### reuse curve
+A **survivorship** series over one snapshot: row `H` counts, per lock type,
+the locks of the UTXO set at block `S` whose key was already public at height
+`H`, with the satoshis those locks hold at `S`. The last row is the reuse
+table. It does not say how reuse grew: a lock reused and then emptied before
+`S` is in no row. The series of first revelations per window, without a
+snapshot and without a perimeter, is `archive curve`.
+
 ### lock
 The `hash160` of the **full** scriptPubKey. It identifies an **identical lock** —
 one exact locking script — **not** a wallet, and **not** a key seen under its

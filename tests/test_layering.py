@@ -62,6 +62,7 @@ NO_CLI = {
     "blockparse.py",       # bytes in, structures out
     "capability.py",       # the Result envelope
     "check_report.py",     # builds a document, renders nothing
+    "curve.py",            # the text and the meta of a curve
     "diststats.py",
     "genstore.py",         # the append-and-fuse store
     "hashing.py",

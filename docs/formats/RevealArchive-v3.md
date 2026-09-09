@@ -72,6 +72,12 @@ record, about 25 GB on the whole chain, for a question nobody asks of this
 artifact. That is why this format has no rewind, and the reason is a
 measurement rather than an omission. Rebuild, or nothing.
 
+The same one minimum is why a reuse curve read out of this archive is exact
+under the full perimeter only: under `--no-faces` or `--no-cosigners` an
+intermediate row would date a burn by a sighting the perimeter excludes, so
+`derive --curve` refuses the combination. The narrow curve is the second
+road's job (`reuse scan`), which burns as it reads.
+
 ## The identity of a key
 
 A public key is a **point** on the curve. The chain serializes it in three

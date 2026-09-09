@@ -1,42 +1,38 @@
 #!/usr/bin/env python3
 """
-curve_deltas.py — turn the reuse scan's cumulative curve into a TIME
-SERIES of newly revealed reuse, per height interval and per lock type.
+curve_deltas.py — the reuse curve read interval by interval: how much
+value spendable at the snapshot sits behind a key that became public in
+each slice of chain history, per lock type.
 
-Why this exists: reuse_scan.py appends one row to `curve.csv` at every
-checkpoint — cumulative hits and satoshis for each of the four
-behind-a-hash lock types, plus the canonical fingerprint at that
-height. Each row is a publishable lower bound (the curve IS the
-published result), but the cumulative shape hides the story over time.
-The DIFFERENCES between consecutive rows tell it: how much reuse was
-REVEALED in each slice of chain history. Because the scanner counts at
-the revelation, not at the lock's first appearance, each delta reads
-as behaviour: "during these blocks, keys guarding this much value
-were exposed".
+What the curve IS, stated once because it is easy to read wrong: a
+SURVIVORSHIP series over ONE snapshot. Row H counts, per type, the
+locks of the UTXO set at block S whose key was already public at
+height H, with the satoshis those locks hold at S. So a delta between
+two rows is the value spendable at S whose key became public in that
+slice. It is NOT how much reuse happened then: a lock reused in that
+slice and emptied before S is in no row at all, and whatever was
+reused and has since moved is absent from every row. The behavioural
+question ("are people reusing less?") has no artifact here; `archive
+curve` counts first revelations per window, which is the nearest
+honest proxy and a different number on purpose.
 
-Two curves, two stories — keep them apart when reading the output:
-  - delta HITS  (locks newly revealed): diffuse behaviour, how many
-    locks the habit of reuse burned in that slice;
-  - delta SATOSHIS: economic exposure, stepwise and whale-dominated —
-    a single custody sweep can dwarf years of retail reuse.
-
-One honest caveat, worth repeating wherever these numbers are shown:
-a delta says WHEN keys were exposed, not how much value still sits
-behind exposed keys today (coins revealed long ago may have moved on).
-The behavioural question ("are people reusing less?") reads on this
-series; the present-day exposure question reads on the scan's final
-totals. They are different numbers on purpose.
+Two columns, two readings, kept apart in the output:
+  - delta HITS: locks still unspent at S, by the era their key was
+    revealed;
+  - delta SATOSHIS: value still unspent at S, by the same era, stepwise
+    and dominated by the few large locks a custody sweep exposes.
 
 This tool is read-only, stdlib-only, and deliberately does NOT map
 heights to calendar dates: the curve knows heights, the block header
-times live in the graph archive (graph-v2). A date column would smuggle
-in a second data source; the join belongs to a later, declared step.
+times live in the header archive. A date column would smuggle in a
+second data source; the join belongs to `curve dates`, a declared step.
 
-Robustness note (why heights are deduplicated keeping the LAST row):
-the scanner writes the curve row and then saves its checkpoint state.
-A kill landing between the two leaves a row whose height the resumed
-run will reach — and append — again. Same height, recomputed numbers,
-later row wins: "last pass wins", the same rule stats_data.json uses.
+The text of a curve and its sidecar are `curve`'s: when the sidecar
+`curve.csv.meta.json` is beside the file, the CSV is checked against
+it and a hole in the declared grid is an error with a name, never an
+interval folded into the next one. A height written twice (a kill
+between the row and the state, before the resume wrote it back) keeps
+the last row, the resumed run's.
 
 Usage:
     python3 curve_deltas.py CURVE.csv                # summary to stdout
@@ -51,11 +47,12 @@ import csv
 import sys
 
 
-class CurveError(RuntimeError):
-    """A CSV that is not a reuse-scan curve, or one whose cumulative
-    counters go backwards. Raised rather than exited on: read_curve and
-    deltas are readers other code can call, and a reader that kills the
-    process is not one."""
+from nodsig import curve as cv
+
+# One error for the reader and for the arithmetic: raised rather than
+# exited on, because read_curve and deltas are readers other code can
+# call, and a reader that kills the process is not one.
+CurveError = cv.CurveError
 
 # Distribution statistics shared with reuse_scan/reveal_archive: here we
 # use the Gini and the top-N shares to say how lumpy the curve is.
@@ -73,25 +70,23 @@ def read_curve(path):
     """Read curve.csv into a list of rows sorted by height.
 
     Returns [(height, {type: (hits, satoshis)}), ...] with duplicate
-    heights collapsed to the LAST occurrence (see robustness note in
-    the module docstring). The fingerprint column is ignored here: it
-    certifies the bitmaps, it plays no role in the arithmetic.
+    heights collapsed to the LAST occurrence (see the module
+    docstring). The fingerprint column is ignored here: it certifies
+    the bitmaps, it plays no role in the arithmetic. With the sidecar
+    beside the file, the bytes are confronted with it first and the
+    grid it declares is checked for holes.
     """
-    expected = ["height"] + [f"{t}_{f}" for t in TYPE_ORDER
-                             for f in ("hits", "satoshis")] + ["fingerprint"]
-    by_height = {}
-    with open(path, newline="") as f:
-        reader = csv.DictReader(f)
-        if reader.fieldnames != expected:
-            raise CurveError(
-                f"unexpected curve columns {reader.fieldnames!r}; "
-                f"this tool understands exactly {expected!r}")
-        for row in reader:
-            h = int(row["height"])
-            by_height[h] = {t: (int(row[f"{t}_hits"]),
-                                int(row[f"{t}_satoshis"]))
-                            for t in TYPE_ORDER}
-    return sorted(by_height.items())
+    every = None
+    meta = cv.read_meta(path)
+    if meta is not None:
+        if meta.get("format") != cv.REUSE_TAG:
+            raise CurveError(f"the sidecar beside {path} says "
+                             f"{meta.get('format')!r}, not a reuse curve")
+        if cv.sha_of(path) != meta["identity"]["files"][0]["sha256"]:
+            raise CurveError(f"{path} does not match the sidecar beside it: "
+                             "the curve changed after it was sealed")
+        every = meta["build"]["grid"]
+    return [(h, d) for h, d, _fp in cv.read_reuse(path, TYPE_ORDER, every)]
 
 
 def deltas(rows):
@@ -176,29 +171,27 @@ def summarize(intervals, top, out):
             print(f"  {h0:>9,} → {h1:>9,}   {hh:>10,} locks   "
                   f">= {ss / SATS_PER_BTC:>14,.2f} BTC", file=out)
 
-    show("by newly revealed locks (diffuse behaviour)",
-         lambda x: totals(x[2])[0])
-    show("by newly revealed BTC (whale steps)",
-         lambda x: totals(x[2])[1])
+    show("by locks still unspent at the snapshot, by era of their "
+         "revelation", lambda x: totals(x[2])[0])
+    show("by value still unspent at the snapshot, by era of its key's "
+         "revelation", lambda x: totals(x[2])[1])
 
 
 def concentration(intervals, tops=(5, 20), out=sys.stdout):
-    """How LUMPY the curve is across intervals — SKETCH (workstream C).
+    """How LUMPY the age profile of the exposure is across intervals.
 
     The reuse curve does not rise smoothly: a few intervals (custody
-    sweeps, migrations) carry most of the newly revealed value. This
-    puts a number on that, generalizing the hand-picked "top-5 = a
-    third, top-20 = three quarters" into a measured Gini of the
-    per-interval deltas plus the cumulative share the largest intervals
-    carry. Two series, two readings (module docstring): BTC deltas are
-    whale-dominated, lock-count deltas are diffuse behaviour.
+    sweeps, migrations) carry most of the value still unspent at the
+    snapshot. This puts a number on that: a Gini of the per-interval
+    deltas plus the cumulative share the largest intervals carry. Two
+    series, two readings (module docstring): value deltas are dominated
+    by the few large locks, lock-count deltas are diffuse.
 
-    Caveat unchanged: a delta says WHEN keys were exposed, so this
-    measures the lumpiness of the TIMELINE of revelation, not of the
-    present-day exposure. TODO(presentation): pick the final headline
-    (Gini vs a single "top-N carries X%") once the real curve is in;
-    the interval width (10k blocks) is the unit here and should be
-    stated wherever the number is shown.
+    What it measures is the lumpiness of the AGE PROFILE of today's
+    exposure, by the era each key became public; not when reuse
+    happened, and not how much of it happened then. The interval width
+    (the grid, 10,000 blocks on the published curve) is the unit here
+    and is stated wherever the number is shown.
     """
     if not intervals:
         return
@@ -206,7 +199,7 @@ def concentration(intervals, tops=(5, 20), out=sys.stdout):
     hits = sorted(totals(d)[0] for _, _, d in intervals)
     tot_s, tot_h = sum(sats) or 1, sum(hits) or 1
     print(f"\nconcentration across {len(intervals)} intervals "
-          "(how lumpy the timeline of revelation is):", file=out)
+          "(how lumpy the age profile of the exposure is):", file=out)
     print(f"  Gini   BTC deltas {ds.gini(sats):.3f}    "
           f"lock deltas {ds.gini(hits):.3f}", file=out)
     for k in tops:
@@ -215,7 +208,7 @@ def concentration(intervals, tops=(5, 20), out=sys.stdout):
         _, vs = ds.top_n(sats, k)
         _, vh = ds.top_n(hits, k)
         print(f"  top {k:>2} intervals carry {100 * vs / tot_s:5.1f}% of "
-              f"revealed BTC, {100 * vh / tot_h:5.1f}% of revealed locks",
+              f"the value, {100 * vh / tot_h:5.1f}% of the locks",
               file=out)
 
 

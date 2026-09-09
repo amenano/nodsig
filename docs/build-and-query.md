@@ -37,12 +37,16 @@ figures). Not needed if you only want history: the chain scan does not read it.
 | | command | what it gives |
 |---|---|---|
 | optional | `nodsig census /path/snapshot.dat --csv census.csv` | totals per lock type and age band, aggregates only |
-| needed for reuse | `nodsig reuse prepare --out <locks> /path/snapshot.dat` | the sorted lock files every reuse number is counted against |
+| needed for reuse | `nodsig reuse prepare --out <locks> --height <S> /path/snapshot.dat` | the sorted lock files every reuse number is counted against, sealed as `locks-v2` with the snapshot's height |
 
-`prepare` writes a manifest pinning the snapshot's base block, plus each file's
-record count and sha256: every later reader checks those before burning a lock,
+`prepare` seals a manifest with the snapshot's base block and its **height**,
+plus each file's sha256: every later reader checks those before burning a lock,
 so a truncated or moved locks file is refused instead of silently scanned
-against.
+against. The snapshot names its block by hash only, so the height comes from
+`--height <S>` (the number `dumptxoutset` printed, taken as a claim that the
+first consumer to see the block confronts) or from `--headers <headers>` (a
+sealed header archive, read offline and verified). `nodsig reuse verify --locks
+<locks>` is the shared audit over the four files.
 
 ## 2. One pass over block history
 
@@ -143,8 +147,12 @@ snapshot and no node:
 nodsig archive curve --archive <archive> --out revelations.csv --every 10000
 ```
 
-One row per window of heights, counting the digests whose **first** revelation
-falls in it. `nodsig curve dates --curve <either curve> --headers <headers>`
+One row per window of heights, counting the points and the candidate scripts
+whose **first** revelation falls in it (`points` counts a point once, whatever
+serializations the chain showed). Both curves come with a sealed sidecar
+(`<csv>.meta.json`, `reuse-curve-v2` and `archive-curve-v2`): the CSV's
+digest, the grid, the parent and, for the reuse curve, the locks and the
+perimeter it was burnt under. `nodsig curve dates --curve <either curve> --headers <headers>`
 puts calendar dates on either file, offline.
 
 ## 4. The indexed side, offline from here on
@@ -373,7 +381,7 @@ exactly what you used.
 ```sh
 nodsig reuse scan --locks <locks> --rpc <url> --end <H> --checkpoint <cp>
 nodsig archive crosscheck --archive <archive> --locks <locks> \
-                          --reuse-state <cp>/state.json
+                          --reuse-state <cp>/state.json --curve <cp>/curve.csv
 nodsig reuse stats --locks <locks> --checkpoint <cp>
 ```
 
@@ -505,15 +513,16 @@ they read, time or explain something you already have.
 | Command | What it does | Step |
 |---|---|---|
 | `census <snapshot>` | the UTXO set by lock type and age band | 1 |
-| `reuse prepare` | the snapshot distilled into sorted lock files | 1 |
+| `reuse prepare` | the snapshot distilled into sorted lock files, sealed with its height | 1 |
+| `reuse verify` | the lock set against its manifest | 5 |
 | `reuse scan` | the second road: burn locks while walking the chain | second road |
-| `reuse stats` | value distribution across exposed locks (median, Gini, bands) from a scan checkpoint | second road |
+| `reuse stats` | value distribution across exposed locks (median, Gini, bands) from a checkpoint, the scan's or `derive --checkpoint`'s | second road |
 | `archive scan` | the one pass: revelations, and whatever the co-emission flags ask for | 2 |
 | `archive merge` | fuse the runs, seal, fingerprint | 3 |
-| `archive derive` | the reuse table and its curve, read out of the archive | 3 |
+| `archive derive` | the reuse table and its curve, read out of the archive; `--checkpoint` writes the bitmaps `reuse stats` reads | 3 |
 | `archive curve` | first revelations per window of heights: the archive alone, no locks | 3 |
 | `archive verify` | re-read a sealed archive against its manifest; `--deep` reads every record | 5 |
-| `archive crosscheck` | the two roads compared bit for bit | second road |
+| `archive crosscheck` | the two roads compared bit for bit: locks, height, perimeter, fingerprint, and with `--curve` the curve | second road |
 | `archive lookup` | was this digest ever revealed, where, and when first | 6 |
 | `graph fingerprint` | seal the graph (and audit every byte doing it) | 3 |
 | `graph digest` | read back the result of a `--graph-digest` check | - |
@@ -565,7 +574,7 @@ they read, time or explain something you already have.
 | `price daily` | the per-day aggregation, dense, each value with its kind | 6b |
 | `blockstats build` | per-block series out of the graph | 4 |
 | `blockstats summary` | the same series read per epoch | 6 |
-| `curve deltas` | how reuse grew, interval by interval | 6 |
+| `curve deltas` | value spendable at the snapshot whose key became public in each interval | 6 |
 | `curve dates` | heights turned into real dates (from the headers, or the node) | 6 |
 | `check` | the assembled per-address answer, from whichever backends you plug in | 6 |
 | `report` | one page over the artifacts you name: identity, cost, ancestry, machine | - |
@@ -589,7 +598,10 @@ of on the boundaries your download batch size happened to produce.
 2. **Scan and derive with the same perimeter.** `--no-faces` and
    `--no-cosigners` change what counts as a revelation, so a bitmap made under
    one reading and a table made under another describe different questions. The
-   comparison refuses rather than averaging them.
+   comparison refuses rather than averaging them. The curve is the one output
+   the perimeter cannot make equal between the two roads: `derive --curve`
+   refuses a narrow perimeter (a record carries one first height, the minimum
+   over every sighting), `reuse scan` writes it, because it burns as it reads.
 3. **Merge before reading.** `nonces groups`, `nonces lookup` and
    `archive lookup` do consult unfused runs, so they answer correctly either
    way, but only a merged artifact has a fingerprint.

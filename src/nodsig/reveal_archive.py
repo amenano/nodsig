@@ -128,7 +128,7 @@ from nodsig.sightings import (FLAG_INNER_SIG, FLAG_INNER_WIT, FLAG_OTHER_FACE,
                               new_filter_stats, output_keys, script_records,
                               taproot_body)
 from nodsig.progress import Pace
-from nodsig.artifact import (WallClock, make_identity, producer,
+from nodsig.artifact import (WallClock, declared_parent, make_identity, producer,
                              seal_manifest, verify_sealed)
 from nodsig.blockparse import ParseError, script_pushes, scriptsig_pushes
 
@@ -169,12 +169,15 @@ from nodsig import nonces
 # pipeline: the per-input walk, the storage, and the matching are
 # written here again, because they are what the cross-check is meant to
 # check.
+from nodsig import curve as cv
 from nodsig.reuse_scan import (add_coemission_args, add_node_args,
                                add_window_args,
                                LOCK_TYPES, TYPE_ORDER, SAT, BlockFetcher, LockSet,
-                        RpcClient, ScanError, _fingerprint, build_client,
-                        fingerprint_of_bitmaps, hash160,
-                        warn_if_slow_ripemd160,
+                        RpcClient, ScanError, _fingerprint, _lock_file,
+                        _perimeter, build_client, fingerprint_of_bitmaps,
+                        hash160, locks_base_hash, locks_height, locks_types,
+                        warn_if_slow_ripemd160, write_checkpoint,
+                        STATE_TAG as REUSE_STATE_TAG,
                         _load_manifest as _load_locks_manifest)
 
 STATE_NAME = "state.json"
@@ -1081,8 +1084,8 @@ def _load_locksets(locks_dir):
     manifest = _load_locks_manifest(locks_dir)
     locks = {}
     for t in TYPE_ORDER:
-        entry = manifest["types"][t]
-        locks[t] = LockSet(os.path.join(locks_dir, f"locks_{t}.bin"),
+        entry = locks_types(manifest)[t]
+        locks[t] = LockSet(os.path.join(locks_dir, _lock_file(t)),
                            LOCK_TYPES[t],
                            expect_records=entry["records"],
                            expect_sha=entry["sha256"])
@@ -1108,8 +1111,21 @@ def _print_lock_table(locks, faces, cosigners, fp):
 # crosscheck — the cross-check
 # ---------------------------------------------------------------------------
 
+def _base_note(locks_manifest, height):
+    """Where the snapshot's block stands against a height: one phrase,
+    the same in the scan's summary, in `derive` and in the cross-check."""
+    base_h = locks_height(locks_manifest)
+    if height == base_h:
+        return f"aligned with height {height:,}"
+    if height < base_h:
+        return (f"{base_h - height:,} block(s) short of the snapshot's "
+                f"height {base_h:,}: the figure is a floor for that moment")
+    return (f"{height - base_h:,} block(s) past the snapshot's height "
+            f"{base_h:,}: the figure counts spends the snapshot never saw")
+
+
 def run_crosscheck(archive_dir, locks_dir, faces=True, cosigners=True,
-                   reuse_state_path=None):
+                   reuse_state_path=None, curve_path=None):
     """Derive the burnt-locks bitmaps from the archive and compare
     them with reuse_scan's.
 
@@ -1119,14 +1135,22 @@ def run_crosscheck(archive_dir, locks_dir, faces=True, cosigners=True,
     views cannot drift apart.
 
     The fingerprint printed is byte-compatible with reuse_scan's
-    (same bitmap definition over the same sorted lock files), so the
-    two roads meet on one hex string. With --reuse-state, the meeting
-    is checked right here and a mismatch is a hard failure: a cross-check
-    that "almost passes" does not exist.
+    (same identity over the same sorted lock files, the same height
+    and the same perimeter), so the two roads meet on one hex string.
+    With --reuse-state, the meeting is checked right here and a
+    mismatch is a hard failure: a cross-check that "almost passes" does
+    not exist. Five comparisons, in order, each with its own message:
+    the locks, the height of the two states, the perimeter, the
+    fingerprint of the bitmaps, and, with --curve, the scan's curve
+    against one replayed from the archive on the same grid. The first
+    three stay BEFORE the fingerprint even though the fingerprint now
+    names all three: a mismatch is diagnosed by name, never as "one of
+    the two pipelines is wrong".
 
     What "independent" covers, honestly: the two EXTRACTION pipelines
-    are written twice on purpose, but both roads share the locks files
-    and the LockSet lookup code. That is why the load verifies the
+    are written twice on purpose, but both roads share the locks files,
+    the LockSet lookup code, the classifier of what a key looks like
+    and the read-time perimeter map. That is why the load verifies the
     files against the manifest's shas, and why --reuse-state refuses a
     checkpoint made against different locks: without those guards the
     shared input could make both roads agree on garbage.
@@ -1134,40 +1158,50 @@ def run_crosscheck(archive_dir, locks_dir, faces=True, cosigners=True,
     state = _load_state(archive_dir)
     manifest = _load_manifest(archive_dir)
     locks, locks_manifest = _load_locksets(locks_dir)
+    perimeter = _perimeter(faces, cosigners)
+    height = state["last_height"]
+    if curve_path:
+        for t in TYPE_ORDER:
+            locks[t].track_burn_heights()
 
     keys_seen = 0
     for cat in CAT_ORDER:
-        for h, fl, _ht in _merged_stream(
+        for h, fl, ht in _merged_stream(
                 _archive_sources(archive_dir, cat, state, manifest), cat):
-            if (_apply_revelation(locks, cat, h, fl, faces, cosigners)
+            if (_apply_revelation(locks, cat, h, fl, faces, cosigners, ht)
                     and cat == "keys"):
                 keys_seen += 1
 
-    fp = _fingerprint(locks)
-    print(f"=== Cross-check from archive (heights 1..{state['last_height']:,}"
+    fp = _fingerprint(locks, locks_manifest["fingerprint"], height, perimeter)
+    print(f"=== Cross-check from archive (heights 1..{height:,}"
           f", {keys_seen:,} keys in perimeter) ===")
+    print(f"    locks {locks_manifest['fingerprint']}")
+    print(f"    snapshot block: {_base_note(locks_manifest, height)}")
     _print_lock_table(locks, faces, cosigners, fp)
 
     if reuse_state_path:
-        with open(reuse_state_path) as f:
-            reuse_state = json.load(f)
-        if reuse_state.get("locks_manifest") != locks_manifest["types"]:
+        reuse_state = read_json(reuse_state_path, ScanError)
+        if reuse_state.get("format") != REUSE_STATE_TAG:
+            raise ScanError(
+                f"the scan's state says {reuse_state.get('format')!r}, "
+                f"this build compares against {REUSE_STATE_TAG!r}")
+        if reuse_state["locks"] != locks_manifest["fingerprint"]:
             raise ScanError(
                 "the scan's checkpoint was made against DIFFERENT locks "
-                "files: the two roads must burn the same locks to be "
-                "comparable")
-        if reuse_state["last_height"] != state["last_height"]:
+                f"(fingerprint {reuse_state['locks'][:16]}… against "
+                f"{locks_manifest['fingerprint'][:16]}…): the two roads "
+                "must burn the same locks to be comparable")
+        if reuse_state["last_height"] != height:
             raise ScanError(
-                f"heights differ: archive at {state['last_height']}, "
-                f"reuse scan at {reuse_state['last_height']} — the two "
-                "roads must be compared at the SAME height")
+                f"heights differ: archive at {height:,}, reuse scan at "
+                f"{reuse_state['last_height']:,} — the two roads must be "
+                "compared at the SAME height")
         # The scan records the perimeter its bitmaps were burnt under;
         # this read applies its own flags. Two perimeters give two
         # fingerprints for one correct pair, and "one of the two
         # pipelines is wrong" would be a false diagnosis.
-        was = (reuse_state.get("perimeter")
-               or {"faces": True, "cosigners": True})
-        if was != {"faces": bool(faces), "cosigners": bool(cosigners)}:
+        was = reuse_state["perimeter"]
+        if was != perimeter:
             raise ScanError(
                 f"the scan's checkpoint was made with faces="
                 f"{'on' if was['faces'] else 'off'}, cosigners="
@@ -1185,7 +1219,43 @@ def run_crosscheck(archive_dir, locks_dir, faces=True, cosigners=True,
                 "either number")
         print("CHECK PASSED: the two independent roads meet "
               "on the same fingerprint.")
+    if curve_path:
+        _crosscheck_curve(locks, locks_manifest, perimeter, height,
+                          curve_path)
     return fp
+
+
+def _crosscheck_curve(locks, locks_manifest, perimeter, height, curve_path):
+    """The scan's curve against one replayed from the archive on the
+    grid its sidecar declares: the same CSV bytes, hence the same
+    sidecar fingerprint. The sidecar is verified first, so a curve that
+    changed beside its meta is named as such and not as a road that
+    disagrees."""
+    meta = cv.verify(curve_path, cv.REUSE_TAG)
+    if meta["build"]["locks"] != locks_manifest["fingerprint"]:
+        raise ScanError("the curve was burnt against DIFFERENT locks: "
+                        "not comparable")
+    if meta["build"]["perimeter"] != perimeter:
+        raise ScanError("the curve was burnt under another perimeter: run "
+                        "the cross-check with the scan's flags")
+    if meta["identity"]["coverage"]["to"] != height:
+        raise ScanError(
+            f"the curve stops at {meta['identity']['coverage']['to']:,} and "
+            f"the archive at {height:,}: not comparable")
+    replay = curve_path + ".crosscheck"
+    try:
+        sha, _rows = _write_curve(locks, replay, meta["build"]["grid"],
+                                  height, locks_manifest["fingerprint"],
+                                  perimeter)
+    finally:
+        if os.path.exists(replay):
+            os.remove(replay)
+    if sha != meta["identity"]["files"][0]["sha256"]:
+        raise ScanError(
+            "CHECK FAILED: the curve replayed from the archive differs "
+            "from the scan's — do not publish either curve")
+    print(f"CHECK PASSED: the curve too ({meta['build']['rows']} rows on the "
+          f"{meta['build']['grid']:,} grid, meta {meta['fingerprint'][:16]}…).")
 
 
 # ---------------------------------------------------------------------------
@@ -1226,28 +1296,18 @@ def _coverage_to(state, manifest):
     return manifest["identity"]["coverage"]["to"]
 
 
-def _grid(every, coverage_to):
-    """The heights a curve carries rows for: the multiples of `every`
-    inside the coverage, and the coverage's own last height, which is
-    the one row that is always worth having and rarely a multiple."""
-    if every < 1:
-        raise ScanError("the curve grid must be at least 1 block wide")
-    points = list(range(every, coverage_to + 1, every))
-    if not points or points[-1] != coverage_to:
-        points.append(coverage_to)
-    return points
-
-
-def _write_curve(locks, curve_path, every, coverage_to):
+def _write_curve(locks, curve_path, every, coverage_to, locks_fp, perimeter):
     """Replay the burns in height order and write one row per grid
-    point: cumulative counts, satoshis, and the bitmap fingerprint the
-    state had exactly there.
+    point: cumulative counts, satoshis, and the fingerprint the burnt
+    set had exactly there. Returns (sha256 of the file, rows).
 
     Replayed on fresh bitmaps rather than sampled during the read: the
     archive arrives in digest order, so at no moment during the pass do
     the LockSets hold the state of any particular height. Cost is small
     and bounded by the BURNT locks, not by the records: a few million
-    entries sorted once, and a bitmap rehashed per row.
+    entries sorted once, and a bitmap rehashed per row. The text of a
+    row and the grid are `curve`'s, shared with the scan, which is what
+    lets the two roads meet byte for byte on the file.
     """
     events = {}
     for t in TYPE_ORDER:
@@ -1269,12 +1329,8 @@ def _write_curve(locks, curve_path, every, coverage_to):
     sats = {t: 0 for t in TYPE_ORDER}
     pos = {t: 0 for t in TYPE_ORDER}
 
-    tmp = curve_path + ".tmp"
-    rows = 0
-    with open(tmp, "w") as f:
-        f.write("height," + ",".join(
-            f"{t}_hits,{t}_satoshis" for t in TYPE_ORDER) + ",fingerprint\n")
-        for point in _grid(every, coverage_to):
+    def rows():
+        for point in cv.grid(every, coverage_to):
             for t in TYPE_ORDER:
                 ev, p = events[t], pos[t]
                 while p < len(ev) and (ev[p] >> 32) <= point:
@@ -1284,13 +1340,28 @@ def _write_curve(locks, curve_path, every, coverage_to):
                     sats[t] += locks[t].sats[i]
                     p += 1
                 pos[t] = p
-            f.write(f"{point},"
-                    + ",".join(f"{counts[t]},{sats[t]}" for t in TYPE_ORDER)
-                    + f",{fingerprint_of_bitmaps(bitmaps)}\n")
-            rows += 1
-    durable_replace(tmp, curve_path)
-    print(f"curve: {rows} rows on the {every:,} grid → {curve_path}",
+            yield cv.reuse_row(
+                point, {t: {"hits": counts[t], "satoshis": sats[t]}
+                        for t in TYPE_ORDER},
+                fingerprint_of_bitmaps(bitmaps, locks_fp, point, perimeter),
+                TYPE_ORDER)
+
+    n = len(cv.grid(every, coverage_to))
+    sha = cv.write(curve_path, cv.reuse_header(TYPE_ORDER), rows())
+    print(f"curve: {n} rows on the {every:,} grid → {curve_path}",
           file=sys.stderr)
+    return sha, n
+
+
+def _archive_parent(manifest):
+    """The archive as a declared parent, when it is sealed; None for a
+    live archive, which has no fingerprint yet."""
+    if manifest is None:
+        return None
+    return declared_parent(manifest["format"], manifest["fingerprint"])
+
+
+ARCHIVE_CURVE_COLUMNS = ("points", "scripts20", "scripts32")
 
 
 def run_archive_curve(archive_dir, out_path, every=10_000):
@@ -1313,32 +1384,54 @@ def run_archive_curve(archive_dir, out_path, every=10_000):
     archive keeps the earliest height precisely so this question has an
     exact answer. The stream is deduplicated, so the count is the same
     whether the archive has been merged or is still in runs.
+
+    The `points` column counts KEYS records without the UNCOMPRESSED
+    bit: a point seen at 65 bytes holds two records (the form seen and
+    its compressed face under OTHER_FACE), and every point has exactly
+    one canonical record, whose first height is the minimum over every
+    form seen. So the column counts points, and says so. The script
+    columns count candidate scripts only, by the archive's own filter.
     """
     state = _load_state(archive_dir)
     manifest = _load_manifest(archive_dir)
     coverage_to = _coverage_to(state, manifest)
-    points = _grid(every, coverage_to)
+    points = cv.grid(every, coverage_to)
     last = len(points) - 1
     counts = {cat: [0] * len(points) for cat in CAT_ORDER}
 
     for cat in CAT_ORDER:
         col = counts[cat]
-        for _h, _fl, ht in _merged_stream(
+        for _h, fl, ht in _merged_stream(
                 _archive_sources(archive_dir, cat, state, manifest), cat):
+            if cat == "keys" and fl & FLAG_UNCOMPRESSED:
+                continue
             # The grid is regular, so the window is arithmetic rather
             # than a search: this runs once per record.
             i = (ht - 1) // every
             col[i if i < last else last] += 1
 
-    tmp = out_path + ".tmp"
-    with open(tmp, "w") as f:
-        f.write("height," + ",".join(CAT_ORDER) + ",total\n")
+    def rows():
         for n, point in enumerate(points):
             row = [counts[cat][n] for cat in CAT_ORDER]
-            f.write(f"{point}," + ",".join(str(v) for v in row)
-                    + f",{sum(row)}\n")
-    durable_replace(tmp, out_path)
+            yield (f"{point}," + ",".join(str(v) for v in row)
+                   + f",{sum(row)}\n")
+
+    header = "height," + ",".join(ARCHIVE_CURVE_COLUMNS) + ",total\n"
+    sha = cv.write(out_path, header, rows())
     total = sum(sum(counts[cat]) for cat in CAT_ORDER)
+    cv.seal(out_path, cv.ARCHIVE_TAG, coverage_to, {
+        "road": "archive",
+        "parent": _archive_parent(manifest),
+        "grid": every,
+        "rows": len(points),
+        "columns": ("height",) + ARCHIVE_CURVE_COLUMNS + ("total",),
+        "reconstruction": (
+            "one row per window of `grid` heights ending at the row's "
+            "height (the last row ends at the coverage): per category, the "
+            "records whose first_height falls in the window; keys records "
+            "carrying UNCOMPRESSED are not counted, so `points` counts "
+            "points and not serializations"),
+    }, sha=sha)
     print(f"archive curve: {len(points)} windows of {every:,} blocks "
           f"through height {coverage_to:,}, {total:,} first revelations "
           f"→ {out_path}", file=sys.stderr)
@@ -1347,10 +1440,11 @@ def run_archive_curve(archive_dir, out_path, every=10_000):
 
 def run_derive(archive_dir, locks_dir, faces=True, cosigners=True,
                curve_path=None, curve_every=10_000,
-               allow_base_mismatch=False):
+               allow_base_mismatch=False, checkpoint_dir=None):
     """Derive from the archive everything the reuse scan measures:
     the final table AND the per-checkpoint curve, with a fingerprint
-    per row.
+    per row; and, with `checkpoint_dir`, the bitmaps and the state the
+    scan would have written, so `reuse stats` reads this road too.
 
     This is the read side of the single-pass pipeline: one scan
     archives the revelations (and can co-emit the graph); the reuse
@@ -1358,18 +1452,14 @@ def run_derive(archive_dir, locks_dir, faces=True, cosigners=True,
     locks — no second pass over the chain.
 
     The curve comes from the `first_height` each record carries, which
-    is the height that burnt the lock. That makes it independent of the
-    order the archive is read in and of how the scan buffered: it can
-    be asked for on ANY grid, it reads the same on a fused base as on
-    loose runs, and a third party gets the same rows. The rows are
-    replayed, not sampled: the burns are collected with their heights,
-    sorted, and the bitmap is rebuilt point by point, so each row's
-    fingerprint is the one the state genuinely had at that height.
-
-    It used to be sampled at run-tile boundaries instead, which put a
-    grid meant to be chosen in the hands of the download batch size and
-    the flush knob: on the published chain not one boundary landed on
-    the 10,000 grid and the file came out with a single row.
+    under the full perimeter is the height that burnt the lock. That
+    makes it independent of the order the archive is read in and of
+    how the scan buffered: it can be asked for on ANY grid, it reads the
+    same on a fused base as on loose runs, and a third party gets the
+    same rows. The rows are replayed, not sampled: the burns are
+    collected with their heights, sorted, and the bitmap is rebuilt
+    point by point, so each row's fingerprint is the one the state
+    genuinely had at that height.
 
     Same LockSet, same burn rules (_apply_revelation, shared with the
     cross-check), same fingerprint definition: on the same inputs the
@@ -1380,13 +1470,15 @@ def run_derive(archive_dir, locks_dir, faces=True, cosigners=True,
     state = _load_state(archive_dir)
     manifest = _load_manifest(archive_dir)
     locks, locks_manifest = _load_locksets(locks_dir)
+    perimeter = _perimeter(faces, cosigners)
     # The table is defined by TWO heights: the archive's coverage and
     # the block the snapshot's locks were photographed at. The manifest
-    # names that block by hash, and the archive checkpoints the hash at
-    # its watermark, so the two can be confronted offline and exactly:
-    # same hash, same block, same height. Deriving an archive against
-    # locks from another block produces a table indistinguishable from
-    # a right one, which is why a mismatch is a refusal and not a note.
+    # names that block by hash and by height, and the archive
+    # checkpoints the hash at its watermark, so the two can be
+    # confronted offline and exactly: same hash, same block, same
+    # height. Deriving an archive against locks from another block
+    # produces a table indistinguishable from a right one, which is
+    # why a mismatch is a refusal and not a note.
     if curve_path and not (faces and cosigners):
         # A keys record carries ONE first_height, the minimum over every
         # sighting whatever its provenance: under a narrowed perimeter
@@ -1394,16 +1486,27 @@ def run_derive(archive_dir, locks_dir, faces=True, cosigners=True,
         # bits) but every intermediate row would date a burn by a
         # sighting the perimeter excluded. A faithful narrow curve needs
         # one height per provenance bit, which this format does not
-        # carry; rather than print upper bounds under the name of a
-        # curve, the combination is refused.
+        # carry (six bits, +15 bytes per keys record, about 25 GB at
+        # chain scale, for a series no published number uses); rather
+        # than print upper bounds under the name of a curve, the
+        # combination is refused, and the second road writes the exact
+        # narrow curve because it burns as it reads.
         raise ScanError(
             "--curve is exact only under the full perimeter: with "
             "--no-faces or --no-cosigners the archive's first_height "
             "dates a burn by sightings the perimeter excludes, and the "
             "intermediate rows would over-count — derive the table with "
             "the narrow perimeter and the curve without it")
-    base_hash = locks_manifest["base_hash"]
+    base_hash = locks_base_hash(locks_manifest)
     tip_hash = state["last_block_hash"]
+    tip = state["last_height"]
+    if base_hash == tip_hash and tip != locks_height(locks_manifest):
+        raise ScanError(
+            f"the locks manifest puts the snapshot's block {base_hash[:16]}… "
+            f"at height {locks_height(locks_manifest):,} and the archive's "
+            f"tip, which is that block, is at {tip:,}: the height given to "
+            "`prepare` was wrong; rebuild the locks with --headers, or with "
+            "the right --height")
     if base_hash != tip_hash and not allow_base_mismatch:
         raise ScanError(
             f"the locks were photographed at block {base_hash}, but "
@@ -1436,21 +1539,44 @@ def run_derive(archive_dir, locks_dir, faces=True, cosigners=True,
             keys_seen += apply_stream(run["category"], _read_records(
                 path, run["category"], run["sha256"]))
 
+    coverage_to = _coverage_to(state, manifest)
+    locks_fp = locks_manifest["fingerprint"]
     if curve_path:
-        _write_curve(locks, curve_path, curve_every,
-                     _coverage_to(state, manifest))
+        sha, rows = _write_curve(locks, curve_path, curve_every, coverage_to,
+                                 locks_fp, perimeter)
+        meta = cv.seal(curve_path, cv.REUSE_TAG, coverage_to, {
+            "road": "derive",
+            "parent": _archive_parent(manifest),
+            "grid": curve_every,
+            "locks": locks_fp,
+            "perimeter": perimeter,
+            "rows": rows,
+        }, sha=sha)
+        print(f"curve meta: {meta['fingerprint']}", file=sys.stderr)
 
-    fp = _fingerprint(locks)
+    fp = _fingerprint(locks, locks_fp, tip, perimeter)
+    if checkpoint_dir:
+        # The twin the scan writes: `reuse stats` reads it, and the
+        # cross-check can compare bitmap with bitmap. The snapshot's
+        # block is "seen" at its height when the archive reaches it.
+        base_h = locks_height(locks_manifest)
+        write_checkpoint(checkpoint_dir, locks, locks_manifest, perimeter,
+                         tip, tip_hash, base_h if base_h <= tip else None,
+                         {}, road="derive")
+        print(f"checkpoint: bitmaps and state written to {checkpoint_dir}",
+              file=sys.stderr)
     # "sightings", not "keys": tiles are read one by one, so a key
     # revealed in several intervals is counted at each sighting (the
     # burns stay idempotent; only this informational counter differs
     # from crosscheck's, which walks the deduplicated stream).
-    aligned = ("the same block" if base_hash == tip_hash
-               else "A DIFFERENT BLOCK, crossed on purpose")
-    print(f"=== Derived from archive (heights 1..{state['last_height']:,}"
+    print(f"=== Derived from archive (heights 1..{tip:,}"
           f", {keys_seen:,} key sightings in perimeter) ===")
     print(f"    archive tip {tip_hash}")
-    print(f"    locks base  {base_hash} ({aligned})")
+    print(f"    locks base  {base_hash} ("
+          + ("the same block" if base_hash == tip_hash
+             else "A DIFFERENT BLOCK, crossed on purpose: "
+             + _base_note(locks_manifest, tip)) + ")")
+    print(f"    locks       {locks_fp}")
     _print_lock_table(locks, faces, cosigners, fp)
     return fp
 
@@ -1655,6 +1781,10 @@ def main(argv=None):
     pc.add_argument("--reuse-state",
                     help="reuse_scan state.json to compare against "
                          "(the cross-check proper)")
+    pc.add_argument("--curve",
+                    help="the scan's curve.csv (its sidecar beside it): "
+                         "replayed from the archive on the same grid and "
+                         "compared byte for byte")
     pc.add_argument("--no-faces", action="store_true",
                     help="narrow perimeter, must mirror the scan's flag")
     pc.add_argument("--no-cosigners", action="store_true",
@@ -1677,6 +1807,9 @@ def main(argv=None):
                          "differs from the archive's tip: the table "
                          "then mixes two moments of the chain, which "
                          "is refused by default")
+    pd.add_argument("--checkpoint",
+                    help="also write the bitmaps and the state the scan "
+                         "would have written here, for `reuse stats`")
 
     pv = sub.add_parser("curve",
                         help="when the chain first revealed each thing, "
@@ -1721,14 +1854,16 @@ def main(argv=None):
             run_crosscheck(args.archive, args.locks,
                            faces=not args.no_faces,
                            cosigners=not args.no_cosigners,
-                           reuse_state_path=args.reuse_state)
+                           reuse_state_path=args.reuse_state,
+                           curve_path=args.curve)
         elif args.cmd == "derive":
             run_derive(args.archive, args.locks,
                        faces=not args.no_faces,
                        cosigners=not args.no_cosigners,
                        curve_path=args.curve,
                        curve_every=args.curve_every,
-                       allow_base_mismatch=args.allow_base_mismatch)
+                       allow_base_mismatch=args.allow_base_mismatch,
+                       checkpoint_dir=args.checkpoint)
         elif args.cmd == "curve":
             run_archive_curve(args.archive, args.out, every=args.every)
         else:

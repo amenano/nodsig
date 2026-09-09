@@ -33,11 +33,17 @@ The three ideas it rests on (see the manual for the full story):
    up to height H, reuse is AT LEAST X BTC"), and the sequence of
    checkpoints IS the published curve.
 
-Two subcommands:
+Four subcommands:
 
     prepare  — one-time: distill the current "behind hash" locks (with
                their coin amounts) from a dumptxoutset snapshot into
-               sorted binary files. Runs offline, no node needed.
+               sorted binary files, sealed as `locks-v2` with the
+               snapshot's height (from a header archive, or declared
+               and checked by the first consumer that sees the block).
+               Runs offline, no node needed.
+
+    verify   — the shared audit over a lock set: every file against
+               the manifest, the fingerprint recomputed.
 
     scan     — the long run: fetch raw blocks from the node (batched
                JSON-RPC, or the binary REST interface with `--rest`,
@@ -81,6 +87,9 @@ import urllib.request
 from array import array
 
 from nodsig import blockparse
+from nodsig import curve as cv
+from nodsig.artifact import (WallClock, identity_fingerprint, make_identity,
+                             producer, seal_manifest, verify_sealed)
 from nodsig.keyforms import looks_like_key
 from nodsig.nonces import _taproot_slots as nonces_taproot_slots
 from nodsig.progress import Pace
@@ -97,7 +106,7 @@ from nodsig.hashing import hash160, warn_if_slow_ripemd160
 
 # Atomic state/checkpoint writes (tmp + rename) come from the I/O kernel.
 from nodsig.recio import (IO_CHUNK, atomic_json, budgeted_slab,
-                          durable_replace, locked, read_slabs)
+                          durable_replace, locked, read_json, read_slabs)
 
 # Distribution statistics (order stats, Gini, Lorenz, histogram) shared
 # with reveal_archive and curve_deltas: one implementation, so a median
@@ -155,6 +164,33 @@ MANIFEST_NAME = "manifest.json"
 STATE_NAME = "state.json"
 CURVE_NAME = "curve.csv"
 SAT = 100_000_000
+
+# The five small formats of this road (docs/formats/ReuseScan-v2.md).
+LOCKS_TAG = "locks-v2"          # the lock set, sealed with the snapshot's height
+STATE_TAG = "reuse-scan-v2"     # the checkpoint state
+HITS_TAG = "reuse-hits-v2"      # the identity of a burnt set
+STATS_TAG = "reuse-stats-v2"    # the JSON of `reuse stats`
+
+
+def _lock_file(t):
+    return f"locks_{t}.bin"
+
+
+def locks_types(manifest):
+    return manifest["build"]["types"]
+
+
+def locks_height(manifest):
+    """The height of the snapshot's block: the set AFTER that block."""
+    return manifest["identity"]["coverage"]["to"]
+
+
+def locks_base_hash(manifest):
+    return manifest["build"]["base_hash"]
+
+
+def _perimeter(faces, cosigners):
+    return {"faces": bool(faces), "cosigners": bool(cosigners)}
 
 
 def looks_like_pubkey(item):
@@ -216,7 +252,8 @@ def _snapshot_locks(path):
                 # p2tr/multisig/other: exposed or out of scope, skip
 
 
-def run_prepare(snapshot_path, out_dir, chunk_records=8_000_000):
+def run_prepare(snapshot_path, out_dir, chunk_records=8_000_000,
+                headers_dir=None, height=None):
     """Build, per lock type, a sorted deduplicated binary file of
     records [lock_hash | 8-byte little-endian satoshi total].
 
@@ -229,7 +266,24 @@ def run_prepare(snapshot_path, out_dir, chunk_records=8_000_000):
     full list would not fit comfortably in memory as Python objects.
     `chunk_records` bounds how many records are held before flushing a
     sorted run.
+
+    The snapshot names its base block by hash and not by height, and
+    every reuse figure is defined by that height as much as by the
+    archive's. It comes from one of two places, and the manifest says
+    which: `headers_dir`, a sealed header archive scanned for the record
+    whose block id is the base hash (seconds, offline, verified); or
+    `height`, the number `dumptxoutset` prints, taken as a claim that
+    the first consumer to see the block confronts (`reuse scan` when it
+    meets it, `derive` when the archive's tip is it). Without either
+    there is no lock set: a manifest without the height is exactly the
+    defect this format retired. No node is asked here, ever.
     """
+    if (headers_dir is None) == (height is None):
+        raise ScanError("the snapshot's height comes from --headers (a "
+                        "sealed header archive, verified) or from --height "
+                        "(the number dumptxoutset printed, checked later): "
+                        "give exactly one of the two")
+    clock = WallClock("prepare")
     os.makedirs(out_dir, exist_ok=True)
     buffers = {t: [] for t in LOCK_TYPES}
     run_files = {t: [] for t in LOCK_TYPES}
@@ -257,6 +311,13 @@ def run_prepare(snapshot_path, out_dir, chunk_records=8_000_000):
             base_hash, declared = payload, sat
             print(f"snapshot base block: {base_hash}")
             print(f"declared entries:    {declared:,}")
+            if headers_dir is not None:
+                height = _height_of_hash(headers_dir, base_hash)
+                print(f"snapshot height:     {height:,} (from the header "
+                      "archive)")
+            else:
+                print(f"snapshot height:     {height:,} (declared; the "
+                      "first consumer to see the block checks it)")
             continue
         buffers[kind].append((bytes(payload), sat))
         buffered += 1
@@ -277,7 +338,8 @@ def run_prepare(snapshot_path, out_dir, chunk_records=8_000_000):
     # Merge the sorted runs per type, summing the amounts of equal
     # hashes: heapq.merge streams them in order, so equal hashes arrive
     # adjacent and the group sum is a simple look-behind.
-    manifest = {"format": "locks-v1", "base_hash": base_hash, "types": {}}
+    types = {}
+    files = []
     consumed = []
     for t in TYPE_ORDER:
         width = LOCK_TYPES[t]
@@ -325,15 +387,42 @@ def run_prepare(snapshot_path, out_dir, chunk_records=8_000_000):
             if buf:
                 out.write(buf)
         consumed.extend(run_files[t])
-        manifest["types"][t] = {"records": records, "satoshis": total_sat,
-                                "sha256": digest.hexdigest()}
+        types[t] = {"records": records, "satoshis": total_sat,
+                    "sha256": digest.hexdigest()}
+        files.append((_lock_file(t), digest.hexdigest()))
         print(f"{t:<8} {records:>12,} locks  "
               f"{total_sat / SAT:>20,.8f} BTC")
 
+    # The identity: the four files and the one moment they describe,
+    # `coverage {S, S}`, the set AFTER block S. The base hash, the
+    # counts and the totals are declared in `build`: the hash is a
+    # claim the block confirms, the numbers are recomputable.
+    identity = make_identity(LOCKS_TAG, height, height, files)
+    manifest = seal_manifest(LOCKS_TAG, identity, {
+        "producer": producer(),
+        "seconds": clock.stamp(),
+        "wall": clock.wall(),
+        "parent": None,
+        "height_source": "headers" if headers_dir is not None else "argument",
+        "base_hash": base_hash,
+        "snapshot_entries": declared,
+        "types": types,
+        "files": {name: {"file": name, "sha256": sha,
+                         "records": types[t]["records"]}
+                  for t, (name, sha) in zip(TYPE_ORDER, files)},
+        "caches": {},
+        "reconstruction": (
+            "every unspent output of a behind-hash type (p2pkh, p2sh, "
+            "p2wpkh, p2wsh) in the dumptxoutset snapshot, keyed by its "
+            "lock hash with its amounts summed, one sorted file per type; "
+            "the identity is sealed by the shared recipe in "
+            "docs/contracts/Artifact.md with coverage {S, S}"),
+    })
     # The manifest first, the runs after: a kill during the write left
     # a truncated manifest under its final name beside complete files,
     # and the runs it would have taken to redo were already gone.
     atomic_json(os.path.join(out_dir, MANIFEST_NAME), manifest)
+    print(f"fingerprint: {manifest['fingerprint']}")
     for p in consumed:
         os.remove(p)
     print(f"locks written to {out_dir} "
@@ -343,6 +432,31 @@ def run_prepare(snapshot_path, out_dir, chunk_records=8_000_000):
           "sha256, which every reader checks before burning a single "
           "lock: move or truncate one of these files and the next run "
           "refuses it instead of scanning against a shorter set.")
+    return manifest["fingerprint"]
+
+
+def _height_of_hash(headers_dir, base_hash):
+    """The height whose block id is `base_hash`, out of a header archive:
+    one sequential pass over 88-byte records, a few seconds at chain
+    scale, and a loud refusal when the block is not there."""
+    for h, rec in headers.iter_records(headers_dir):
+        if blockparse.hash_hex(rec["hash"]) == base_hash:
+            return h
+    raise ScanError(
+        f"the header archive does not hold block {base_hash}: the snapshot "
+        "was taken past its tip, or on another chain")
+
+
+def run_verify_locks(locks_dir):
+    """The shared audit over a lock set: the four files against the
+    manifest, the fingerprint recomputed from what is on disk."""
+    manifest = _load_manifest(locks_dir)
+    verify_sealed(locks_dir, manifest, LOCKS_TAG, ScanError,
+                  fp_order=[_lock_file(t) for t in TYPE_ORDER])
+    print(f"ok  {LOCKS_TAG}: the set after height {locks_height(manifest):,}, "
+          f"block {locks_base_hash(manifest)} (height from "
+          f"{manifest['build']['height_source']})")
+    return manifest["fingerprint"]
 
 
 # ---------------------------------------------------------------------------
@@ -986,31 +1100,43 @@ class BlockFetcher:
 # scan — the long run
 # ---------------------------------------------------------------------------
 
-def _fingerprint(locks):
-    """Canonical fingerprint of the current result.
-
-    sha256 over: a format tag, then for each type in fixed order its
-    name and the sha256 of its hit bitmap. The bitmap is defined over
-    the sorted locks file, so: same snapshot + same scanned range ⇒
-    same fingerprint, on anyone's machine. Publishing it at every
-    checkpoint lets a third party compare with us at ANY intermediate
-    height, not only at the end — the level-3 twin of muhash.
-    """
-    return fingerprint_of_bitmaps({t: locks[t].hits for t in TYPE_ORDER})
+def perimeter_digest(perimeter):
+    """The perimeter as the digest of one canonical line, so that it can
+    enter the identity of a burnt set as a logical file: a reader who
+    recomputes the fingerprint from the recipe alone hashes the same
+    seventeen characters."""
+    text = (f"faces={int(bool(perimeter['faces']))},"
+            f"cosigners={int(bool(perimeter['cosigners']))}")
+    return hashlib.sha256(text.encode()).hexdigest()
 
 
-def fingerprint_of_bitmaps(bitmaps):
-    """The rule above, over bare bitmaps.
+def fingerprint_of_bitmaps(bitmaps, locks_fp, height, perimeter):
+    """The identity of a burnt set, `reuse-hits-v2`, by the shared
+    recipe: coverage {H, H}, and as logical files the locks it was burnt
+    against (their fingerprint), the perimeter it was burnt under (the
+    digest above), then the four bitmaps in TYPE_ORDER. Same snapshot,
+    same height, same perimeter, same scanned range: same fingerprint,
+    on anyone's machine; and a reader holding only the hex holds the
+    moment, the locks and the reading it describes. The previous
+    identity hashed the bitmaps alone, so one hex string named the same
+    answer at another height, against another lock file by chance, and
+    two incomparable answers under two perimeters.
 
     A curve row has to fingerprint the state as it was at ITS height,
     which is a bitmap nobody holds in a LockSet: it is replayed. The
     definition lives here once so the replayed rows and the final one
     cannot drift apart."""
-    d = hashlib.sha256(b"reuse-hits-v1")
-    for t in TYPE_ORDER:
-        d.update(t.encode())
-        d.update(hashlib.sha256(bytes(bitmaps[t])).digest())
-    return d.hexdigest()
+    files = [("locks", locks_fp), ("perimeter", perimeter_digest(perimeter))]
+    files += [(f"hits_{t}", hashlib.sha256(bytes(bitmaps[t])).hexdigest())
+              for t in TYPE_ORDER]
+    return identity_fingerprint(make_identity(HITS_TAG, height, height,
+                                              files))
+
+
+def _fingerprint(locks, locks_fp, height, perimeter):
+    """The rule above, over the current bitmaps of the LockSets."""
+    return fingerprint_of_bitmaps({t: locks[t].hits for t in TYPE_ORDER},
+                                  locks_fp, height, perimeter)
 
 
 def resolve_bitmaps(checkpoint_dir, state):
@@ -1032,6 +1158,11 @@ def resolve_bitmaps(checkpoint_dir, state):
     Shared by the scan's resume and by `stats`: the second used to read
     the promoted set alone and call the first case corruption, healable
     only by a scan with a node behind it."""
+    if state.get("format") != STATE_TAG:
+        raise ScanError(f"the checkpoint state says {state.get('format')!r}, "
+                        f"this build reads {STATE_TAG!r}: a checkpoint of "
+                        "an earlier format is read with the release that "
+                        "wrote it")
     finals = {t: os.path.join(checkpoint_dir, f"hits_{t}.bin")
               for t in TYPE_ORDER}
     pendings = {t: finals[t] + ".new" for t in TYPE_ORDER}
@@ -1045,8 +1176,12 @@ def resolve_bitmaps(checkpoint_dir, state):
                 out[t] = bytearray(f.read())
         return out
 
+    def fp_of(hits):
+        return fingerprint_of_bitmaps(hits, state["locks"],
+                                      state["last_height"], state["perimeter"])
+
     hits = read(prefer_pending=True)
-    if fingerprint_of_bitmaps(hits) == state["fingerprint"]:
+    if fp_of(hits) == state["fingerprint"]:
         for t in TYPE_ORDER:
             if os.path.exists(pendings[t]):
                 durable_replace(pendings[t], finals[t])
@@ -1055,7 +1190,7 @@ def resolve_bitmaps(checkpoint_dir, state):
         raise ScanError("checkpoint fingerprint mismatch: bitmaps on "
                         "disk do not match the recorded state")
     hits = read(prefer_pending=False)
-    if fingerprint_of_bitmaps(hits) != state["fingerprint"]:
+    if fp_of(hits) != state["fingerprint"]:
         raise ScanError("checkpoint fingerprint mismatch: neither the "
                         "committed bitmaps nor the pending ones match "
                         "the recorded state")
@@ -1065,52 +1200,99 @@ def resolve_bitmaps(checkpoint_dir, state):
     return hits
 
 
-def curve_row(height, totals, fingerprint):
-    """One line of curve.csv, from what the state carries for a
-    height: the same text whether written at the checkpoint or replayed
-    from the state on a resume."""
-    return (f"{height},"
-            + ",".join(f"{totals[t]['hits']},{totals[t]['satoshis']}"
-                       for t in TYPE_ORDER)
-            + f",{fingerprint}\n")
+def write_checkpoint(checkpoint_dir, locks, manifest, perimeter, height,
+                     block_hash_display, base_seen_at, stats, road="scan"):
+    """The bitmaps and the state, committed in two phases, because the
+    state's fingerprint covers the bitmaps: replacing them in place and
+    THEN writing the state would leave a crash in between with new
+    bitmaps against an old state — a mismatch with nothing left to fall
+    back on, and the whole run to redo. So the new bitmaps land under a
+    pending `.new` name (complete or absent: they go through a `.tmp`
+    and a rename), the state commits against them, and only then are
+    they promoted over the old set. Whichever write the crash cuts, one
+    full set still matches the state on disk; `resolve_bitmaps` knows
+    how to pick it.
+
+    Shared by the scan and by `derive --checkpoint`: the second road
+    writes what it burnt while walking the chain, the first what it
+    burnt while reading the archive, and `stats` reads either."""
+    os.makedirs(checkpoint_dir, exist_ok=True)
+    for t in TYPE_ORDER:
+        tmp = os.path.join(checkpoint_dir, f"hits_{t}.bin.tmp")
+        with open(tmp, "wb") as f:
+            f.write(bytes(locks[t].hits))
+        durable_replace(tmp, os.path.join(checkpoint_dir, f"hits_{t}.bin.new"))
+    fp = _fingerprint(locks, manifest["fingerprint"], height, perimeter)
+    totals = {t: {"hits": locks[t].hit_count, "satoshis": locks[t].hit_sats}
+              for t in TYPE_ORDER}
+    atomic_json(os.path.join(checkpoint_dir, STATE_NAME), {
+        "format": STATE_TAG,
+        "road": road,
+        "locks": manifest["fingerprint"],
+        "locks_height": locks_height(manifest),
+        "perimeter": perimeter,
+        "last_height": height,
+        "last_block_hash": block_hash_display,
+        "base_hash": locks_base_hash(manifest),
+        "base_seen_at": base_seen_at,
+        "stats": stats,
+        "totals": totals,
+        "fingerprint": fp,
+    })
+    for t in TYPE_ORDER:
+        durable_replace(os.path.join(checkpoint_dir, f"hits_{t}.bin.new"),
+                        os.path.join(checkpoint_dir, f"hits_{t}.bin"))
+    return fp, totals
 
 
-def _heal_curve(curve_path, state):
+def _seal_curve(curve_path, state, every, road="scan"):
+    """The sidecar beside the scan's curve, rewritten at every checkpoint
+    beside the state (the CSV is a few KB): the road, the state as
+    parent, the grid, the locks and the perimeter in `build`."""
+    rows = sum(1 for line in open(curve_path)
+               if line.split(",", 1)[0].isdigit())
+    return cv.seal(curve_path, cv.REUSE_TAG, state["last_height"], {
+        "road": road,
+        "parent": {"format": STATE_TAG, "fingerprint": state["fingerprint"]},
+        "grid": every,
+        "locks": state["locks"],
+        "perimeter": state["perimeter"],
+        "rows": rows,
+    })
+
+
+def _heal_curve(curve_path, state, every):
     """The curve row is the last write of a checkpoint, after the state
     and the promotion: a kill in between leaves a state at H and no row
     for H, and `curve deltas` would fold the hole into the next
     interval without a word. The state carries everything the row
-    needs, so a resume writes it back."""
-    last = None
-    if os.path.exists(curve_path):
-        with open(curve_path) as f:
-            for line in f:
-                head = line.split(",", 1)[0]
-                if head.isdigit():
-                    last = int(head)
+    needs, so a resume writes it back, and the sidecar with it."""
+    last = cv.last_height(curve_path)
     if last is not None and last >= state["last_height"]:
         return
-    new_curve = not os.path.exists(curve_path)
-    with open(curve_path, "a") as f:
-        if new_curve:
-            f.write("height," + ",".join(
-                f"{t}_hits,{t}_satoshis" for t in TYPE_ORDER)
-                + ",fingerprint\n")
-        f.write(curve_row(state["last_height"], state["totals"],
-                          state["fingerprint"]))
+    cv.append_row(curve_path, cv.reuse_header(TYPE_ORDER),
+                  cv.reuse_row(state["last_height"], state["totals"],
+                               state["fingerprint"], TYPE_ORDER))
+    _seal_curve(curve_path, state, every)
     print(f"  curve: row for height {state['last_height']:,} written "
           "from the state (a checkpoint lost it)", file=sys.stderr)
 
+
 def _load_manifest(locks_dir):
     path = os.path.join(locks_dir, MANIFEST_NAME)
+    if not os.path.exists(path):
+        raise ScanError(f"no {MANIFEST_NAME} in {locks_dir}: not a lock set "
+                        "(run `reuse prepare`)")
     try:
-        with open(path) as f:
-            manifest = json.load(f)
-    except (OSError, json.JSONDecodeError) as e:
-        raise ScanError(f"{path}: cannot read the locks manifest ({e}): "
-                        "run `reuse prepare` again") from None
-    if manifest.get("format") != "locks-v1":
-        raise ScanError("unknown locks manifest format")
+        manifest = read_json(path, ScanError)
+    except ScanError as e:
+        raise ScanError(f"{e}: run `reuse prepare` again") from None
+    if manifest.get("format") != LOCKS_TAG:
+        raise ScanError(
+            f"the locks manifest says {manifest.get('format')!r}, this "
+            f"build reads {LOCKS_TAG!r}: a lock set of an earlier format is "
+            "read with the release that wrote it, or rebuilt with `reuse "
+            "prepare` from the same snapshot (minutes)")
     return manifest
 
 
@@ -1132,6 +1314,8 @@ def run_scan(locks_dir, rpc_url, auth, end_height, checkpoint_dir,
     every row is a valid lower bound on its own.
     """
     manifest = _load_manifest(locks_dir)
+    perimeter = _perimeter(faces, cosigners)
+    base_hash = locks_base_hash(manifest)
     warn_if_slow_ripemd160("this scan")
     client = client or RpcClient(rpc_url, auth)
     os.makedirs(checkpoint_dir, exist_ok=True)
@@ -1142,10 +1326,11 @@ def run_scan(locks_dir, rpc_url, auth, end_height, checkpoint_dir,
           "(blob + first-bytes index; a few minutes)…", file=sys.stderr)
     locks = {}
     for t in TYPE_ORDER:
-        locks[t] = LockSet(os.path.join(locks_dir, f"locks_{t}.bin"),
+        entry = locks_types(manifest)[t]
+        locks[t] = LockSet(os.path.join(locks_dir, _lock_file(t)),
                            LOCK_TYPES[t],
-                           expect_records=manifest["types"][t]["records"],
-                           expect_sha=manifest["types"][t]["sha256"])
+                           expect_records=entry["records"],
+                           expect_sha=entry["sha256"])
         print(f"  {t:<8} {locks[t].count:>12,} locks", file=sys.stderr)
 
     stats = {"malformed_scriptsig": 0, "malformed_inner_script": 0,
@@ -1156,11 +1341,18 @@ def run_scan(locks_dir, rpc_url, auth, end_height, checkpoint_dir,
     base_seen_at = None                   # height of the snapshot's block
     prev_hash = None                      # serialized order, None = unchecked
     if os.path.exists(state_path):
-        with open(state_path) as f:
-            state = json.load(f)
-        if state["locks_manifest"] != manifest["types"]:
+        state = read_json(state_path, ScanError)
+        if state.get("format") != STATE_TAG:
+            raise ScanError(
+                f"the checkpoint state says {state.get('format')!r}, this "
+                f"build writes {STATE_TAG!r}: a checkpoint of an earlier "
+                "format is resumed with the release that wrote it, or the "
+                "scan starts over in a fresh directory")
+        if state["locks"] != manifest["fingerprint"]:
             raise ScanError("checkpoint was made against DIFFERENT locks "
-                            "files: refusing to mix results")
+                            f"(fingerprint {state['locks'][:16]}… against "
+                            f"{manifest['fingerprint'][:16]}…): refusing "
+                            "to mix results")
         # The perimeter is part of what a bitmap MEANS: a burn made
         # under the wide reading and one made under the narrow one are
         # different claims, and a bit carries no record of which rule
@@ -1169,8 +1361,8 @@ def run_scan(locks_dir, rpc_url, auth, end_height, checkpoint_dir,
         # all — and nothing downstream could say so. A checkpoint from
         # before this field is read as the default perimeter, which is
         # what those runs used.
-        was = state.get("perimeter") or {"faces": True, "cosigners": True}
-        if was != {"faces": bool(faces), "cosigners": bool(cosigners)}:
+        was = state["perimeter"]
+        if was != perimeter:
             raise ScanError(
                 f"this checkpoint was made with faces="
                 f"{'on' if was['faces'] else 'off'}, cosigners="
@@ -1200,7 +1392,7 @@ def run_scan(locks_dir, rpc_url, auth, end_height, checkpoint_dir,
                 f"{state['last_height']:,}, above --end {end_height:,}: a "
                 "reuse scan only ever grows; scan into a fresh directory "
                 "for a shorter range")
-        _heal_curve(curve_path, state)
+        _heal_curve(curve_path, state, checkpoint_every)
         print(f"resuming from height {start_height} "
               f"(fingerprint verified)", file=sys.stderr)
 
@@ -1245,50 +1437,15 @@ def run_scan(locks_dir, rpc_url, auth, end_height, checkpoint_dir,
             emitter.checkpoint(height, block_hash_display)
         if header_emitter:
             header_emitter.checkpoint(height, block_hash_display)
-        # Two-phase commit, because the state's fingerprint covers the
-        # bitmaps: replacing them in place and THEN writing the state
-        # would leave a crash in between with new bitmaps against an old
-        # state — a mismatch with nothing left to fall back on, and the
-        # whole run to redo. So the new bitmaps land under a pending
-        # `.new` name (complete or absent: they go through a `.tmp` and
-        # a rename), the state commits against them, and only then are
-        # they promoted over the old set. Whichever write the crash
-        # cuts, one full set still matches the state on disk; the
-        # resume path above knows how to pick it.
-        for t in TYPE_ORDER:
-            tmp = os.path.join(checkpoint_dir, f"hits_{t}.bin.tmp")
-            with open(tmp, "wb") as f:
-                f.write(bytes(locks[t].hits))
-            durable_replace(tmp, os.path.join(checkpoint_dir,
-                                         f"hits_{t}.bin.new"))
-        fp = _fingerprint(locks)
-        atomic_json(state_path, {
-            "format": "reuse-scan-v1",
-            "locks_manifest": manifest["types"],
-            "perimeter": {"faces": bool(faces),
-                          "cosigners": bool(cosigners)},
-            "last_height": height,
-            "last_block_hash": block_hash_display,
-            "base_hash": manifest["base_hash"],
-            "base_seen_at": base_seen_at,
-            "stats": stats,
-            "totals": {t: {"hits": locks[t].hit_count,
-                           "satoshis": locks[t].hit_sats}
-                       for t in TYPE_ORDER},
-            "fingerprint": fp,
-        })
-        for t in TYPE_ORDER:
-            durable_replace(os.path.join(checkpoint_dir, f"hits_{t}.bin.new"),
-                       os.path.join(checkpoint_dir, f"hits_{t}.bin"))
-        new_curve = not os.path.exists(curve_path)
-        with open(curve_path, "a") as f:
-            if new_curve:
-                f.write("height," + ",".join(
-                    f"{t}_hits,{t}_satoshis" for t in TYPE_ORDER)
-                    + ",fingerprint\n")
-            f.write(curve_row(height, {t: {"hits": locks[t].hit_count,
-                                            "satoshis": locks[t].hit_sats}
-                                        for t in TYPE_ORDER}, fp))
+        fp, totals = write_checkpoint(checkpoint_dir, locks, manifest,
+                                      perimeter, height, block_hash_display,
+                                      base_seen_at, stats)
+        # The curve row last, and the sidecar with it: a kill before the
+        # row is healed from the state on resume.
+        cv.append_row(curve_path, cv.reuse_header(TYPE_ORDER),
+                      cv.reuse_row(height, totals, fp, TYPE_ORDER))
+        _seal_curve(curve_path, read_json(state_path, ScanError),
+                    checkpoint_every)
         return fp
 
     # --- The loop ---
@@ -1312,8 +1469,20 @@ def run_scan(locks_dir, rpc_url, auth, end_height, checkpoint_dir,
                 raise ScanError(f"height {h}: prev_hash does not link to "
                                 f"height {h - 1} (reorg? wrong node?)")
             prev_hash = block.header.hash
-            if blockparse.hash_hex(prev_hash) == manifest["base_hash"]:
+            if blockparse.hash_hex(prev_hash) == base_hash:
                 base_seen_at = h
+                if h != locks_height(manifest):
+                    # The height was a claim (`prepare --height`) and
+                    # the chain just contradicted it: every figure of
+                    # this road is defined by that height, so nothing
+                    # is written under a wrong one.
+                    raise ScanError(
+                        f"the locks manifest puts the snapshot's block "
+                        f"{base_hash[:16]}… at height "
+                        f"{locks_height(manifest):,} and the chain shows "
+                        f"it at {h:,}: the height given to `prepare` was "
+                        "wrong; rebuild the locks with --headers, or with "
+                        "the right --height")
             if header_emitter:
                 header_emitter.add_block(h, block)
             if h < start_height:
@@ -1338,16 +1507,21 @@ def run_scan(locks_dir, rpc_url, auth, end_height, checkpoint_dir,
                                                   cosigners, stats):
                         locks[t].burn(key)
 
-        pace.add(len(window))
+            # On the grid exactly, block by block, and not at the end
+            # of whichever download window reached it: the rows of
+            # this curve must land where `derive --curve` lands them,
+            # whatever the batch size, and on the published chain they
+            # did only because 10,000 happened to be a multiple of 25.
+            if h % checkpoint_every == 0 or h == end_height:
+                fp = checkpoint(h, blockparse.hash_hex(prev_hash))
+                burnt = sum(locks[t].hit_sats for t in TYPE_ORDER)
+                print(f"checkpoint @ {h:>7,}: "
+                      f"reuse ≥ {burnt / SAT:,.2f} BTC "
+                      f"({sum(locks[t].hit_count for t in TYPE_ORDER):,} "
+                      f"locks) | {pace.text(h)} | {fp[:16]}…",
+                      file=sys.stderr)
 
-        if (window[-1] % checkpoint_every < batch_size
-                or window[-1] == end_height):
-            fp = checkpoint(window[-1], blockparse.hash_hex(prev_hash))
-            burnt = sum(locks[t].hit_sats for t in TYPE_ORDER)
-            print(f"checkpoint @ {window[-1]:>7,}: "
-                  f"reuse ≥ {burnt / SAT:,.2f} BTC "
-                  f"({sum(locks[t].hit_count for t in TYPE_ORDER):,} locks) "
-                  f"| {pace.text(window[-1])} | {fp[:16]}…", file=sys.stderr)
+        pace.add(len(window))
 
     # The locks were photographed at ONE block. A scan that stops short
     # of it counts less than that moment and says so; a scan that runs
@@ -1362,7 +1536,7 @@ def run_scan(locks_dir, rpc_url, auth, end_height, checkpoint_dir,
         if not allow_base_mismatch:
             raise ScanError(
                 f"the locks were photographed at block "
-                f"{manifest['base_hash']}, height {base_seen_at:,}, and "
+                f"{base_hash}, height {base_seen_at:,}, and "
                 f"this scan ran to {end_height:,}: every lock spent in "
                 "between would be counted as reused coin the snapshot "
                 "no longer holds — scan to the snapshot's height, or "
@@ -1373,8 +1547,12 @@ def run_scan(locks_dir, rpc_url, auth, end_height, checkpoint_dir,
                      "snapshot's moment")
 
     # --- Final summary: the numbers AND the declared blind spots ---
+    final_fp = _fingerprint(locks, manifest["fingerprint"], end_height,
+                            perimeter)
     print(f"\n=== Reuse scan up to height {end_height} "
-          f"(locks from snapshot {manifest['base_hash'][:16]}…) ===")
+          f"(locks from snapshot {base_hash[:16]}… at height "
+          f"{locks_height(manifest):,}, locks {manifest['fingerprint'][:16]}…) "
+          "===")
     print(f"snapshot block: {base_note}")
     print(f"{'type':<8} {'locks':>13} {'burnt':>12} "
           f"{'burnt BTC':>20}")
@@ -1386,7 +1564,7 @@ def run_scan(locks_dir, rpc_url, auth, end_height, checkpoint_dir,
     print(f"{'TOTAL':<8} {'':>13} "
           f"{sum(locks[t].hit_count for t in TYPE_ORDER):>12,} "
           f"{total / SAT:>20,.8f}")
-    print(f"\nfingerprint: {_fingerprint(locks)}")
+    print(f"\nfingerprint: {final_fp}")
     print(f"perimeter: faces={'on' if faces else 'off'}, "
           f"cosigners={'on' if cosigners else 'off'}; "
           f"malformed scriptSigs: {stats['malformed_scriptsig']}, "
@@ -1397,7 +1575,7 @@ def run_scan(locks_dir, rpc_url, auth, end_height, checkpoint_dir,
           "HIGHER than this count, never lower.")
     if graph_digest_dir:
         emitter.report()
-    return _fingerprint(locks)
+    return final_fp
 
 
 # ---------------------------------------------------------------------------
@@ -1457,9 +1635,11 @@ def _load_exposed_sats(locks_dir, checkpoint_dir):
     unsorted array('q') of the satoshi totals of that type's burnt locks.
     """
     manifest = _load_manifest(locks_dir)
-    with open(os.path.join(checkpoint_dir, STATE_NAME)) as f:
-        state = json.load(f)
-    if state["locks_manifest"] != manifest["types"]:
+    state = read_json(os.path.join(checkpoint_dir, STATE_NAME), ScanError)
+    if state.get("format") != STATE_TAG:
+        raise ScanError(f"the checkpoint state says {state.get('format')!r}, "
+                        f"this build reads {STATE_TAG!r}")
+    if state["locks"] != manifest["fingerprint"]:
         raise ScanError("checkpoint was made against DIFFERENT locks "
                         "files: refusing to compute stats on a mix")
 
@@ -1471,13 +1651,13 @@ def _load_exposed_sats(locks_dir, checkpoint_dir):
     for t in TYPE_ORDER:
         width = LOCK_TYPES[t]
         rec = width + 8
-        path = os.path.join(locks_dir, f"locks_{t}.bin")
+        path = os.path.join(locks_dir, _lock_file(t))
         size = os.path.getsize(path)
         if size % rec:
             raise ScanError(f"{path}: size {size} not a multiple of "
                             f"record width {rec}")
         count = size // rec
-        if count != manifest["types"][t]["records"]:
+        if count != locks_types(manifest)[t]["records"]:
             raise ScanError(f"{path}: {count} records disagree with the "
                             "manifest — wrong or truncated locks file")
         h = hits[t]
@@ -1501,7 +1681,7 @@ def _load_exposed_sats(locks_dir, checkpoint_dir):
                         o = k * rec + width
                         append(int.from_bytes(buf[o:o + 8], "little"))
                 base += n
-        if digest.hexdigest() != manifest["types"][t]["sha256"]:
+        if digest.hexdigest() != locks_types(manifest)[t]["sha256"]:
             raise ScanError(f"{path}: content does not match the sha256 "
                             "the manifest recorded at prepare: corrupted "
                             "locks file")
@@ -1512,7 +1692,7 @@ def _load_exposed_sats(locks_dir, checkpoint_dir):
 # The distribution maths live in diststats (shared with reveal_archive
 # and curve_deltas). Here we only adapt the generic order-statistics
 # bundle to this tool's satoshi-named schema, so the printed table and
-# the reuse-stats-v1 JSON keep their field names.
+# the reuse-stats-v2 JSON keep their field names.
 def _stat_sat(asc):
     d = ds.order_stats(asc)
     return {
@@ -1559,9 +1739,13 @@ def run_stats(locks_dir, checkpoint_dir, thresholds=(10, 100),
         return s / SAT
 
     print(f"=== Exposed-lock value distribution "
-          f"(snapshot {manifest['base_hash'][:16]}…, "
-          f"height ≤ {state['last_height']:,}) ===")
+          f"(snapshot {locks_base_hash(manifest)[:16]}… at height "
+          f"{locks_height(manifest):,}, scanned ≤ {state['last_height']:,}, "
+          f"faces={'on' if state['perimeter']['faces'] else 'off'}, "
+          f"cosigners={'on' if state['perimeter']['cosigners'] else 'off'}) "
+          "===")
     print(f"fingerprint: {state['fingerprint']}")
+    print(f"locks:       {manifest['fingerprint']}")
     if "base_seen_at" in state:
         seen = state["base_seen_at"]
         print("snapshot block: "
@@ -1643,10 +1827,13 @@ def run_stats(locks_dir, checkpoint_dir, thresholds=(10, 100),
 
     if json_out:
         obj = {
-            "format": "reuse-stats-v1",
-            "base_hash": manifest["base_hash"],
-            "last_height": state["last_height"],
+            "format": STATS_TAG,
             "fingerprint": state["fingerprint"],
+            "locks": manifest["fingerprint"],
+            "base_hash": locks_base_hash(manifest),
+            "locks_height": locks_height(manifest),
+            "height": state["last_height"],
+            "perimeter": state["perimeter"],
             "note": "a lock = one unique scriptPubKey with its total; "
                     "lock != entity",
             "thresholds_btc": list(thresholds),
@@ -1834,6 +2021,19 @@ def main(argv=None):
     pp.add_argument("--out", required=True, help="output directory")
     pp.add_argument("--chunk-records", type=int, default=8_000_000,
                     help="records per sorted run (memory knob)")
+    pp.add_argument("--headers",
+                    help="a sealed header archive: the snapshot's height "
+                         "is read off it, verified (one of --headers and "
+                         "--height is required)")
+    pp.add_argument("--height", type=int,
+                    help="the height dumptxoutset printed: declared, and "
+                         "checked by the first consumer that sees the "
+                         "block")
+
+    pv = sub.add_parser("verify", help="audit a lock set against its "
+                                       "manifest")
+    pv.add_argument("--locks", required=True,
+                    help="directory produced by prepare")
 
     ps = sub.add_parser("scan", help="run the history scan over RPC")
     ps.add_argument("--locks", required=True,
@@ -1878,12 +2078,16 @@ def main(argv=None):
                          "0.001…1000)")
     pt.add_argument("--json",
                     help="also write the numbers to this file "
-                         "(reuse-stats-v1, pinned to the fingerprint)")
+                         "(reuse-stats-v2, pinned to the fingerprint, the "
+                         "locks, the height and the perimeter)")
 
     args = p.parse_args(argv)
     try:
         if args.cmd == "prepare":
-            run_prepare(args.snapshot, args.out, args.chunk_records)
+            run_prepare(args.snapshot, args.out, args.chunk_records,
+                        headers_dir=args.headers, height=args.height)
+        elif args.cmd == "verify":
+            run_verify_locks(args.locks)
         elif args.cmd == "stats":
             thr = tuple(float(x) for x in args.thresholds.split(",")
                         if x.strip())

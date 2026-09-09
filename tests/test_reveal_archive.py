@@ -61,6 +61,7 @@ from nodsig import blockparse as bp
 from nodsig.artifact import (identity_fingerprint, sha_and_ladder,
                              statement_digest)
 from nodsig import reuse_scan as rs
+from nodsig import curve as cv
 from nodsig import reveal_archive as ra
 import test_blockparse as tbw           # block/tx writers
 import test_reuse_scan as trs
@@ -784,7 +785,7 @@ def test_crosscheck(tmp, blocks, locks_dir, archive):
     # refused before any fingerprint is compared.
     with open(os.path.join(tmp, "cp_full", rs.STATE_NAME)) as f:
         state = json.load(f)
-    state["locks_manifest"]["p2pkh"]["records"] += 1
+    state["locks"] = "0" * 64
     tampered = os.path.join(tmp, "state_other_locks.json")
     with open(tampered, "w") as f:
         json.dump(state, f)
@@ -849,7 +850,7 @@ def test_the_two_roads_meet_on_the_forms_v3_sees(tmp, blocks):
     under every perimeter."""
     base5 = os.path.join(tmp, "base5")
     os.makedirs(base5)
-    locks5 = trs.test_prepare(base5, base_hash_hex=blocks[5][0])
+    locks5 = trs.test_prepare(base5, base_hash_hex=blocks[5][0], height=5)
     server, url = trs.serve(blocks)
     archive = os.path.join(tmp, "archive_roads5")
     try:
@@ -902,12 +903,53 @@ def test_derive(tmp, blocks, locks_dir):
             check(fp_der == fp_scan,
                   f"derive ({label}): fingerprint differs from the scan")
             if full:
-                with open(curve) as f_a, \
-                     open(os.path.join(cp, rs.CURVE_NAME)) as f_b:
+                scan_curve = os.path.join(cp, rs.CURVE_NAME)
+                with open(curve) as f_a, open(scan_curve) as f_b:
                     check(f_a.read() == f_b.read(),
                           f"derive ({label}): curve differs from the scan's")
+                # The same bytes, the same sidecar fingerprint, whatever
+                # road wrote it; and the cross-check compares them too.
+                check(cv.read_meta(curve)["fingerprint"]
+                      == cv.read_meta(scan_curve)["fingerprint"],
+                      "the two roads must seal the same curve fingerprint")
+                check(cv.read_meta(curve)["build"]["road"] == "derive"
+                      and cv.read_meta(curve)["build"]["parent"] is None,
+                      "a live archive is no parent, and the road is named")
+                ra.run_crosscheck(archive, locks_dir,
+                                  reuse_state_path=os.path.join(
+                                      cp, rs.STATE_NAME),
+                                  curve_path=scan_curve)
+                tampered = os.path.join(tmp, "curve_tampered.csv")
+                shutil.copy(scan_curve, tampered)
+                shutil.copy(scan_curve + cv.META_SUFFIX,
+                            tampered + cv.META_SUFFIX)
+                with open(tampered, "a") as f:
+                    f.write("5,9,9,9,9,9,9,9,9,ff\n")
+                try:
+                    ra.run_crosscheck(archive, locks_dir,
+                                      reuse_state_path=os.path.join(
+                                          cp, rs.STATE_NAME),
+                                      curve_path=tampered)
+                    fail("a curve that changed beside its sidecar passed")
+                except (ra.ScanError, cv.CurveError):
+                    pass
         print("ok  derive: the table equals the scan's on all three "
-              "perimeters, and the curve on the full one")
+              "perimeters, and the curve on the full one, sidecar and "
+              "cross-check included")
+
+        # The twin the scan writes, from this road: bitmaps and a state
+        # `reuse stats` reads, with the scan's fingerprint.
+        cpd = os.path.join(tmp, "cp_from_derive")
+        fp_cp = ra.run_derive(archive, locks_dir, checkpoint_dir=cpd)
+        st = json.load(open(os.path.join(cpd, rs.STATE_NAME)))
+        check(st["format"] == rs.STATE_TAG and st["road"] == "derive"
+              and st["fingerprint"] == fp_cp
+              and st["fingerprint"] == json.load(open(os.path.join(
+                  tmp, "cpd_full", rs.STATE_NAME)))["fingerprint"]
+              and st["base_seen_at"] == 4,
+              f"derive --checkpoint writes the scan's twin: {st}")
+        rs.run_stats(locks_dir, cpd, thresholds=(0, 10))
+        print("ok  derive: --checkpoint writes what `reuse stats` reads")
 
         # After a merge the tiling is spent: derive burns the fused
         # base silently and must land on the same final state.
@@ -937,7 +979,7 @@ def test_derive_refuses_locks_from_another_block(tmp, blocks):
     snapshot = os.path.join(tmp, "other_moment.dat")
     foreign = os.path.join(tmp, "locks_other_moment")
     trs.build_snapshot_file(snapshot)       # default fake base hash
-    rs.run_prepare(snapshot, foreign, chunk_records=3)
+    rs.run_prepare(snapshot, foreign, chunk_records=3, height=9)
     try:
         ra.run_derive(archive, foreign)
         fail("derive accepted locks photographed at another block")
@@ -1070,11 +1112,27 @@ def test_the_archive_curve_needs_nothing_but_the_archive(tmp, blocks):
         check(total_loose == total_fused, "the totals moved across the merge")
 
         manifest = ra._load_manifest(archive)
+        # `points` counts points and not serializations: a keys record
+        # carrying UNCOMPRESSED is the 65-byte form of a point whose
+        # canonical record is counted once.
+        keys_path = os.path.join(archive, ra._cat_file(manifest, "keys"))
+        uncompressed = sum(
+            1 for _h, fl, _ht in ra._read_records(
+                keys_path, "keys", ra._cat_sha(manifest, "keys"))
+            if fl & ra.FLAG_UNCOMPRESSED)
         expected = sum(entry["records"]
-                       for entry in manifest["build"]["files"].values())
+                       for entry in manifest["build"]["files"].values()
+                       ) - uncompressed
         check(total_fused == expected,
               f"archive curve counted {total_fused} first revelations, "
-              f"the manifest holds {expected} records")
+              f"the manifest holds {expected} points and scripts")
+        head, _rows = _curve_rows(fused)
+        check(head == ["height", "points", "scripts20", "scripts32", "total"],
+              f"the archive curve names what it counts: {head}")
+        meta = cv.verify(fused, cv.ARCHIVE_TAG)
+        check(meta["build"]["parent"]["fingerprint"] == manifest["fingerprint"]
+              and meta["build"]["grid"] == 1,
+              f"the sidecar declares the archive and the grid: {meta['build']}")
 
         # Every record falls in exactly one window, so widening the grid
         # to a single window must land on the same total.
@@ -1140,7 +1198,7 @@ def test_golden_fingerprint(archive):
 def main():
     with tempfile.TemporaryDirectory() as tmp:
         blocks = trs.build_chain()
-        locks_dir = trs.test_prepare(tmp, base_hash_hex=blocks[4][0])
+        locks_dir = trs.test_prepare(tmp, base_hash_hex=blocks[4][0], height=4)
         archive = test_scan_content(tmp, blocks)
         test_scan_content_v3(tmp, blocks)
         test_stale_run_cleanup(tmp, blocks)

@@ -39,7 +39,7 @@ _ENV = {**os.environ,
 # nothing.
 PUBLIC_SURFACE = {
     "census": None,
-    "reuse": ("prepare", "scan", "stats"),
+    "reuse": ("prepare", "scan", "stats", "verify"),
     "archive": ("scan", "merge", "verify", "crosscheck", "derive", "curve",
                 "lookup"),
     "nonces": ("merge", "verify", "rewind", "groups", "lookup",

@@ -226,8 +226,15 @@ def test_the_changelog_documents_the_current_version():
 # module, each for a stated reason. Anything NOT on this list and not in the
 # format matrix is a name the documentation invented or forgot to retire.
 DOCUMENTED_ELSEWHERE = {
-    "locks-v1": "reuse_scan writes it into the locks manifest (a literal)",
-    "reuse-scan-v1": "reuse_scan writes it into the checkpoint state",
+    "locks-v2": "reuse_scan.LOCKS_TAG, the sealed lock set",
+    "reuse-scan-v2": "reuse_scan.STATE_TAG, the checkpoint state",
+    "reuse-hits-v2": "reuse_scan.HITS_TAG, the identity of a burnt set",
+    "reuse-stats-v2": "reuse_scan.STATS_TAG, the JSON of `reuse stats`",
+    "reuse-curve-v2": "curve.REUSE_TAG, the sidecar of the reuse curve",
+    "archive-curve-v2": "curve.ARCHIVE_TAG, the sidecar of the archive's curve",
+    "locks-v1": "historical: superseded by v2, named in the changelog",
+    "reuse-scan-v1": "historical: superseded by v2, named in the changelog",
+    "reuse-stats-v1": "historical: superseded by v2, named in the changelog",
     "nodsig-identity-v3": "artifact.IDENTITY_TAG, the fingerprint recipe",
     "nodsig-statement-v1": "artifact.STATEMENT_TAG",
     "graph-v1": "historical: the earlier seal, which still decodes",
@@ -249,8 +256,6 @@ DOCUMENTED_ELSEWHERE = {
     "reuse-scan-v2": "forward reference: same",
     "reuse-hits-v2": "forward reference: same",
     "reuse-stats-v2": "forward reference: same",
-    "reuse-curve-v2": "forward reference: same",
-    "archive-curve-v2": "forward reference: same",
     "derived-timeline-v2": "forward reference: same",
     "price-series-v2": "forward reference: same",
     "blockprice-v2": "forward reference: same",

@@ -82,6 +82,34 @@ class TestReadCurve(unittest.TestCase):
             os.unlink(path)
 
 
+class TestTheSidecar(unittest.TestCase):
+    """With the sidecar beside the file, the reader confronts the bytes
+    with it and knows the grid: a hole is named, a changed file is
+    named, and the grid's own tip is not a hole."""
+
+    def test_a_hole_in_the_declared_grid_is_named(self):
+        from nodsig import curve as cv
+        d = tempfile.mkdtemp()
+        path = os.path.join(d, "curve.csv")
+        with open(path, "w") as f:
+            f.write(FIXTURE)
+        cv.seal(path, cv.REUSE_TAG, 30000, {"road": "scan", "grid": 10000,
+                                            "rows": 3, "parent": None})
+        self.assertEqual([h for h, _ in curve_deltas.read_curve(path)],
+                         [10000, 20000, 30000])
+        with open(path, "w") as f:
+            f.write(HEADER + "10000,2,1000,0,0,0,0,0,0,aa\n"
+                    + "30000,5,7000,0,0,0,0,1,250,cc\n")
+        with self.assertRaises(curve_deltas.CurveError) as caught:
+            curve_deltas.read_curve(path)
+        self.assertIn("sidecar", str(caught.exception))
+        cv.seal(path, cv.REUSE_TAG, 30000, {"road": "scan", "grid": 10000,
+                                            "rows": 2, "parent": None})
+        with self.assertRaises(curve_deltas.CurveError) as caught:
+            curve_deltas.read_curve(path)
+        self.assertIn("hole", str(caught.exception))
+
+
 class TestDeltas(unittest.TestCase):
     def rows(self, text=FIXTURE):
         path = write_tmp(text)

@@ -52,7 +52,8 @@ none of this is worth building.
   script, or under another face of the same key, became public through an event
   that is not in your lock's history. Exposure still reports it, which is the
   point of keeping an archive of revelations rather than only a history of
-  locks, but the archive stores digests, not dates.
+  locks, and the archive dates it (every record carries the height of its
+  first revelation); what is missing is a row in your lock's own history.
 
 - **Has one of your signatures ever reused its nonce point?** Signing two
   different messages with the same nonce hands the private key to anyone who
@@ -75,8 +76,9 @@ none of this is worth building.
 - **How much of the UTXO set sits behind keys that are already revealed?**
   Counted by lock type and by age, from the set itself, rather than estimated.
 
-- **How did key reuse grow over time?** As a series, block by block, and on
-  real calendar dates.
+- **How much of today's coin sits behind a key that was already public by a
+  given block?** As a series over the current UTXO set, block by block, and
+  on real calendar dates.
 
 - **What was all that worth, in a currency?** Only if you bring a price
   series: nothing on the chain holds a price, so the toolkit never fetches
@@ -264,7 +266,7 @@ run on the same machine. Sizes are for that height:
 |---|---|---|
 | `bitcoin-cli dumptxoutset` | minutes to an hour, on the node | the snapshot |
 | `census` | ~18 min | a CSV |
-| `reuse prepare` | ~20 min | `<locks>`, ~1.4 GB (one record per *distinct* lock, not per output) |
+| `reuse prepare` | ~20 min | `<locks>`, ~1.4 GB (one record per *distinct* lock, not per output), sealed with the snapshot's height |
 | `archive scan --graph` | **~56 h** | `<archive>` ~98 GB **and** `<graph>` ~301 GB |
 | `archive scan --nonces` | included in the 56 h above, which was measured with the census co-emitted | `<nonces>` ~60 GB |
 | `archive merge` | ~5 h | seals the archive in place |
@@ -385,8 +387,13 @@ Start from a UTXO snapshot, which your node writes for you:
 bitcoin-cli dumptxoutset /path/snapshot.dat        # note the height it reports
 
 nodsig census /path/snapshot.dat                   # the set, by lock type and age
-nodsig reuse prepare --out <locks-dir> /path/snapshot.dat
+nodsig reuse prepare --out <locks-dir> --height <S> /path/snapshot.dat
 ```
+
+`--height` is the height `dumptxoutset` reported (or `--headers <headers-dir>`
+once that archive exists, which reads it off the chain): the lock set is
+sealed with the moment it describes, and the first command that meets the
+snapshot's block checks the claim.
 
 Then **one pass over block history**. This is the only long step that talks to
 the node, and the two co-emission flags feed every other artifact from it, which
@@ -452,10 +459,14 @@ rather than quietly averaging them.
 
 Both curves are built from the `first_height` every record carries, so they
 read the same before and after a merge, and the rows land on the grid you ask
-for. `archive curve` is the archive's own: how much the chain first revealed
-per window of heights, needing no locks and therefore no snapshot and no node.
-`curve dates` puts calendar dates on either of them, offline, from the
-co-emitted headers.
+for; each comes with a sealed sidecar (`<csv>.meta.json`) that names its grid
+and, for the reuse curve, the locks and the perimeter it was burnt under.
+The reuse curve is a survivorship series over the snapshot: row `H` is the
+coin spendable at the snapshot whose key was already public by `H`, not how
+much reuse happened by then. `archive curve` is the archive's own: how many
+points and scripts the chain first revealed per window of heights, needing no
+locks and therefore no snapshot and no node. `curve dates` puts calendar dates
+on either of them, offline, from the co-emitted headers.
 
 From the graph, offline from here on, the indexed side:
 
@@ -496,7 +507,7 @@ offline and take seconds:
 | Does every coinbase respect subsidy + fees, and how much was left unclaimed? Fees per epoch? | `derived supply` |
 | How did balances distribute over time, and how much coin-age did each era destroy? | `derived timeline` (one full pass over the largest file: hours, not seconds) |
 | Was this raw digest ever revealed, and seen where? | `archive lookup <digest>` |
-| How did reuse grow over time? | `curve deltas curve.csv` |
+| Which eras' revelations still guard value today? | `curve deltas curve.csv` (a survivorship series over one snapshot, not a history of reuse) |
 | …and on what real dates? | `curve dates`: block times are not in the curve, so the join is a declared step rather than a smuggled one. Offline with `--headers`, which is what that archive is for; only without it does it ask the node |
 | What do the blocks themselves look like, per epoch? | `blockstats summary` |
 
@@ -504,12 +515,11 @@ Run any of them with `-h` for the exact arguments. `index lookup` is the one to
 try first: it is the didactic window on the whole design, and shows in one
 screen what the ordinal coordinates buy.
 
-One table is not reachable this way. `reuse stats`, the distribution of value
+One table takes one more flag. `reuse stats`, the distribution of value
 across the exposed locks (median, Gini, the value bands), reads a checkpoint of
-hit bitmaps, and only `reuse scan` writes those files today. `archive derive`
-computes exactly the same bitmaps while it works, to the same fingerprint, and
-then drops them, so the figure is not lost information: it is a missing writer.
-Until there is one, that table comes from the second road described below.
+hit bitmaps: `archive derive --checkpoint <dir>` writes them from this road,
+to the same fingerprint `reuse scan` would have written, so the table no
+longer needs the second road.
 
 ### What to keep afterwards, and what the node is still for
 
