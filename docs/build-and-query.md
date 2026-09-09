@@ -403,10 +403,14 @@ nodsig archive crosscheck --archive <archive> --locks <locks> \
 nodsig reuse stats --locks <locks> --checkpoint <cp>
 ```
 
-A second, separately written pipeline reaching the same reuse figure, which the
-cross-check then compares bit for bit. It buys confidence in the *method*, not
-a number you do not already have: a result to inherit rather than a step to
-repeat. Scan and cross-check must use the **same perimeter** (rule 2).
+A second road to the same reuse figure, walked with different code and
+different structures, which the cross-check then compares bit for bit. It
+buys confidence in the *method*, not a number you do not already have: a
+result to inherit rather than a step to repeat, and the maintainer's audit
+rather than a step of yours (what the comparison covers, and the one
+classifier the two roads share since 2.0.0, is in
+[`ARTIFACTS.md`](ARTIFACTS.md#the-second-road-and-why-it-is-not-in-the-list)).
+Scan and cross-check must use the **same perimeter** (rule 2).
 
 ## Growing them, when the chain moves
 

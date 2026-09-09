@@ -136,7 +136,11 @@ format per major; the reuse curve is described everywhere as what it is, a
 survivorship series over one snapshot; the archive is said to date every
 revelation; the doctrine reads "no point arithmetic; one field square root,
 in `check --key`". `docs/contracts/Artifact.md` carries the second statement
-and the re-seal; `NonceExposureBackend.md` the v2 join.
+and the re-seal; `NonceExposureBackend.md` the v2 join. The second road
+(`reuse scan` and the cross-check) is described on its real terms: the
+maintainer's audit of the archive's road, run at every release that changes
+the extraction and published beside the figures, sharing the archive's
+classifier of revelations since this release, taking no new features.
 
 ## 1.9.0 — the timeline: the scan history.bin was laid out for
 

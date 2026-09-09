@@ -134,18 +134,30 @@ megabytes instead of tens of gigabytes, and `archive crosscheck` then derives
 the same figure from the sealed archive and puts the two side by side. Different
 data structures, different order of work, different moment of comparison.
 
-What that comparison covers, precisely: the two **extraction pipelines** are
-written separately, and they are what it tests. Both roads then burn the same
-lock files through the same lookup code, so a broken locks directory would make
-them agree rather than disagree, which is why the files are verified against
-the sha256 their manifest recorded at `prepare`, and why `crosscheck
---reuse-state` refuses a checkpoint made against a different locks manifest.
+What that comparison covers, precisely, and what it does not. The two roads
+walk the chain with different code, join against the locks in a different
+order, and keep different structures (a bitmap burnt as it reads against a
+sorted archive read after the fact): that is what the comparison tests. Since
+2.0.0 they share one classifier of what counts as a revelation
+(`sightings.py`), on purpose: two hand-written readings of the same scripts
+drifted apart, and it was this cross-check that kept forcing them back
+together. So a wrong rule about revelations would make the roads agree, and
+the check does not cover it; the format page and its vectors do. Both roads
+also burn the same lock files through the same lookup code, so a broken locks
+directory would make them agree rather than disagree, which is why the files
+are verified against the sha256 their manifest recorded at `prepare`, and why
+`crosscheck --reuse-state` refuses a checkpoint made against a different
+locks manifest.
 
 It is worth knowing that road exists, and the commands are here for anyone who
 wants to walk it. But it costs a second full pass over the chain, and what it
 buys is confidence in the *method* rather than a number you do not already have.
 Treat it as a result to inherit, not a step to repeat — which is how the numbers
-published with this project were produced: run once, agreed, reported.
+published with this project were produced: run once, agreed, reported. It is
+maintained on those terms: it is the maintainer's audit of the archive, run at
+every release that changes what the archive extracts, with the outcome
+published beside the figures; it takes no new features (those go to the
+archive); and a release at which it is not run is the release it comes out.
 
 ## The artifacts
 

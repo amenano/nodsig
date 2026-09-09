@@ -3,7 +3,10 @@
 The direct road to the reuse figure: `reuse prepare` distils the locks of a
 UTXO snapshot into four sorted files, `reuse scan` walks the chain and burns
 every lock whose key or script it sees revealed, and the burnt set, read
-against the snapshot's amounts, is the table and the curve. This page holds
+against the snapshot's amounts, is the table and the curve. The lock set
+serves both roads; the scan is the second one, kept as the audit of the
+archive's road (`ARTIFACTS.md`, "The second road"), and it reads the chain
+with the archive's own classifier of revelations. This page holds
 the five small formats of that road, each with its own tag: `locks-v2`,
 `reuse-scan-v2` (the checkpoint state), `reuse-hits-v2` (the identity of a
 burnt set), `reuse-stats-v2` (the JSON of `reuse stats`), and the sidecars

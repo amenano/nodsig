@@ -33,7 +33,8 @@ explicit UNDETERMINED that names the flag which would enable it:
 4. **What did this transaction pay in fees, and what was spent together with
    what?** `derived fee` and `derived cospends`, over your own files.
 5. **How much of the UTXO set sits behind keys that are already revealed?**
-   `census` counts it by lock type and by age; `reuse scan` finds the reuses.
+   `census` counts it by lock type and by age; `archive derive` names the
+   locks and dates the revelations, from the archive and the snapshot.
 6. **How much of today's coin sits behind a key that was already public by a
    given block?** `derived timeline`, as a series over the current UTXO set,
    block by block and on calendar dates.
