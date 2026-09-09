@@ -318,7 +318,7 @@ def _seal(store, n_tx, parent_fmt, parent_fp):
         # constant: a table can be built over a derivatives directory in
         # the previous format, and the identity binds the ordinals it is
         # keyed by.
-        "parent": declared_parent(parent_fmt, parent_fp),
+        "parent": declared_parent(parent_fmt, parent_fp, state["coverage"]),
         "rows": entry["records"],
         "transactions": n_tx,
         "files": files,

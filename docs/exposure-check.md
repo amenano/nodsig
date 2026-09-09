@@ -31,14 +31,19 @@ Measured on the real artifact at height 957,301:
 | **whole archive** | **3.58 billion** | **86.9 GB** | |
 
 **A public key is not an address, and `--key` says so.** Given a key
-(33/65-byte hex) or its bare hash160, `check --key` expands it into the three
-standard forms that wrap it — P2PKH, P2SH-P2WPKH, native P2WPKH — as their
-canonical address texts, and each form then goes through the pipeline below
-like any address you had typed. Three forms are two different questions: the
-two key-hash forms consult the keys partition for the key's own digest, the
-wrapped form consults `scripts20` for its wrapper script. The serialization
-you pass is a statement, not a detail: the two serializations of one point
-hash to different digests, so pass the key bytes your wallet actually uses.
+(33/65-byte hex) or its bare hash160, `check --key` asks about the **point**:
+both serializations of it, each behind the three standard forms that wrap it
+(P2PKH, P2SH-P2WPKH, native P2WPKH), and one entry in the report per key with
+the faces under it, never six addresses as if you had typed them. The archive
+keys a point by the digest of its compressed form and keeps the 65-byte
+digest it saw, so a key revealed under either serialization exposes every
+face, and the entry says which sighting did it. From a 33-byte key the
+65-byte form is named by one square root mod p, the one piece of field
+arithmetic in the project (it multiplies no point, verifies nothing, recovers
+nothing), and the report says so beside every derived face; from a bare
+hash160 the other serialization is not derivable, and the entry says that
+too. The wrapped form asks `scripts20` about its wrapper script as well: a
+wrapper never spent is still exposed when its key is in view.
 A key inside a multisig has no address of its own; the flags the keys
 partition answers with already cover that cosigner case at the key level.
 

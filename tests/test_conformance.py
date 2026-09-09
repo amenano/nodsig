@@ -236,7 +236,7 @@ DOCUMENTED_ELSEWHERE = {
     "reuse-scan-v1": "historical: superseded by v2, named in the changelog",
     "reuse-stats-v1": "historical: superseded by v2, named in the changelog",
     "nodsig-identity-v3": "artifact.IDENTITY_TAG, the fingerprint recipe",
-    "nodsig-statement-v1": "artifact.STATEMENT_TAG",
+    "nodsig-statement-v1": "historical: superseded by v2, named in the changelog",
     "graph-v1": "historical: the earlier seal, which still decodes",
     "reveal-archive-v1": "historical: the first published archive, named "
                          "by the v3 page as what the v2 projection reproduced",
@@ -244,6 +244,7 @@ DOCUMENTED_ELSEWHERE = {
                      "in reuse_scan until 2.0.0",
     "address-book-v1": "historical: superseded by v2, named in the changelog",
     "check-report-v1": "historical: superseded by v2",
+    "check-report-v2": "historical: superseded by v3, whose page is a delta on it",
     "address-book-v3": "forward reference: what a breaking change would be called",
     "check-report-v3": "forward reference: the 2.0.0 report, page written "
                        "before the code",
@@ -259,7 +260,7 @@ DOCUMENTED_ELSEWHERE = {
     "price-series-v1": "historical: superseded by v2, named in the changelog",
     "blockprice-v1": "historical: superseded by v2, named in the changelog",
     "block-stats-v2": "historical: superseded by v3, named in the changelog",
-    "nodsig-statement-v2": "forward reference: same",
+    "nodsig-statement-v2": "artifact.STATEMENT_TAG",
     "derived-timeline-v2": "derivatives.TIMELINE_TAG: the sealed meta "
                            "`derived timeline` writes beside its two CSVs "
                            "(the module's FORMAT_TAG names the record files)",

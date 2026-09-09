@@ -58,6 +58,7 @@ PUBLIC_SURFACE = {
     "curve": ("deltas", "dates"),
     "check": None,
     "report": None,
+    "manifest": ("reseal",),
 }
 
 
@@ -68,8 +69,9 @@ class TestCommandSurface(unittest.TestCase):
         for group in PUBLIC_SURFACE:
             with self.subTest(group=group):
                 argv = [group]
-                if group == "curve":            # the one two-level group
-                    argv.append("deltas")
+                target = cli.GROUPS[group]
+                if isinstance(target, dict):    # a two-level group
+                    argv.append(next(iter(target)))
                 module, rest, prog = cli._resolve(argv)
                 self.assertEqual(rest, [])
                 self.assertTrue(prog.startswith(f"nodsig {group}"))

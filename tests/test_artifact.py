@@ -12,6 +12,7 @@ whatever they were built from.
 """
 
 import hashlib
+import io
 import os
 import subprocess
 import time
@@ -20,9 +21,9 @@ import pytest
 
 from nodsig import __version__
 from nodsig.artifact import (WallClock, _read_producer, canonical_identity,
-                             canonical_statement, identity_fingerprint,
-                             make_identity, producer, seal_manifest,
-                             statement_digest)
+                             canonical_statement, declared_parent,
+                             identity_fingerprint, make_identity, producer,
+                             seal_manifest, statement_digest)
 
 
 def _ago(seconds):
@@ -107,24 +108,74 @@ def test_accepts_any_ordered_iterable():
 # the signable statement
 # ---------------------------------------------------------------------------
 
-def _manifest(parent=None):
+def _manifest(parent=None, coverage=(1, 4)):
     ident = make_identity("fmt-v2", 1, 4, [("only", A)])
     build = {"generation": 1, "counters": {"rows": 7}}
     if parent is not None:
-        build["parent"] = {"format": "parent-v2", "fingerprint": parent}
+        build["parent"] = declared_parent("parent-v2", parent,
+                                          {"from": coverage[0],
+                                           "to": coverage[1]})
     return seal_manifest("fmt-v2", ident, build)
 
 
 def test_statement_recipe_matches_independent_recomputation():
     """Restated by hand, as a porter writing a signer would read it out of
-    the contract."""
+    the contract: the second version binds the parent's coverage."""
     m = _manifest(parent=B)
-    want = bytearray(b"nodsig-statement-v1\x00")
+    want = bytearray(b"nodsig-statement-v2\x00")
     want += _lp("fmt-v2")
     want += bytes.fromhex(m["fingerprint"])
     want += b"\x01" + _lp("parent-v2") + bytes.fromhex(B)
+    want += (1).to_bytes(4, "big") + (4).to_bytes(4, "big")
     assert canonical_statement(m) == bytes(want)
     assert m["statement"] == hashlib.sha256(want).hexdigest()
+    # The coverage is bound: a parent sealed through another height is
+    # another statement.
+    assert _manifest(parent=B, coverage=(1, 3))["statement"] != m["statement"]
+
+
+def test_a_parent_without_its_coverage_is_an_earlier_statement(tmp):
+    """A manifest sealed before the coverage was bound cannot be stated
+    under this recipe, and says so; `reseal` gives the parent its
+    coverage from the parent's own manifest and recomputes."""
+    import json
+    import os
+    import pytest
+    from nodsig.artifact import StatementError, reseal
+    m = _manifest(parent=B)
+    old = json.loads(json.dumps(m))
+    del old["build"]["parent"]["coverage"]
+    old["statement"] = "00" * 32
+    with pytest.raises(StatementError):
+        canonical_statement(old)
+    child = os.path.join(tmp, "child")
+    parent = os.path.join(tmp, "parent")
+    os.makedirs(child)
+    os.makedirs(parent)
+    with open(os.path.join(child, "manifest.json"), "w") as f:
+        json.dump(old, f)
+    pman = seal_manifest("parent-v2", make_identity("parent-v2", 1, 4,
+                                                    [("only", B)]), {})
+    pman["fingerprint"] = B                  # the fingerprint the child names
+    with open(os.path.join(parent, "manifest.json"), "w") as f:
+        json.dump(pman, f)
+    with pytest.raises(RuntimeError, match="--parent"):
+        reseal(child, RuntimeError, out=io.StringIO())
+    with pytest.raises(RuntimeError, match="not the"):
+        wrong = os.path.join(tmp, "wrong")
+        os.makedirs(wrong)
+        with open(os.path.join(wrong, "manifest.json"), "w") as f:
+            json.dump({**pman, "fingerprint": A}, f)
+        reseal(child, RuntimeError, parent_dir=wrong, out=io.StringIO())
+    got = reseal(child, RuntimeError, parent_dir=parent, out=io.StringIO())
+    assert got["statement"] == m["statement"]
+    assert got["fingerprint"] == m["fingerprint"]
+    assert got["build"]["parent"]["coverage"] == {"from": 1, "to": 4}
+    assert os.path.exists(os.path.join(child,
+                                       "manifest.nodsig-statement-v1.json"))
+    # Idempotent: a second pass finds the statement current.
+    again = reseal(child, RuntimeError, parent_dir=parent, out=io.StringIO())
+    assert again["statement"] == got["statement"]
 
 
 def test_a_root_artifact_states_the_absence_of_a_parent():

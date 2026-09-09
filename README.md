@@ -597,6 +597,7 @@ One entry point, one verb per artifact:
 | `nodsig curve` | read the reuse curve: deltas over time, real block dates |
 | `nodsig check` | check addresses against every backend you have plugged in |
 | `nodsig report` | one page: what your artifacts are, what they cost, what built them |
+| `nodsig manifest` | re-seal a manifest under this release's statement (the artifacts 2.0.0 does not rebuild) |
 
 Run `nodsig` for the map, `nodsig <command> -h` for a command's own options.
 

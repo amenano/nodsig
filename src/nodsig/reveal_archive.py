@@ -1358,7 +1358,8 @@ def _archive_parent(manifest):
     live archive, which has no fingerprint yet."""
     if manifest is None:
         return None
-    return declared_parent(manifest["format"], manifest["fingerprint"])
+    return declared_parent(manifest["format"], manifest["fingerprint"],
+                           manifest["identity"]["coverage"])
 
 
 ARCHIVE_CURVE_COLUMNS = ("points", "scripts20", "scripts32")

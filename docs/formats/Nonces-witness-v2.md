@@ -152,7 +152,10 @@ about other points, which is why the parent is declared and why
 `witness-verify --nonces` confronts it rather than trusting it.
 
 It does not recover keys. `exposed` is a proof obligation met, not a key
-computed: there is no curve arithmetic in this project, and the group order is
+computed: there is no point arithmetic in this project (one field square
+root, in `check --key`, names the other serialization of a key you gave:
+it multiplies no point, verifies nothing, recovers nothing), and the group
+order is
 used only to fold `s` with `n-s`.
 
 What the census itself does not read, and this table therefore never sees, is

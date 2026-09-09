@@ -287,14 +287,31 @@ def _ancestry(found):
             lines.append(f"- **{role}** declares no parent (a root)")
             continue
         known = by_fp.get(parent["fingerprint"])
+        cov = parent.get("coverage")
+        span = (f", sealed through height {cov['to']:,} as declared"
+                if cov else ", declared without its coverage (sealed with "
+                "the earlier statement: `nodsig manifest reseal`)")
         if known:
-            lines.append(f"- **{role}** ← **{known}** "
-                         f"({parent['format']}), confirmed: the artifact "
-                         f"reported above carries that fingerprint")
+            actual = next(m for r, _d, m in found if r == known
+                          )["identity"]["coverage"]
+            agree = cov is None or (int(cov["from"]) == int(actual["from"])
+                                    and int(cov["to"]) == int(actual["to"]))
+            if not agree:
+                lines.append(
+                    f"- **{role}** ← **{known}** ({parent['format']}), "
+                    f"fingerprint confirmed but the declared coverage "
+                    f"{cov['from']:,}..{cov['to']:,} is not the parent's "
+                    f"{actual['from']:,}..{actual['to']:,}: the declaration "
+                    "was edited")
+            else:
+                lines.append(f"- **{role}** ← **{known}** "
+                             f"({parent['format']}), confirmed: the artifact "
+                             f"reported above carries that fingerprint{span}")
         else:
             lines.append(f"- **{role}** ← {parent['format']} "
                          f"`{parent['fingerprint']}`, declared and not "
-                         f"confirmed (that artifact is not in this report)")
+                         f"confirmed (that artifact is not in this report)"
+                         f"{span}")
     return lines
 
 

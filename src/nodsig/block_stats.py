@@ -235,7 +235,9 @@ def run_build(graph_dir, out_path):
             "seconds": clock.stamp(),
             "wall": clock.wall(),
             "parent": (None if source_fp is None
-                       else declared_parent(ge.FORMAT_TAG, source_fp)),
+                       else declared_parent(
+                           ge.FORMAT_TAG, source_fp,
+                           graph_manifest["identity"]["coverage"])),
             "rows": rows,
             "totals": totals,
             "files": {LOGICAL: {"file": os.path.basename(out_path),

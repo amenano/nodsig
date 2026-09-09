@@ -1301,7 +1301,8 @@ def test_the_scan_seals_its_curve_at_every_checkpoint(tmp, locks_dir):
         state = read_totals(cp)[1]
         check(meta["build"]["road"] == "scan"
               and meta["build"]["parent"] == {"format": rs.STATE_TAG,
-                                              "fingerprint": state["fingerprint"]}
+                                              "fingerprint": state["fingerprint"],
+                                              "coverage": {"from": 1, "to": 4}}
               and meta["build"]["grid"] == 2 and meta["build"]["rows"] == 2
               and meta["build"]["locks"] == state["locks"]
               and meta["build"]["perimeter"] == state["perimeter"]

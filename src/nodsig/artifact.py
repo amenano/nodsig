@@ -68,8 +68,10 @@ from the recipe below without having to reproduce a JSON encoder.
 """
 
 import hashlib
+import json
 import os
 import subprocess
+import sys
 import time
 
 from nodsig import __version__
@@ -141,7 +143,7 @@ def make_identity(tag, covered_from, covered_to, files):
     }
 
 
-STATEMENT_TAG = b"nodsig-statement-v1\x00"
+STATEMENT_TAG = b"nodsig-statement-v2\x00"
 
 
 def canonical_statement(manifest):
@@ -151,7 +153,9 @@ def canonical_statement(manifest):
         || lp(format)
         || raw32(fingerprint)
         || u8(parent is present)
-        || [ lp(parent.format) || raw32(parent.fingerprint) ]   if present
+        || [ lp(parent.format) || raw32(parent.fingerprint)
+             || u32be(parent.coverage.from) || u32be(parent.coverage.to) ]
+                                                               if present
 
     What it binds is decided by the same rule the identity follows, applied one
     floor up: **exactly what is neither inside the fingerprint nor recomputable
@@ -195,7 +199,21 @@ def canonical_statement(manifest):
         out += b"\x01"
         out += _lp(parent["format"])
         out += bytes.fromhex(parent["fingerprint"])
+        cov = parent.get("coverage")
+        if cov is None:
+            raise StatementError(
+                "the declared parent carries no coverage: this manifest was "
+                "sealed with an earlier statement, and the 2.0.0 statement "
+                "binds the parent's coverage. Re-seal it with `nodsig "
+                "manifest reseal <dir> --parent <parent dir>`")
+        out += int(cov["from"]).to_bytes(4, "big")
+        out += int(cov["to"]).to_bytes(4, "big")
     return bytes(out)
+
+
+class StatementError(ValueError):
+    """A manifest whose statement cannot be computed under this release's
+    recipe: sealed before the parent's coverage was bound."""
 
 
 def statement_digest(manifest):
@@ -206,6 +224,64 @@ def statement_digest(manifest):
     this too — but `verify` recomputes it, so an inconsistent manifest is
     caught, and a signature over it makes the pair binding."""
     return hashlib.sha256(canonical_statement(manifest)).hexdigest()
+
+
+def reseal(directory, error, parent_dir=None, out=sys.stdout,
+           manifest_name="manifest.json"):
+    """Re-seal a manifest under this release's statement without touching
+    a byte of the artifact: the identity and the fingerprint stay, the
+    declared parent gains the parent's coverage (read from the parent's
+    own manifest, whose fingerprint must be the one declared), and the
+    statement is recomputed. The previous manifest is kept beside it as
+    `manifest.nodsig-statement-v1.json`, so a re-seal adds a statement
+    and destroys none. For the artifacts 2.0.0 does not rebuild.
+    """
+    path = os.path.join(directory, manifest_name)
+    if not os.path.exists(path):
+        raise error(f"no {manifest_name} in {directory}: nothing to re-seal")
+    with open(path) as f:
+        manifest = json.load(f)
+    build = manifest.get("build") or {}
+    parent = build.get("parent")
+    if parent is not None and parent.get("coverage") is None:
+        if parent_dir is None:
+            raise error(
+                f"this manifest declares the parent {parent['format']} "
+                f"{parent['fingerprint'][:16]}… without its coverage: pass "
+                "--parent <its directory> so the coverage can be read off "
+                "the parent's own manifest")
+        ppath = os.path.join(parent_dir, manifest_name)
+        if not os.path.exists(ppath):
+            raise error(f"no {manifest_name} in {parent_dir}: not a sealed "
+                        "artifact")
+        with open(ppath) as f:
+            pman = json.load(f)
+        if pman.get("fingerprint") != parent["fingerprint"]:
+            raise error(
+                f"the directory given is sealed as "
+                f"{str(pman.get('fingerprint'))[:16]}…, not the "
+                f"{parent['fingerprint'][:16]}… this manifest declares as "
+                "its parent")
+        parent["coverage"] = {"from": int(pman["identity"]["coverage"]["from"]),
+                              "to": int(pman["identity"]["coverage"]["to"])}
+    was = manifest.get("statement")
+    manifest["statement"] = statement_digest(manifest)
+    if manifest["statement"] == was:
+        print(f"{directory}: the statement is already the current one "
+              f"({manifest['statement']})", file=out)
+        return manifest
+    keep = os.path.join(directory, "manifest.nodsig-statement-v1.json")
+    if not os.path.exists(keep):
+        with open(keep, "w") as f:
+            json.dump({**manifest, "statement": was}, f, indent=1)
+    tmp = path + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(manifest, f, indent=1)
+    os.replace(tmp, path)
+    print(f"{directory}: re-sealed, statement {manifest['statement']} "
+          f"(the previous manifest is kept as {os.path.basename(keep)}; the "
+          "fingerprint did not move)", file=out)
+    return manifest
 
 
 def seal_manifest(fmt, identity, build):
@@ -220,13 +296,20 @@ def seal_manifest(fmt, identity, build):
     return manifest
 
 
-def declared_parent(fmt, fingerprint):
-    """The `build.parent` entry: which artifact this one was built from.
+def declared_parent(fmt, fingerprint, coverage):
+    """The `build.parent` entry: which artifact this one was built from,
+    and the range of chain that artifact's seal spoke for.
 
     Declared, not attested. It travels outside the fingerprint because it
     says where this artifact came from and not what it is, so `verify` calls
-    it unconfirmed until it is given the parent to compare against."""
-    return {"format": fmt, "fingerprint": fingerprint}
+    it unconfirmed until it is given the parent to compare against. The
+    coverage is the one fact about the parent a reader can confront
+    OFFLINE, with the child alone: a parent sealed through a height below
+    the child's is refused, where two equal fingerprint strings used to
+    "confirm" a seal that stopped short of what the child was built from."""
+    return {"format": fmt, "fingerprint": fingerprint,
+            "coverage": {"from": int(coverage["from"]),
+                         "to": int(coverage["to"])}}
 
 
 def _read_producer(module_file=os.path.abspath(__file__)):
@@ -712,8 +795,14 @@ def verify_sealed(directory, manifest, tag, error, fp_order, ladder_hint="",
     # but it makes a careless edit visible, and it is the agreed target for
     # anyone building a signature on top.
     stated = manifest.get("statement")
-    if stated is not None and stated != statement_digest(manifest):
+    try:
+        recomputed = statement_digest(manifest)
+    except StatementError as e:
+        raise error(str(e))
+    if stated is not None and stated != recomputed:
         raise error("the manifest's statement does not match the manifest: "
-                    "the fingerprint or the declared parent was edited "
-                    "without recomputing it")
+                    "either the fingerprint or the declared parent was edited "
+                    "without recomputing it, or the manifest was sealed with "
+                    "an earlier statement recipe: re-seal it with `nodsig "
+                    "manifest reseal`")
     print(f"fingerprint verified: {manifest['fingerprint']}")

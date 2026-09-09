@@ -71,8 +71,8 @@ Two additions to the table of v2:
 
 ## `addresses[].exposure`
 
-`value` keeps its four words. `why` may now name the sightings listed under
-`keys` above, including `published in an output` (a P2PK or bare multisig
+`value` keeps its four words. `detail` (the field v2 defined) may now name
+the sightings listed under `keys` above, including `published in an output` (a P2PK or bare multisig
 output revealed this key before any spend), `seen in its other
 serialization` (the point is in view although this exact digest never was
 pushed), and `seen as a taproot internal or leaf key`. A script lock whose

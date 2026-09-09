@@ -199,8 +199,9 @@ Note carefully which rule is legitimate and which is not.
   genuine" threshold rejects genuine data, and this project measured that
   itself rather than assuming it.
 - **`r = 1` is kept**, though it would ask a curve point's x-coordinate to be
-  one. Deciding it needs curve arithmetic, which is outside this project's
-  perimeter; implausible is not the rule, impossible is.
+  one. Deciding it needs a square root in the field, which a scan never
+  takes (the one place the project takes it is `check --key`, on a key a
+  person typed); implausible is not the rule, impossible is.
 - **The rules do not apply to Schnorr.** BIP 340 publishes `R.x` as a **field**
   element, bounded by `p`, not a scalar reduced mod `n`, and `p > n`. An
   x-coordinate between `n` and `p` is a valid point, so extending the rule to
@@ -210,8 +211,8 @@ Note carefully which rule is legitimate and which is not.
 - **The strong filter stays out.** Checking that `r` is the x-coordinate of a
   real curve point would halve the false positives and costs one modular
   exponentiation per signature: out of scale over 3.7 billion, and across the
-  line this project draws at curve arithmetic. It is declared here rather than
-  chased.
+  line this project draws, no field arithmetic in a scan and no point
+  arithmetic anywhere. It is declared here rather than chased.
 
 What still resolves a point the filters cannot decide is the witness table,
 which keeps the whole scalar (see

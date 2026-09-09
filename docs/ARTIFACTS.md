@@ -29,7 +29,7 @@ placeholders: every one of them is a path you choose on the command line.
 | price series (external input) | `price-series-v2` | — |
 | block price (external input, derived) | `blockprice-v2` | — |
 | address book (input) | `address-book-v2` | — |
-| check report (output) | `check-report-v2` | — |
+| check report (output) | `check-report-v3` | — |
 
 One sealed output is deliberately not a row above: `derived timeline` seals a
 `derived-timeline-v2` meta beside its two CSVs (and a third, priced one outside

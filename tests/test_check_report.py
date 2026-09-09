@@ -24,6 +24,7 @@ Usage:
     python3 test_check_report.py    # prints PASS or fails loudly
 """
 
+import io
 import json
 import os
 import stat
@@ -300,3 +301,79 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+def test_the_keys_block_answers_the_point(archive):
+    """`--key` is a question about a POINT: both serializations, each
+    behind its faces, one entry per key and none of the faces leaked
+    into `addresses`. The archive reveals PUB1 in a scriptSig at height
+    2, so every face of it is exposed, the wrapper never spent
+    included; a real key nobody revealed answers protected under four
+    faces, the fourth named by one square root and saying so; a bare
+    hash160 has three faces and no other serialization."""
+    from nodsig.keyforms import KeyFormError, uncompressed_of
+    backends = {"exposure": ca.RevealArchiveExposure(archive)}
+    gen = ("0279BE667EF9DCBBAC55A06295CE870B07029BFCDB2DCE28D959F2815B16"
+           "F81798")
+    report = ca.build_report([], backends, keys_text=[
+        trs.PUB1.hex(), gen, rs.hash160(trs.PUB1).hex()])
+    doc = cr.document(report)
+    check(doc["format"] == "check-report-v3" and len(doc["keys"]) == 3,
+          "one entry per key, under the v3 tag")
+    check(doc["addresses"] == [], "the faces are not addresses the user typed")
+    check(doc["sources"]["key-forms"]["root"] and ca.ROOT_SENTENCE in
+          doc["limits"], "the square root is named as a source and a limit")
+
+    k1, k2, k3 = doc["keys"]
+    check(k1["given_as"] == "compressed"
+          and k1["revealed"]["value"] == "exposed_by_reuse"
+          and k1["revealed"]["first_height"] == 2
+          and k1["revealed"]["sightings"] == ["scriptSig"],
+          f"the revealed point: {k1['revealed']}")
+    try:
+        uncompressed_of(trs.PUB1)
+        on_curve = True
+    except KeyFormError:
+        on_curve = False
+    kinds = [f["kind"] for f in k1["faces"]]
+    check(kinds[:3] == ["p2pkh", "p2sh-p2wpkh", "p2wpkh"]
+          and len(kinds) == (4 if on_curve else 3)
+          and (on_curve or "cannot be named" in k1["note"]),
+          f"the faces of a compressed key: {kinds}, {k1.get('note')}")
+    check(all(f["exposure"]["value"] == "exposed_by_reuse"
+              for f in k1["faces"]),
+          "a point in view exposes every face")
+    wrapper = next(f for f in k1["faces"] if f["kind"] == "p2sh-p2wpkh")
+    check(wrapper["exposure"]["why"] == "key in view; this wrapper never spent",
+          f"the wrapper's reason: {wrapper}")
+    check("scriptSig" in k1["faces"][0]["exposure"]["why"],
+          f"the key-hash face names the sighting: {k1['faces'][0]}")
+
+    check(k2["revealed"]["value"] == "protected"
+          and [f["kind"] for f in k2["faces"]]
+          == ["p2pkh", "p2sh-p2wpkh", "p2wpkh", "p2pkh"]
+          and k2["faces"][3]["form"] == "uncompressed"
+          and k2["faces"][3]["derived_by"] == "one square root mod p"
+          and all("derived_by" not in f for f in k2["faces"][:3])
+          and all(f["exposure"]["value"] == "protected" for f in k2["faces"]),
+          f"a real key nobody revealed: {k2}")
+
+    check(k3["given_as"] == "hash160"
+          and k3["revealed"]["value"] == "exposed_by_reuse"
+          and [f["form"] for f in k3["faces"]] == ["hash160"] * 3
+          and "not derivable" in k3["note"],
+          f"a bare digest: {k3}")
+
+    # The block exists only when a key was given, and so does its source.
+    plain = cr.document(ca.build_report([], backends))
+    check("keys" not in plain and "key-forms" not in plain["sources"]
+          and ca.ROOT_SENTENCE not in plain["limits"],
+          "no key, no block")
+    buf = io.StringIO()
+    ca.render_text(report, buf)
+    text = buf.getvalue()
+    check(f"key {trs.PUB1.hex()} (compressed): REVEALED at height 2" in text
+          and "one square root mod p" in text,
+          f"the text names the key and the root: {text[:600]}")
+    print("ok  keys: the point under its faces, the root named, nothing "
+          "leaked into addresses")

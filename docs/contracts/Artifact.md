@@ -288,9 +288,12 @@ The rule for what enters is the same as before: outside the fingerprint, not
 recomputable from the bytes, checkable by whoever receives it. The
 coverage of the parent is all three: a reader with the child alone can refuse
 a parent whose `to` is below the child's, and `verify` and `report` do. The
-2.0.0 release seals every manifest it writes with v2 and re-seals the
-manifests of artifacts it does not rebuild; a manifest with a v1 statement is
-refused by the tag, with the release that reads it named.
+2.0.0 release seals every manifest it writes with v2, and `nodsig manifest
+reseal <dir> --parent <parent dir>` re-seals the manifests of artifacts it
+does not rebuild (the parent's coverage is read off the parent's own
+manifest, the fingerprint does not move, the previous manifest is kept
+beside it); `verify` refuses a manifest whose parent carries no coverage,
+naming the command.
 
 The digest is written into the manifest for the same reason the fingerprint is:
 it is recomputable, and having it in view makes a disagreement visible. On its

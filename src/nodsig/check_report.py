@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-check_report.py — `check-report-v2`, the output format of the address
+check_report.py — `check-report-v3`, the output format of the address
 check, and the aggregation every rendering of it reads.
 
 THE QUESTION THAT GOVERNS THE WHOLE DOCUMENT
@@ -59,7 +59,7 @@ import textwrap
 from nodsig.capability import Status
 from nodsig.reuse_scan import SAT
 
-FORMAT_TAG = "check-report-v2"
+FORMAT_TAG = "check-report-v3"
 
 # The first key of the document, and the only redundant one. The text
 # report carries the same warning as a comment on its first line; JSON
@@ -122,6 +122,39 @@ def sources(report):
                                 "watermark": s.watermark,
                                 "fingerprint": s.fingerprint,
                                 "live": s.live}
+    if report.keys:
+        # The one piece of field arithmetic in the project, named as a
+        # source of its own: it produced a serialization, not an answer.
+        from nodsig.check_addresses import ROOT_SENTENCE
+        out["key-forms"] = {"status": Status.OK, "id": "key-forms",
+                            "live": False, "root": ROOT_SENTENCE}
+    return out
+
+
+def keys(report):
+    """§keys — one entry per `--key`, in input order: the point's own
+    revelation, and the faces the chain can show it under, each with
+    its exposure. The faces do NOT appear in `addresses`: a key is not
+    an address, and six addresses the user never typed would inflate
+    every count above."""
+    out = []
+    for k in report.keys:
+        faces = []
+        for f in k.faces:
+            item = {"address": f.address.text, "kind": f.kind,
+                    "form": f.form,
+                    "exposure": {"value": f.answer.key, "why": f.why}}
+            if f.derived_by:
+                item["derived_by"] = f.derived_by
+            if f.answer.balance_sats is not None:
+                item["balance"] = {"status": Status.OK, "source": "balance",
+                                   "sats": f.answer.balance_sats}
+            faces.append(item)
+        entry = {"key": k.text, "given_as": k.given_as,
+                 "revealed": dict(k.revealed), "faces": faces}
+        if k.note:
+            entry["note"] = k.note
+        out.append(entry)
     return out
 
 
@@ -306,6 +339,13 @@ def limits(report):
         out.append(CAVEAT_COVERAGE)
     if report.answered("co-inputs"):
         out.append(CAVEAT_COSPEND)
+    if report.keys:
+        from nodsig.check_addresses import ROOT_SENTENCE
+        out.append(ROOT_SENTENCE)
+    if report.answered("exposure") and any(
+            e.valid and e.kind in ("p2sh", "p2wsh") for e in report.entries):
+        from nodsig.check_addresses import EXCEPTION_SENTENCE
+        out.append(EXCEPTION_SENTENCE)
     return out
 
 
@@ -345,20 +385,23 @@ def addresses(report):
 
 
 def document(report):
-    """The whole `check-report-v2`, as a plain dict.
+    """The whole `check-report-v3`, as a plain dict.
 
     Key order is the inverted pyramid, because a JSON also gets read
     with `less`. The ORDER IS NOT SEMANTIC: a tool binds to keys, never
-    to position. Inside v2 keys may be ADDED; the meaning of an
-    existing key never changes. Anything else is check-report-v3."""
-    return {"warning": WARNING,
-            "format": FORMAT_TAG,
-            "sources": sources(report),
-            "coverage": coverage(report),
-            "summary": summary(report),
-            "linkage": report.linkage,
-            "addresses": addresses(report),
-            "limits": limits(report)}
+    to position. Inside v3 keys may be ADDED; the meaning of an
+    existing key never changes. Anything else is check-report-v4."""
+    doc = {"warning": WARNING,
+           "format": FORMAT_TAG,
+           "sources": sources(report),
+           "coverage": coverage(report),
+           "summary": summary(report)}
+    if report.keys:
+        doc["keys"] = keys(report)
+    doc["linkage"] = report.linkage
+    doc["addresses"] = addresses(report)
+    doc["limits"] = limits(report)
+    return doc
 
 
 def dumps(report):

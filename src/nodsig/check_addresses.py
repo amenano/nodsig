@@ -123,6 +123,9 @@ from nodsig import reveal_archive as ra
 from nodsig import witness as wit
 from nodsig.capability import Source, Result, Status
 from nodsig.hashing import hash160, sha256d
+from nodsig.keyforms import KeyFormError, compressed_of, uncompressed_of
+from nodsig.sightings import (FLAG_INNER_SIG, FLAG_INNER_WIT, FLAG_OTHER_FACE,
+                              FLAG_OUT, FLAG_SIG, FLAG_WIT, FLAG_XONLY)
 from nodsig.reuse_scan import add_node_args, SAT, resolve_auth
 from nodsig.recio import checked_name
 
@@ -1002,14 +1005,37 @@ def flags_story(flags):
     `lookup` prints it, because that command describes the record
     rather than the owner's risk."""
     where = []
-    if flags & ra.FLAG_SIG:
+    if flags & FLAG_SIG:
         where.append("key seen in a scriptSig")
-    if flags & ra.FLAG_WIT:
+    if flags & FLAG_WIT:
         where.append("key seen in a witness")
-    if flags & (ra.FLAG_INNER_SIG | ra.FLAG_INNER_WIT):
+    if flags & (FLAG_INNER_SIG | FLAG_INNER_WIT):
         where.append("seen inside a revealed script "
                      "(co-signer exposure counts)")
+    if flags & FLAG_OUT:
+        where.append("published in an output (pay-to-pubkey or bare "
+                     "multisig: public from the block that created it)")
+    if flags & FLAG_OTHER_FACE:
+        where.append("seen in its other serialization (the point is in "
+                     "view although this exact digest was never pushed)")
+    if flags & FLAG_XONLY:
+        where.append("seen as a taproot internal or leaf key")
     return "; ".join(where) if where else "key revealed by a spend"
+
+
+# The archive's own words for its flag bits, as the report's `keys`
+# block lists them: one word per bit, the same words the format page
+# uses.
+SIGHTING_WORDS = ((FLAG_SIG, "scriptSig"), (FLAG_WIT, "witness"),
+                  (FLAG_INNER_SIG, "inside a redeem script"),
+                  (FLAG_INNER_WIT, "inside a witness script or leaf"),
+                  (FLAG_OUT, "output"),
+                  (FLAG_OTHER_FACE, "other serialization"),
+                  (FLAG_XONLY, "x-only"))
+
+
+def sighting_words(flags):
+    return [word for bit, word in SIGHTING_WORDS if flags & bit]
 
 
 def sighting_story(address, byte):
@@ -1115,6 +1141,158 @@ def answer(address, backends):
     if v.startswith("EXPOSED") and balance == 0:
         v += " but empty: nothing at stake"
     return Answer(key, v, d, balance, origin, first_seen)
+
+
+# ---------------------------------------------------------------------------
+# --key: a question about the POINT, under every face the chain can show it
+# ---------------------------------------------------------------------------
+#
+# A public key is a point. The chain serializes it two ways (33 and 65
+# bytes), each behind three standard address forms, and the archive
+# keys a point by the digest of its compressed form while keeping the
+# 65-byte digest it saw (RevealArchive-v3). So a key typed here is
+# asked about as a point: both digests looked up in `keys`, both
+# wrappers in `scripts20`, and one entry in the report per key, the
+# faces under it, instead of six addresses as if the user had typed
+# them. The one piece of field arithmetic in the project lives on this
+# road: from a 33-byte key the 65-byte form is named by one square root
+# mod p (`keyforms.uncompressed_of`), which multiplies no point,
+# verifies nothing and recovers nothing; the report says so wherever a
+# derived face appears. From a hash160 the other serialization is not
+# derivable (a hash is one way), and the entry says that too.
+
+ROOT_SENTENCE = ("one modular square root per key given: names the other "
+                 "serialization, multiplies no point, verifies nothing, "
+                 "recovers nothing")
+EXCEPTION_SENTENCE = (
+    "a script lock whose script has the shape of a key or of a signature "
+    "is the archive's declared exception: its revelation is not archived, "
+    "so `protected` for a script lock is also that filter's blind spot "
+    "(the archive's manifest counts the candidates it dropped)")
+
+
+class Face:
+    """One address form of a key: the address, its kind, the
+    serialization it wraps, whether that serialization was derived, and
+    the exposure answer for the face."""
+
+    __slots__ = ("address", "kind", "form", "derived_by", "answer", "why")
+
+    def __init__(self, address, kind, form, derived_by=None):
+        self.address = address
+        self.kind = kind
+        self.form = form
+        self.derived_by = derived_by
+        self.answer = None
+        self.why = None
+
+
+class KeyEntry:
+    """One `--key`, answered as a point."""
+
+    __slots__ = ("text", "given_as", "faces", "revealed", "note")
+
+    def __init__(self, text, given_as, faces, revealed, note=None):
+        self.text = text
+        self.given_as = given_as
+        self.faces = faces
+        self.revealed = revealed          # {value, first_height, sightings, source}
+        self.note = note
+
+
+def _face_addresses(d20, form, derived_by=None, wrapped=True):
+    """The address forms of one key digest: p2pkh, the p2sh-p2wpkh
+    wrapper, p2wpkh. The 65-byte form has no standard segwit face
+    (BIP 143), so it gets the p2pkh face only."""
+    redeem = b"\x00\x14" + d20
+    faces = [Face(Address(_b58check_encode(b"\x00" + d20), "p2pkh", d20),
+                  "p2pkh", form, derived_by)]
+    if wrapped:
+        faces.append(Face(Address(_b58check_encode(b"\x05" + hash160(redeem)),
+                                  "p2sh", hash160(redeem)),
+                          "p2sh-p2wpkh", form, derived_by))
+        faces.append(Face(Address(_bech32_encode("bc", 0, d20), "p2wpkh", d20),
+                          "p2wpkh", form, derived_by))
+    return faces
+
+
+def key_entry(text, backends):
+    """→ KeyEntry: the key's digests, the faces, and one answer per
+    face, with the point's own revelation deciding the faces."""
+    try:
+        raw = bytes.fromhex(text)
+    except ValueError:
+        raise AddressError(f"not hex: {text!r}")
+    note = None
+    if len(raw) == 20:
+        given_as = "hash160"
+        digests = [(raw, "hash160", None)]
+        note = ("given as a hash160: the other serialization of the point "
+                "is not derivable from a digest, so only this digest's "
+                "faces are asked about")
+    elif len(raw) == 33 and raw[0] in (2, 3):
+        given_as = "compressed"
+        digests = [(hash160(raw), "compressed", None)]
+        try:
+            digests.append((hash160(uncompressed_of(raw)), "uncompressed",
+                            "one square root mod p"))
+        except KeyFormError as e:
+            note = (f"the 65-byte serialization cannot be named: {e}; only "
+                    "the compressed faces are asked about")
+    elif len(raw) == 65 and raw[0] in (4, 6, 7):
+        given_as = "uncompressed"
+        digests = [(hash160(compressed_of(raw)), "compressed", None),
+                   (hash160(raw), "uncompressed", None)]
+    else:
+        raise AddressError(
+            f"{len(raw)} bytes is neither a serialized public key "
+            "(33 starting 02/03, 65 starting 04/06/07) nor a hash160 (20)")
+
+    # The point's own revelation: the keys partition under each digest.
+    exp = backends.get("exposure")
+    if isinstance(exp, NotPlugged):
+        exp = None
+    hits = []
+    for d20, _form, _der in digests:
+        probe = Address(_b58check_encode(b"\x00" + d20), "p2pkh", d20)
+        res = exp.query(probe) if exp is not None else None
+        if res is not None and res.status == Status.OK and res.value:
+            hits.append(res)
+    if exp is None:
+        revealed = {"value": UNDETERMINED, "first_height": None,
+                    "sightings": [], "source": None}
+    elif hits:
+        flags = 0
+        for r in hits:
+            flags |= r.value[0]
+        revealed = {"value": EXPOSED_BY_REUSE,
+                    "first_height": min(r.value[1] for r in hits),
+                    "sightings": sighting_words(flags),
+                    "source": "exposure"}
+    else:
+        revealed = {"value": PROTECTED, "first_height": None,
+                    "sightings": [], "source": "exposure"}
+
+    faces = []
+    for d20, form, derived_by in digests:
+        faces.extend(_face_addresses(d20, form, derived_by,
+                                     wrapped=form != "uncompressed"))
+    for face in faces:
+        face.answer = answer(face.address, backends)
+        face.why = face.answer.detail
+        if revealed["value"] == EXPOSED_BY_REUSE \
+                and face.answer.key == PROTECTED:
+            # The point is in view: a face whose own digest was never
+            # pushed is exposed all the same, and the reason names
+            # which sighting made it so.
+            face.answer = Answer(EXPOSED_BY_REUSE, "EXPOSED (by reuse)",
+                                 "", face.answer.balance_sats, "exposure",
+                                 revealed["first_height"])
+            face.why = ("key in view; this wrapper never spent"
+                        if face.kind == "p2sh-p2wpkh"
+                        else "seen in its other serialization")
+            face.answer.detail = face.why
+    return KeyEntry(text, given_as, faces, revealed, note)
 
 
 # The capabilities a report speaks about, in the order they are
@@ -1226,11 +1404,15 @@ class Report:
     text truncates fingerprints because a person reads it, while a tool
     wants the whole digest, and only the object has both."""
 
-    __slots__ = ("sources", "entries", "book", "linkage")
+    __slots__ = ("sources", "entries", "book", "linkage", "keys")
 
-    def __init__(self, sources, entries, book=None, linkage=None):
+    def __init__(self, sources, entries, book=None, linkage=None,
+                 keys=None):
         self.sources = sources          # [SourceLine, …]
         self.entries = entries          # [Entry, …], input order
+        # The `--key` entries, each a question about a point: they are
+        # NOT entries, because a key is not an address.
+        self.keys = keys or []          # [KeyEntry, …], input order
         # The links between those entries, with each class carrying its
         # own status: `same_key` answers with no artifacts at all.
         self.linkage = linkage
@@ -1264,10 +1446,10 @@ class Report:
                       else "" for c in PER_ADDRESS_CAPABILITIES])
 
 
-def build_report(addresses_text, backends, book=None, depth=1):
+def build_report(addresses_text, backends, book=None, depth=1, keys_text=()):
     """Ask every capability about every address → a Report. Prints
     nothing, opens nothing, and is the single place where an answer is
-    decided."""
+    decided. `keys_text` are the `--key` values, answered as points."""
     addresses, bad = [], []
     for t in addresses_text:
         try:
@@ -1325,7 +1507,8 @@ def build_report(addresses_text, backends, book=None, depth=1):
         backend = None
     linkage = lk.build(entries, backend, depth, book)
 
-    return Report(sources, entries, book=book, linkage=linkage)
+    keys = [key_entry(k, backends) for k in keys_text]
+    return Report(sources, entries, book=book, linkage=linkage, keys=keys)
 
 
 def render_text(report, out=sys.stdout):
@@ -1337,6 +1520,29 @@ def render_text(report, out=sys.stdout):
     cr.render_overview_text(report, out)
     if report.linkage is not None:
         lk.render_text(report.linkage, out)
+        print(file=out)
+
+    for k in report.keys:
+        r = k.revealed
+        if r["value"] == EXPOSED_BY_REUSE:
+            head = (f"REVEALED at height {r['first_height']:,} "
+                    f"(seen: {', '.join(r['sightings'])})")
+        elif r["value"] == PROTECTED:
+            head = "not revealed in confirmed blocks"
+        else:
+            head = "UNDETERMINED (no exposure backend configured)"
+        print(f"key {k.text} ({k.given_as}): {head}", file=out)
+        for face in k.faces:
+            form = f" ({face.form})" if face.form != "hash160" else ""
+            print(f"    {face.address.text:<44} {face.kind + form:<26} "
+                  f"{face.answer.text} ({face.why})", file=out)
+        if any(f.derived_by for f in k.faces):
+            print(f"    # the uncompressed form was named by "
+                  f"{next(f.derived_by for f in k.faces if f.derived_by)} "
+                  "from the x you gave: field arithmetic, no point "
+                  "multiplied, nothing verified", file=out)
+        if k.note:
+            print(f"    # {k.note}", file=out)
         print(file=out)
 
     for e in report.entries:
@@ -1368,7 +1574,7 @@ def render_csv(report, csv_path):
 
 
 def render_json(report, json_path):
-    """The report as a tool reads it: `check-report-v2`, the complete
+    """The report as a tool reads it: `check-report-v3`, the complete
     form. 0600 like every other file that lists somebody's addresses,
     and byte-identical between two runs over the same artifacts — there
     is no timestamp in it on purpose."""
@@ -1377,9 +1583,9 @@ def render_json(report, json_path):
 
 
 def run(addresses_text, backends, csv_path=None, out=sys.stdout,
-        book=None, json_path=None, depth=1):
+        book=None, json_path=None, depth=1, keys_text=()):
     """Build once, render as many ways as asked."""
-    report = build_report(addresses_text, backends, book, depth)
+    report = build_report(addresses_text, backends, book, depth, keys_text)
     render_text(report, out)
     if csv_path:
         render_csv(report, csv_path)
@@ -1464,15 +1670,12 @@ def main(argv=None):
                     "check-results.json")
 
     todo = list(args.addresses)
-    key_notes = []
-    for k in (args.key or []):
+    keys = list(args.key or [])
+    for k in keys:
         try:
-            d20, forms = key_addresses(k)
+            key_addresses(k)                  # the shape, refused early
         except AddressError as e:
             sys.exit(f"ERROR: --key {k}: {e}")
-        todo.extend(forms)
-        key_notes.append(f"# key {d20.hex()} checked as its standard "
-                         f"forms: {', '.join(forms)}")
     if args.file:
         with open(args.file) as f:
             for line in f:
@@ -1489,7 +1692,7 @@ def main(argv=None):
         except (ab.BookError, OSError) as e:
             sys.exit(f"ERROR: {args.address_book}: {e}")
         todo.extend(book.addresses)
-    if not todo:
+    if not todo and not keys:
         p.error("no addresses given (positional, --key, --file or "
                 "--address-book)")
 
@@ -1506,18 +1709,16 @@ def main(argv=None):
     try:
         backends = _backends_from_args(args)
         if args.stdout:
-            for note in key_notes:
-                print(note)
             run(todo, backends, args.csv, book=book,
-                json_path=args.json, depth=args.linkage_depth)
+                json_path=args.json, depth=args.linkage_depth,
+                keys_text=keys)
         else:
             with _private_file(args.out, encoding="utf-8") as f:
                 print("# this file lists YOUR addresses and their "
                       "answers: treat it as sensitive.", file=f)
-                for note in key_notes:
-                    print(note, file=f)
                 run(todo, backends, args.csv, out=f, book=book,
-                    json_path=args.json, depth=args.linkage_depth)
+                    json_path=args.json, depth=args.linkage_depth,
+                    keys_text=keys)
             # The pointer goes to stderr: it names the file, never a
             # answer.
             print(f"results written to {args.out} — the file lists YOUR "

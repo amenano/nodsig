@@ -1,10 +1,10 @@
 {
-  "note": "The statement a signature would be over. It binds exactly what is neither inside the fingerprint nor recomputable from the artifact's bytes, which is the declared parent and nothing else; the recipe is in docs/contracts/Artifact.md. Nothing here signs anything: this exists so that two independent signature layers agree on what they are signing.",
+  "note": "The statement a signature would be over. It binds exactly what is neither inside the fingerprint nor recomputable from the artifact's bytes, which is the declared parent, its fingerprint and the coverage its seal spoke for, and nothing else; the recipe is in docs/contracts/Artifact.md. Nothing here signs anything: this exists so that two independent signature layers agree on what they are signing. The v1 statement bound the parent's format and fingerprint only; its vectors are historical.",
   "recipe": [
-    "b\"nodsig-statement-v1\\x00\"",
+    "b\"nodsig-statement-v2\\x00\"",
     "lp(manifest.format)",
     "raw32(manifest.fingerprint)",
-    "u8(build.parent present) || [ lp(parent.format) || raw32(parent.fingerprint) ]",
+    "u8(build.parent present) || [ lp(parent.format) || raw32(parent.fingerprint) || u32be(parent.coverage.from) || u32be(parent.coverage.to) ]",
     "lp(s) = u16be(len(utf8(s))) || utf8(s)",
     "statement = sha256(the above), lowercase hex"
   ],
@@ -18,11 +18,11 @@
           "generation": 1
         }
       },
-      "canonical_bytes_hex": "6e6f647369672d73746174656d656e742d763100000764656d6f2d763244863b03e9909b7100e05b02526909a346fd7455183f6619e0fe6198c89981e000",
-      "statement": "844fd9f4f9ecbb9ba69d34798777c04829478718e31cb77b8af36f7163333e22"
+      "canonical_bytes_hex": "6e6f647369672d73746174656d656e742d763200000764656d6f2d763244863b03e9909b7100e05b02526909a346fd7455183f6619e0fe6198c89981e000",
+      "statement": "dae0db15cea120119a0814de3ae8e602a0f84cf3ec9720375ee5e88a86cb2078"
     },
     {
-      "note": "the same artifact, with a parent declared",
+      "note": "the same artifact, with a parent declared, sealed through height 4",
       "manifest": {
         "format": "demo-v2",
         "fingerprint": "44863b03e9909b7100e05b02526909a346fd7455183f6619e0fe6198c89981e0",
@@ -30,12 +30,16 @@
           "generation": 1,
           "parent": {
             "format": "demo-parent-v2",
-            "fingerprint": "559aead08264d5795d3909718cdd05abd49572e84fe55590eef31a88a08fdffd"
+            "fingerprint": "559aead08264d5795d3909718cdd05abd49572e84fe55590eef31a88a08fdffd",
+            "coverage": {
+              "from": 1,
+              "to": 4
+            }
           }
         }
       },
-      "canonical_bytes_hex": "6e6f647369672d73746174656d656e742d763100000764656d6f2d763244863b03e9909b7100e05b02526909a346fd7455183f6619e0fe6198c89981e001000e64656d6f2d706172656e742d7632559aead08264d5795d3909718cdd05abd49572e84fe55590eef31a88a08fdffd",
-      "statement": "31c7c7b6e204ec473bd3aa68bed4452ccd93cfc3e3076f61bf7614b8c28b420b"
+      "canonical_bytes_hex": "6e6f647369672d73746174656d656e742d763200000764656d6f2d763244863b03e9909b7100e05b02526909a346fd7455183f6619e0fe6198c89981e001000e64656d6f2d706172656e742d7632559aead08264d5795d3909718cdd05abd49572e84fe55590eef31a88a08fdffd0000000100000004",
+      "statement": "62b74d90386e9f2686f21cdcfbef8fc9511e63cebbf2d1acdae799a3850cb7c2"
     },
     {
       "note": "another parent: the statement moves",
@@ -46,12 +50,36 @@
           "generation": 1,
           "parent": {
             "format": "demo-parent-v2",
-            "fingerprint": "df7e70e5021544f4834bbee64a9e3789febc4be81470df629cad6ddb03320a5c"
+            "fingerprint": "df7e70e5021544f4834bbee64a9e3789febc4be81470df629cad6ddb03320a5c",
+            "coverage": {
+              "from": 1,
+              "to": 4
+            }
           }
         }
       },
-      "canonical_bytes_hex": "6e6f647369672d73746174656d656e742d763100000764656d6f2d763244863b03e9909b7100e05b02526909a346fd7455183f6619e0fe6198c89981e001000e64656d6f2d706172656e742d7632df7e70e5021544f4834bbee64a9e3789febc4be81470df629cad6ddb03320a5c",
-      "statement": "003f65cfd43d55cc4cef1a947af7aa4346493b3d69b1c1854392e5db86ed17dd"
+      "canonical_bytes_hex": "6e6f647369672d73746174656d656e742d763200000764656d6f2d763244863b03e9909b7100e05b02526909a346fd7455183f6619e0fe6198c89981e001000e64656d6f2d706172656e742d7632df7e70e5021544f4834bbee64a9e3789febc4be81470df629cad6ddb03320a5c0000000100000004",
+      "statement": "4b69b7d6e351f172148bde9493f0a2a16d45210bee0e60e32f44f1ef67ce756e"
+    },
+    {
+      "note": "the same parent sealed through another height: the statement moves, because the coverage is bound",
+      "manifest": {
+        "format": "demo-v2",
+        "fingerprint": "44863b03e9909b7100e05b02526909a346fd7455183f6619e0fe6198c89981e0",
+        "build": {
+          "generation": 1,
+          "parent": {
+            "format": "demo-parent-v2",
+            "fingerprint": "559aead08264d5795d3909718cdd05abd49572e84fe55590eef31a88a08fdffd",
+            "coverage": {
+              "from": 1,
+              "to": 3
+            }
+          }
+        }
+      },
+      "canonical_bytes_hex": "6e6f647369672d73746174656d656e742d763200000764656d6f2d763244863b03e9909b7100e05b02526909a346fd7455183f6619e0fe6198c89981e001000e64656d6f2d706172656e742d7632559aead08264d5795d3909718cdd05abd49572e84fe55590eef31a88a08fdffd0000000100000003",
+      "statement": "515bd70c793d78b4915807f2a9ccab115ceb1cd1a06cb7ad593a0ba438352103"
     },
     {
       "note": "build counters differ, the statement does not: a signature is about an artifact, not about a copy",
@@ -68,12 +96,16 @@
           },
           "parent": {
             "format": "demo-parent-v2",
-            "fingerprint": "559aead08264d5795d3909718cdd05abd49572e84fe55590eef31a88a08fdffd"
+            "fingerprint": "559aead08264d5795d3909718cdd05abd49572e84fe55590eef31a88a08fdffd",
+            "coverage": {
+              "from": 1,
+              "to": 4
+            }
           }
         }
       },
-      "canonical_bytes_hex": "6e6f647369672d73746174656d656e742d763100000764656d6f2d763244863b03e9909b7100e05b02526909a346fd7455183f6619e0fe6198c89981e001000e64656d6f2d706172656e742d7632559aead08264d5795d3909718cdd05abd49572e84fe55590eef31a88a08fdffd",
-      "statement": "31c7c7b6e204ec473bd3aa68bed4452ccd93cfc3e3076f61bf7614b8c28b420b"
+      "canonical_bytes_hex": "6e6f647369672d73746174656d656e742d763200000764656d6f2d763244863b03e9909b7100e05b02526909a346fd7455183f6619e0fe6198c89981e001000e64656d6f2d706172656e742d7632559aead08264d5795d3909718cdd05abd49572e84fe55590eef31a88a08fdffd0000000100000004",
+      "statement": "62b74d90386e9f2686f21cdcfbef8fc9511e63cebbf2d1acdae799a3850cb7c2"
     }
   ]
 }

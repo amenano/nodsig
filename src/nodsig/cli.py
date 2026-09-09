@@ -29,6 +29,7 @@ per ARTEFACT, stable by contract.
     nodsig curve      deltas|dates
     nodsig check                  the address checker
     nodsig report                 what you hold, and what it cost
+    nodsig manifest   reseal      a manifest under this release's statement
 
 The promise attached to that surface: the FORMATS are the contract, the
 CLI is convenience, and within a major version the commands named here
@@ -85,6 +86,7 @@ GROUPS = {
     "curve": {"deltas": "curve_deltas", "dates": "block_dates"},
     "check": "check_addresses",
     "report": "report",
+    "manifest": {"reseal": "manifest_tool"},
 }
 
 SUMMARY = {
@@ -103,6 +105,7 @@ SUMMARY = {
     "curve": "read the reuse curve: deltas over time, real dates",
     "check": "check addresses against every backend you have plugged in",
     "report": "describe the artifacts you hold, and what they cost",
+    "manifest": "re-seal a manifest under this release's statement",
 }
 
 

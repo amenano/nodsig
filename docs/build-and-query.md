@@ -597,6 +597,7 @@ they read, time or explain something you already have.
 | `curve dates` | heights turned into real dates (from the headers, or the node) | 6 |
 | `check` | the assembled per-address answer, from whichever backends you plug in | 6 |
 | `report` | one page over the artifacts you name: identity, cost, ancestry, machine | - |
+| `manifest reseal` | a manifest re-sealed under this release's statement, the bytes untouched; `--parent` gives the declared parent its coverage | - |
 
 `index lookup` is the one to try first on a fresh index: it is the didactic
 window on the whole design, and it needs no other artifact.

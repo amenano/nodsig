@@ -342,7 +342,7 @@ def _seal(store, keys_records, parent_fmt, parent_fp):
         "producer": producer(),
         "seconds": store.clock.stamp(),
         "wall": store.clock.wall(),
-        "parent": declared_parent(parent_fmt, parent_fp),
+        "parent": declared_parent(parent_fmt, parent_fp, state["coverage"]),
         "rows": rows,
         "parent_keys": keys_records,
         "files": files,

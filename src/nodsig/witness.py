@@ -69,7 +69,8 @@ WHAT IT DOES NOT DO
 It does not recover keys. "Exposed" here means a proof obligation was
 met: two signatures, one nonce, one key, two different messages.
 Computing the key from that is arithmetic anyone can do and this project
-does not do it: there is no curve arithmetic in nodsig, and
+does not do it: there is no point arithmetic in nodsig (one field square
+root, in `check --key`, names the other serialization of a key given), and
 `CURVE_ORDER` is used only to fold `s` with `n-s` and to refuse an `r`
 the definition of ECDSA excludes. Both are comparisons against a
 constant; neither multiplies a point.
@@ -909,9 +910,11 @@ def _seal(witness_dir, parent, index, groups, rows, counters, clock, out):
         "wall": clock.wall(),
         # The parent's OWN tag, read from its manifest, never this code's
         # constant.
-        "parent": declared_parent(parent["format"], parent["fingerprint"]),
+        "parent": declared_parent(parent["format"], parent["fingerprint"],
+                                  parent["identity"]["coverage"]),
         "index": declared_parent(index.format,
-                                 index.manifest["fingerprint"]),
+                                 index.manifest["fingerprint"],
+                                 index.manifest["identity"]["coverage"]),
         "points_resolved": len(groups),
         "rows": len(rows),
     }

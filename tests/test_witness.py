@@ -770,7 +770,9 @@ def test_the_manifest_declares_the_index_and_counts_the_classes(resolved):
     assert build["index"] == {
         "format": oi.FORMAT_TAG,
         "fingerprint": json.load(open(os.path.join(
-            index, oi.MANIFEST_NAME)))["fingerprint"]}
+            index, oi.MANIFEST_NAME)))["fingerprint"],
+        "coverage": {"from": 1, "to": 3}}
+    assert build["parent"]["coverage"] == {"from": 1, "to": 3}
     assert build["points_resolved"] == 10        # the census counts prefixes
     assert build["rows"] == 18
     assert build["attributed_beside"] == 5       # N1 x2, N6, N10A, N10B

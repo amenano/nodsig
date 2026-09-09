@@ -88,8 +88,9 @@ from array import array
 
 from nodsig import blockparse
 from nodsig import curve as cv
-from nodsig.artifact import (WallClock, identity_fingerprint, make_identity,
-                             producer, seal_manifest, verify_sealed)
+from nodsig.artifact import (WallClock, declared_parent, identity_fingerprint,
+                             make_identity, producer, seal_manifest,
+                             verify_sealed)
 from nodsig.keyforms import looks_like_key
 from nodsig.nonces import _taproot_slots as nonces_taproot_slots
 from nodsig.progress import Pace
@@ -1253,7 +1254,8 @@ def _seal_curve(curve_path, state, every, road="scan"):
                if line.split(",", 1)[0].isdigit())
     return cv.seal(curve_path, cv.REUSE_TAG, state["last_height"], {
         "road": road,
-        "parent": {"format": STATE_TAG, "fingerprint": state["fingerprint"]},
+        "parent": declared_parent(STATE_TAG, state["fingerprint"],
+                                  {"from": 1, "to": state["last_height"]}),
         "grid": every,
         "locks": state["locks"],
         "perimeter": state["perimeter"],
