@@ -117,10 +117,12 @@ January 2009. That gap is a fact about the sources, and it stays visible.
 
 ## What goes where
 
-- [`formats/PriceSeries-v1.md`](formats/PriceSeries-v1.md): the canonical
-  series, its `series.json`, and the reading rule.
-- [`formats/BlockPrice-v1.md`](formats/BlockPrice-v1.md): the 9-byte
-  record, the parents block, the prefix comparison.
+- [`formats/PriceSeries-v2.md`](formats/PriceSeries-v2.md): the canonical
+  series, its `series.json` with the observation's kind and stamp, and the
+  reading rule.
+- [`formats/BlockPrice-v2.md`](formats/BlockPrice-v2.md): the 9-byte
+  record, the parents block with each series' look-ahead, the prefix
+  comparison.
 - [`contracts/PriceSource.md`](contracts/PriceSource.md): the one question
   a consumer may ask (`at(ts)`), so that the source stays replaceable.
 - [`build-and-query.md`](build-and-query.md), section 6b: the commands.

@@ -145,8 +145,9 @@ fingerprint on anyone's machine.
 ### external input (price series, block price)
 A file with a format this project promises stability on that **nobody can
 rebuild from the chain**: the address book (`check`'s input), the check report
-(its output), and a **price series** (`price-series-v1`), a publisher's file in
-one canonical shape. The **block price** table (`blockprice-v1`) is derived
+(its output), and a **price series** (`price-series-v2`), a publisher's file in
+one canonical shape that says what each observation is and where its stamp
+falls. The **block price** table (`blockprice-v2`) is derived
 from the index and from series, so it is an external input too. They carry a
 **digest**, never a fingerprint: see the next entry and
 [external-inputs](external-inputs.md).

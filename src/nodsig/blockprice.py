@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""BlockPrice-v1: one price per block, the bridge between the chain's clock
+"""BlockPrice-v2: one price per block, the bridge between the chain's clock
 and an external price series.
 
 The clock of every artifact here is the height. The only bridge the chain
@@ -33,7 +33,13 @@ This is an EXTERNAL INPUT, DERIVED: it depends on an index, which is a
 function of the chain, and on series that are not. It therefore carries
 a digest and not a fingerprint: two people can reproduce it only if they
 hold the same series, and the parents block is where they check that.
-Formats: docs/formats/BlockPrice-v1.md, docs/formats/PriceSeries-v1.md;
+The parents block also carries, per series, what the number could not
+have known at the block (`lookahead_s`, from the series' observation):
+a daily close stamped at the start of its day is fixed up to 24 hours
+after the blocks it is applied to, and every consumer prints that beside
+its figures instead of shifting the number away from the literature's
+convention.
+Formats: docs/formats/BlockPrice-v2.md, docs/formats/PriceSeries-v2.md;
 the reasoning: docs/external-inputs.md.
 """
 
@@ -50,7 +56,7 @@ from nodsig.artifact import identity_fingerprint, producer
 from nodsig.recio import (atomic_json, checked_name, durable_replace,
                           read_json, sha_file)
 
-FORMAT_TAG = "blockprice-v1"
+FORMAT_TAG = "blockprice-v2"
 BIN_NAME = "blockprice.bin"
 META_NAME = "blockprice.json"
 REC = 9
@@ -134,6 +140,7 @@ def run_build(index_dir, out_dir, series_dirs, out=None):
         times = list(index.times)
         fingerprint = index.manifest["fingerprint"]
         index_format = index.format
+        coverage = dict(index.manifest["identity"]["coverage"])
         watermark = index.watermark
     finally:
         index.close()
@@ -164,9 +171,11 @@ def run_build(index_dir, out_dir, series_dirs, out=None):
         "priced": priced,
         "priced_from": priced_from,
         "parents": {
-            "index": {"format": index_format, "fingerprint": fingerprint},
+            "index": {"format": index_format, "fingerprint": fingerprint,
+                      "coverage": coverage},
             "series": [s.declared(k) for k, s in enumerate(series, 1)],
         },
+        "sentence": price_sentence(series),
         "prefix": {"previous_heights": len(previous) // REC,
                    "changed": len(changed),
                    "changed_heights": changed[:10]},
@@ -180,6 +189,16 @@ def run_build(index_dir, out_dir, series_dirs, out=None):
     return meta
 
 
+def price_sentence(series):
+    """What every consumer prints beside a fiat figure: each series'
+    look-ahead in words, and the limit of an external input."""
+    parts = [s.lookahead_sentence(k) for k, s in enumerate(series, 1)]
+    parts.append("fiat figures depend on external series identified by "
+                 "digest; a series fetched later may differ where its "
+                 "publisher corrected the past")
+    return "; ".join(parts)
+
+
 def _print_meta(meta, out):
     h = meta["heights"]
     print(f"block price: heights {h['from']:,}..{h['to']:,}, "
@@ -190,7 +209,10 @@ def _print_meta(meta, out):
     print(f"  parent index  {meta['parents']['index']['fingerprint']}",
           file=out)
     for s in meta["parents"]["series"]:
+        la = s.get("lookahead_s")
         print(f"  series {s['order']}  {s['publisher']}  step {s['step']} s  "
+              f"{s['observation']['kind']} stamped {s['observation']['stamp']}"
+              f"  look-ahead {'unknown' if la is None else f'{la} s'}  "
               f"digest {s['digest']}", file=out)
     p = meta["prefix"]
     if p["previous_heights"]:
@@ -199,9 +221,7 @@ def _print_meta(meta, out):
               + (f" (the first at {p['changed_heights']})"
                  if p["changed"] else ""), file=out)
     print(f"digest: {meta['digest']}", file=out)
-    print("(a digest identifies this file; fiat figures depend on external "
-          "series, identified above by digest, and a series fetched later "
-          "may differ where its publisher corrected the past)", file=out)
+    print(f"({meta['sentence']})", file=out)
 
 
 # ---------------------------------------------------------------------------
@@ -310,6 +330,14 @@ def run_verify(bp_dir, index_dir=None, series_dirs=(), out=None):
         if s.digest != d["digest"]:
             raise BlockPriceError(f"series {d['order']} ({d['publisher']}): "
                                   "digest differs from the declared parent")
+        if s.observation != d["observation"]:
+            # The digest covers the rows, not the metadata: a series
+            # re-imported with another observation has the same bytes
+            # and another meaning, and the table's sentence would lie.
+            raise BlockPriceError(
+                f"series {d['order']} ({d['publisher']}): the observation "
+                f"given ({s.observation}) is not the one the table "
+                f"declares ({d['observation']})")
     data, _priced, _from = compute(times, series)
     if data != bp.data:
         diff = next(i for i in range(min(len(data), len(bp.data)) // REC + 1)
@@ -388,11 +416,13 @@ def write_daily_csv(rows, meta, out, date_from=None, date_to=None):
     out.write(f"# currency {meta['currency']}; blockprice digest "
               f"{meta['digest']}; index {meta['parents']['index']['fingerprint']}\n")
     for s in meta["parents"]["series"]:
+        la = s.get("lookahead_s")
         out.write(f"# series {s['order']} {s['publisher']} step {s['step']} "
+                  f"{s['observation']['kind']} stamped "
+                  f"{s['observation']['stamp']} look-ahead "
+                  f"{'unknown' if la is None else f'{la} s'} "
                   f"digest {s['digest']}\n")
-    out.write("# fiat figures depend on external series identified by "
-              "digest; a series fetched later may differ where its "
-              "publisher corrected the past\n")
+    out.write(f"# {meta['sentence']}\n")
     out.write("date,blocks,price,kind,gap_days,price_min,price_max,series\n")
     for r in rows:
         if date_from and r[0] < date_from:
@@ -490,7 +520,10 @@ def _import_from_args(args):
         url=pick("url", ""), license_=pick("license", "unknown"),
         note=args.note or "", currency=args.currency,
         stale_after=args.stale_after, records_path=args.records,
-        fetched_at=args.fetched_at)
+        fetched_at=args.fetched_at,
+        observation_kind=pick("observation_kind"),
+        observation_stamp=pick("observation_stamp"),
+        observation_source=pick("observation_source", "") or "")
 
 
 def main(argv=None):
@@ -526,6 +559,15 @@ def main(argv=None):
     im.add_argument("--fetched-at", help="when you fetched it (free text)")
     im.add_argument("--currency", default="USD")
     im.add_argument("--note")
+    im.add_argument("--observation-kind", choices=ps.OBSERVATION_KINDS,
+                    help="what the publisher's number is over its period "
+                         "(required, unless a preset pins it)")
+    im.add_argument("--observation-stamp", choices=ps.OBSERVATION_STAMPS,
+                    help="where the timestamp falls relative to the period "
+                         "(required, unless a preset pins it)")
+    im.add_argument("--observation-source",
+                    help="where the publisher documents the observation "
+                         "kind (free text, recorded in origin)")
 
     sv = sub.add_parser("series-verify", help="a series against its "
                                               "series.json")

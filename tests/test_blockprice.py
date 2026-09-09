@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PriceSeries-v1 and BlockPrice-v1: the external inputs.
+"""PriceSeries-v2 and BlockPrice-v2: the external inputs.
 
 Synthetic throughout: a publisher's file written by the test, the
 derived suite's five-block chain (header times 1_700_000_000 + h). The
@@ -60,14 +60,15 @@ def write_csv(path, rows, header="time,price"):
             f.write(",".join(str(x) for x in r) + "\n")
 
 
-def series_a(tmp, name="a", rows=None):
+def series_a(tmp, name="a", rows=None, kind="spot", stamp="instant"):
     """Hourly: 100.50 from T0-100, 200 from T0+3. Heights 1,2 -> 100.50;
-    3,4,5 -> 200."""
+    3,4,5 -> 200. A spot stamped at its instant: no look-ahead."""
     src = os.path.join(tmp, name + ".csv")
     write_csv(src, rows or [(T0 - 100, "100.50"), (T0 + 3, "200")])
     out = os.path.join(tmp, "series_" + name)
     ps.import_series(src, out, "time", "price", "unix", 3600, "pub-" + name,
-                     license_="test")
+                     license_="test", observation_kind=kind,
+                     observation_stamp=stamp)
     return out
 
 
@@ -93,7 +94,9 @@ def test_import_canonical(tmp):
                     ("2010-07-20", "1.0")], header="time,PriceUSD")
     out = os.path.join(tmp, "s")
     meta = ps.import_series(src, out, "time", "PriceUSD", "%Y-%m-%d",
-                            86400, "pub", license_="CC BY-NC 4.0")
+                            86400, "pub", license_="CC BY-NC 4.0",
+                            observation_kind="close",
+                            observation_stamp="period_start")
     with open(os.path.join(out, ps.CSV_NAME)) as f:
         text = f.read()
     check(text == "ts,price\n1279411200,0.0858\n1279497600,0.085\n"
@@ -102,14 +105,48 @@ def test_import_canonical(tmp):
     check(meta["rows"] == 3 and meta["stale_after"] == 3 * 86400,
           "rows or stale_after wrong")
     check(meta["origin"]["license"] == "CC BY-NC 4.0", "origin lost")
+    check(meta["format"] == "price-series-v2"
+          and meta["observation"] == {"kind": "close", "stamp": "period_start"},
+          "the observation is recorded")
     # the digest is over the exact bytes, and verify agrees with it
-    s = ps.verify_series(out, out=io.StringIO())
+    log = io.StringIO()
+    s = ps.verify_series(out, out=log)
     check(s.digest == meta["digest"], "digest mismatch")
+    # a daily close stamped at the start of its day: 24 hours of look-ahead
+    check(s.lookahead_s == 86400 and "24 hours after the block"
+          in s.lookahead_sentence(), s.lookahead_sentence())
+    check("24 hours" in log.getvalue(), "verify prints the look-ahead")
+    check(ps.lookahead_s({"kind": "open", "stamp": "period_start"}, 86400) == 0
+          and ps.lookahead_s({"kind": "close", "stamp": "period_end"}, 86400) == 0
+          and ps.lookahead_s({"kind": "vwap", "stamp": "period_start"}, 3600) == 3600
+          and ps.lookahead_s({"kind": "unknown", "stamp": "instant"}, 86400) is None,
+          "the look-ahead table")
     # a zero price is refused, not stored
     write_csv(src, [("2010-07-18", "0")], header="time,PriceUSD")
     with pytest.raises(ps.PriceSeriesError):
         ps.import_series(src, os.path.join(tmp, "z"), "time", "PriceUSD",
+                         "%Y-%m-%d", 86400, "pub", observation_kind="close",
+                         observation_stamp="period_start")
+    # and so is a series that does not say what its observation is
+    write_csv(src, [("2010-07-18", "1")], header="time,PriceUSD")
+    with pytest.raises(ps.PriceSeriesError, match="observation kind"):
+        ps.import_series(src, os.path.join(tmp, "no_obs"), "time", "PriceUSD",
                          "%Y-%m-%d", 86400, "pub")
+    with pytest.raises(ps.PriceSeriesError, match="observation stamp"):
+        ps.import_series(src, os.path.join(tmp, "no_stamp"), "time",
+                         "PriceUSD", "%Y-%m-%d", 86400, "pub",
+                         observation_kind="close")
+    # a meta of the earlier format, or one without the field, is refused
+    path = os.path.join(out, ps.META_NAME)
+    saved = open(path).read()
+    for doc in ({**meta, "format": "price-series-v1"},
+                {k: v for k, v in meta.items() if k != "observation"}):
+        with open(path, "w") as f:
+            json.dump(doc, f)
+        with pytest.raises(ps.PriceSeriesError):
+            ps.load_meta(out)
+    with open(path, "w") as f:
+        f.write(saved)
 
 
 def test_import_json_and_preset(tmp):
@@ -120,14 +157,17 @@ def test_import_json_and_preset(tmp):
             {"timestamp": "1313003600", "close": "11"}]}}, f)
     meta = ps.import_series(src, os.path.join(tmp, "j"), "timestamp",
                             "close", "unix", 3600, "pub-j",
-                            records_path="data.ohlc")
+                            records_path="data.ohlc",
+                            observation_kind="close",
+                            observation_stamp="period_end")
     check(meta["rows"] == 2 and meta["coverage"]["to"] == 1313003600,
           "json import wrong")
     # lists addressed by index, milliseconds
     with open(src, "w") as f:
         json.dump([[1313000000000, 10.5], [1313003600000, 11]], f)
     meta = ps.import_series(src, os.path.join(tmp, "j2"), "0", "1",
-                            "unix_ms", 3600, "pub-j")
+                            "unix_ms", 3600, "pub-j", observation_kind="spot",
+                            observation_stamp="instant")
     check(meta["coverage"] == {"from": 1313000000, "to": 1313003600},
           "unix_ms import wrong")
     # the preset maps the CoinMetrics community file
@@ -139,7 +179,10 @@ def test_import_json_and_preset(tmp):
     check(rc == 0, "preset import failed")
     meta = ps.load_meta(out)
     check(meta["origin"]["publisher"] == "coinmetrics-community"
-          and meta["step"] == 86400, "preset mapping not applied")
+          and meta["step"] == 86400
+          and meta["observation"] == {"kind": "close", "stamp": "period_start"}
+          and meta["origin"]["observation_source"],
+          "preset mapping not applied")
 
 
 def test_reading_rule(tmp):
@@ -202,7 +245,8 @@ def test_two_series_in_order(built):
     write_csv(src, [(T0, "1")])
     eur = os.path.join(tmp, "series_eur")
     ps.import_series(src, eur, "time", "price", "unix", 3600, "pub-eur",
-                     currency="EUR")
+                     currency="EUR", observation_kind="spot",
+                     observation_stamp="instant")
     with pytest.raises(bp.BlockPriceError):
         bp.run_build(index, os.path.join(tmp, "bp_mix"), [fine, eur],
                      out=io.StringIO())
@@ -290,7 +334,8 @@ def test_daily_kinds(built):
     write_csv(src, [(T0 + 3, "10"), (T0 + 5, "30")])
     s = os.path.join(tmp, "series_p")
     ps.import_series(src, s, "time", "price", "unix", 1, "pub-p",
-                     stale_after=0)
+                     stale_after=0, observation_kind="spot",
+                     observation_stamp="instant")
     out = os.path.join(tmp, "bp")
     bp.run_build(index, out, [s], out=io.StringIO())
     table = bp.BlockPrice(out)
@@ -333,7 +378,9 @@ def test_cli_end_to_end(built, capsys):
     out = os.path.join(tmp, "bp")
     check(bp.main(["import", "--from", src, "--out", s, "--ts-field", "time",
                    "--price-field", "price", "--step", "3600",
-                   "--publisher", "pub", "--license", "test"]) == 0, "import")
+                   "--publisher", "pub", "--license", "test",
+                   "--observation-kind", "close",
+                   "--observation-stamp", "period_start"]) == 0, "import")
     check(bp.main(["series-verify", "--series", s]) == 0, "series-verify")
     check(bp.main(["build", "--index", index, "--out", out,
                    "--series", s]) == 0, "build")
@@ -350,6 +397,14 @@ def test_cli_end_to_end(built, capsys):
     check(bp.main(["import", "--from", src, "--out", s + "2",
                    "--ts-field", "time", "--price-field", "price"]) == 1,
           "missing publisher must fail")
+    check(bp.main(["import", "--from", src, "--out", s + "3",
+                   "--ts-field", "time", "--price-field", "price",
+                   "--publisher", "pub"]) == 1,
+          "a missing observation must fail")
+    # the table says, in words, what an hourly close stamped at the
+    # start of its hour could not have known
+    check("1 hours after the block" in text or "1 hours" in text,
+          f"the look-ahead must be printed with the table: {text[-600:]}")
 
 
 def test_supply_with_a_price(built):
@@ -374,6 +429,8 @@ def test_supply_with_a_price(built):
     check(f"{want:,.2f} USD over 5 priced block(s)" in text,
           f"fiat total missing or wrong:\n{text}")
     check("corrected the past" in text, "the limit must be printed")
+    check("known at the block" in text,
+          f"the supply footer names the series' look-ahead: {text[-500:]}")
     with open(csv_path) as f:
         lines = f.read().splitlines()
     check(lines[0].endswith(",price_usd,fees_usd"), lines[0])

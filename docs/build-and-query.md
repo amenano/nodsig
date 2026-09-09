@@ -360,6 +360,8 @@ cannot reproduce is in [`external-inputs.md`](external-inputs.md).
 ```sh
 nodsig price import --from btc.csv --out <series> --preset coinmetrics \
                     --fetched-at 2026-08-21            # any CSV/JSON: see -h
+# without a preset, say what the number is and where its stamp falls:
+#   --observation-kind close --observation-stamp period_start
 nodsig price series-verify --series <series>
 nodsig price build  --index <index> --out <blockprice> --series <series>
 nodsig price verify --blockprice <blockprice> --index <index> --series <series>
@@ -372,7 +374,13 @@ each epoch in the series' currency, block by block. `derived timeline
 --price <blockprice>` is the second: the at-creation cost basis per
 (creation, spend) window, one integer multiply per row.
 
-`price build` reads the index's block table and the series, and takes
+A series says what each observation **is** (open, close, mean, vwap, spot)
+and **where its stamp falls** (the start or the end of its period, or an
+instant); a daily close stamped at the start of its day is a number fixed
+up to 24 hours after the blocks it is applied to, and every table and every
+figure built from it says so (`lookahead_s`) instead of shifting the number
+away from the literature's convention. `price build` reads the index's
+block table and the series, and takes
 seconds; `--series` repeats, finest first, and the table records which
 one answered at each height. It is rebuilt whole, and a rebuild compares
 itself with the file it replaces: a publisher that corrected its past
@@ -582,8 +590,9 @@ they read, time or explain something you already have.
 | `price stats` | rule, parents, what the last rebuild changed, instant | - |
 | `price at` | the price of one block, and which series gave it | 6b |
 | `price daily` | the per-day aggregation, dense, each value with its kind | 6b |
-| `blockstats build` | per-block series out of the graph | 4 |
+| `blockstats build` | per-block series out of the graph, the unspendable outputs counted | 4 |
 | `blockstats summary` | the same series read per epoch | 6 |
+| `blockstats verify` | the CSV against its sealed meta; `--graph` confirms the parent | 5 |
 | `curve deltas` | value spendable at the snapshot whose key became public in each interval | 6 |
 | `curve dates` | heights turned into real dates (from the headers, or the node) | 6 |
 | `check` | the assembled per-address answer, from whichever backends you plug in | 6 |

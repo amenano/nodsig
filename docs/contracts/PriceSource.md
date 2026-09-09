@@ -4,7 +4,7 @@
 under one reading rule; or the explicit answer that there is none.
 
 - **Layer:** L1 (in-process). See [ARCHITECTURE](../ARCHITECTURE.md).
-- **Reads format:** [PriceSeries-v1](../formats/PriceSeries-v1.md).
+- **Reads format:** [PriceSeries-v2](../formats/PriceSeries-v2.md).
 - **Reference impl:** `priceseries.Series` and `priceseries.quote_first`;
   `blockprice.compute` is the one consumer in the tree.
 - **Depends on:** nothing in the artifacts. A price is not a function of
@@ -59,8 +59,9 @@ currency; the composition refuses otherwise.
 
 ## Implementing another source
 
-Any file a publisher offers becomes a `PriceSeries-v1` through
-`price import` (a field mapping, a step, an origin). A source that is not
+Any file a publisher offers becomes a `PriceSeries-v2` through
+`price import` (a field mapping, a step, an origin, and what each observation
+is and where its stamp falls). A source that is not
 a file (an exchange API) is **out of this contract by design**: the
 toolkit's only network peer is the node. Fetch it with whatever tool you
 trust, save the response, import the file. The digest then identifies

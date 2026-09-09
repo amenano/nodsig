@@ -77,8 +77,8 @@ manifest names its parent).
 Four documents in that directory are **not artifacts** and say so in their
 first line: [`AddressBook-v2`](formats/AddressBook-v2.md), the input of
 `check`; [`CheckReport-v2`](formats/CheckReport-v2.md), its complete output;
-[`PriceSeries-v1`](formats/PriceSeries-v1.md), a publisher's price series in
-one canonical shape; and [`BlockPrice-v1`](formats/BlockPrice-v1.md), one
+[`PriceSeries-v2`](formats/PriceSeries-v2.md), a publisher's price series in
+one canonical shape; and [`BlockPrice-v2`](formats/BlockPrice-v2.md), one
 price per block derived from it and from the index. None is a function of the
 chain, so each carries a **digest** and never a fingerprint
 ([external-inputs](external-inputs.md)). They sit there because that directory

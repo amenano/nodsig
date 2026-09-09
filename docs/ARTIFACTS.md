@@ -25,9 +25,9 @@ placeholders: every one of them is a path you choose on the command line.
 | outpoint derivatives | `outpoint-derived-v3` | `outpoint-derived-v2` |
 | first-spend table | `firstspend-v1` | — |
 | first-reveal table | `firstreveal-v2` | — |
-| block stats | `block-stats-v2` | — |
-| price series (external input) | `price-series-v1` | — |
-| block price (external input, derived) | `blockprice-v1` | — |
+| block stats | `block-stats-v3` | — |
+| price series (external input) | `price-series-v2` | — |
+| block price (external input, derived) | `blockprice-v2` | — |
 | address book (input) | `address-book-v2` | — |
 | check report (output) | `check-report-v2` | — |
 
@@ -170,7 +170,7 @@ published with this project were produced: run once, agreed, reported.
 | └ `manifest.json` | `nonces-v3` | Fingerprint and coverage; no parent, it comes from the blocks | `nonces merge` | `nonces verify` |
 | `<witness>/` | `nonces-witness-v2` | The evidence that resolves each repeated point: per (nonce point, key, attribution class), the signatures that decide whether a key follows, the key being the one the unlocking data or the spent output names (a key beside the signature that hashes to the lock, a position in an m-of-m script or a tapscript template, a P2PK or taproot key-path output). Optional, built after the census (~1.5 h over the whole chain plus the index lookups, a few MB) | `nonces resolve` (needs the node and the index) | `nonces witness-verify`, `check --witness` |
 | `<graph>/` | `graph-v2` | The raw transaction graph. Off by default, enabled with `--graph` | `archive scan --graph` | `graph`, `blockstats`, `index build` |
-| block-stats CSV | `block-stats-v2` | Per-block series (transactions, inputs, outputs, size, time) derived from the graph | `blockstats build` | `blockstats summary`, a human |
+| block-stats CSV | `block-stats-v3` | Per-block series (transactions, inputs, outputs, value, time, and the outputs no key can spend with their value) derived from the graph, sealed by a meta beside it | `blockstats build` | `blockstats summary/verify`, a human |
 | `<index>/` | `outpoint-index-v3` | The chain numbered once: a record per output, its spend already resolved | `index build` | `index lookup`, `derived build`, `check` |
 | ├ `outputs.bin`, `spender_of_gNNNN.bin`, `spend_extra_gNNNN.bin` | records | Outputs in ordinal coordinates; one slot per output naming its spender, with an overflow file for the duplicate-spend anomaly (empty on a consensus-valid chain) | `index build` | as above |
 | ├ `txids.bin`, `txid_index_gNNNN.bin`, `tx_first_out.bin`, `blocks.bin` | records | The dictionaries turning txids and heights into ordinals, and back | `index build` | as above |

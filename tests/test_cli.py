@@ -52,7 +52,7 @@ PUBLIC_SURFACE = {
                 "cospends", "supply", "timeline", "timeline-verify"),
     "firstspend": ("build", "stats", "verify", "between", "rewind"),
     "firstreveal": ("build", "stats", "verify", "between"),
-    "blockstats": ("build", "summary"),
+    "blockstats": ("build", "summary", "verify"),
     "price": ("import", "series-verify", "build", "stats", "verify", "at",
               "daily"),
     "curve": ("deltas", "dates"),

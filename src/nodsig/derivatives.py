@@ -1716,8 +1716,7 @@ def run_supply(derived_dir, index_dir, epoch_blocks=SUBSIDY_HALVING,
                   f"digest {table.meta['digest']}, series "
                   + ", ".join(f"{s['publisher']} {s['digest'][:16]}..."
                               for s in table.meta["parents"]["series"])
-                  + ". A series fetched later may differ where its "
-                  "publisher corrected the past.", file=out)
+                  + f". {_price_sentence(table)}.", file=out)
         if csv:
             print(f"\nper-block series written to {csv_path}", file=out)
         if violations:

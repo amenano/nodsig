@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PriceSeries-v1: an external price series, in one canonical shape.
+"""PriceSeries-v2: an external price series, in one canonical shape.
 
 A price is NOT a function of the chain. Nothing in the blocks says what a
 coin was worth, so every figure in a fiat currency that this toolkit ever
@@ -20,17 +20,27 @@ words are kept apart on purpose; see docs/external-inputs.md.
                             plain decimal string (no exponent), exactly
                             the value the publisher gave
     <series>/series.json    currency, step, stale_after, coverage, row
-                            count, the publisher's `origin` block, and the
-                            sha256 digest of series.csv
+                            count, what each observation IS and WHERE its
+                            stamp falls (`observation`), the publisher's
+                            `origin` block, and the sha256 digest of
+                            series.csv
 
 Reading rule, the same for every consumer: the price valid at `ts` is the
-LAST observation with `obs_ts <= ts` (never a look into the future), and
-only if it is not older than `stale_after` seconds; otherwise there is
-no price, and "no price" is said, never filled. A daily series applies
-the price of day D to the whole of D; that convention is what `step`
-declares, and it is printed beside every number that rests on it.
+LAST observation with `obs_ts <= ts`, and only if it is not older than
+`stale_after` seconds; otherwise there is no price, and "no price" is
+said, never filled. A daily series applies the observation of day D to
+the whole of D. That is never a look into the future of the STAMPS; it
+can be one of the INFORMATION: a daily close stamped at the start of its
+day is a number fixed up to 24 hours after the blocks it is applied to.
+The v1 promised "never a look into the future" with no field that could
+tell a close from an open. `observation` says what the number is and
+where its stamp falls, and every table built from a series carries the
+look-ahead that follows (`lookahead_s`), printed beside every fiat
+figure. The number is not shifted: the literature applies the day's
+price to the day, and a builder who wants a lag applies it to the series
+and the digest says so.
 
-The format is in docs/formats/PriceSeries-v1.md.
+The format is in docs/formats/PriceSeries-v2.md.
 """
 
 import bisect
@@ -45,22 +55,52 @@ from nodsig.artifact import producer
 from nodsig.recio import (atomic_json, checked_name, durable_replace,
                           read_json, sha_file)
 
-FORMAT_TAG = "price-series-v1"
+FORMAT_TAG = "price-series-v2"
 CSV_NAME = "series.csv"
 META_NAME = "series.json"
 DEFAULT_STALE_STEPS = 3      # a price older than 3 steps is no price
 
+# What an observation is over its period, and where its stamp falls.
+# Closed lists: a consumer that met a value outside them would have to
+# guess, and a guess about the semantics of a price is the defect this
+# field exists to retire.
+OBSERVATION_KINDS = ("open", "close", "mean", "vwap", "spot", "unknown")
+OBSERVATION_STAMPS = ("period_start", "period_end", "instant")
+
 # Field mappings for publishers whose files are common enough to name.
 # Each is exactly what a reader would type by hand with `--ts-field` and
 # friends; naming it only saves the typing and pins the published shape.
+# The observation a preset pins is a statement about the publisher's
+# documentation, and `observation_source` says where to read it.
 PRESETS = {
-    # github.com/coinmetrics/data, csv/btc.csv: one row per UTC day
+    # github.com/coinmetrics/data, csv/btc.csv: one row per UTC day,
+    # `PriceUSD` documented as a reference rate fixed at the end of the
+    # day and stamped with the day's date.
     "coinmetrics": {"ts_field": "time", "price_field": "PriceUSD",
                     "ts_format": "%Y-%m-%d", "step": 86400,
                     "publisher": "coinmetrics-community",
                     "url": "https://github.com/coinmetrics/data",
-                    "license": "CC BY-NC 4.0"},
+                    "license": "CC BY-NC 4.0",
+                    "observation_kind": "close",
+                    "observation_stamp": "period_start",
+                    "observation_source": (
+                        "the publisher's data dictionary for PriceUSD, "
+                        "read at import; confirm it against the file "
+                        "fetched")},
 }
+
+
+def lookahead_s(observation, step):
+    """How far after a block the number applied to it may have been
+    fixed: `step` for a close, mean or vwap stamped at the start of its
+    period; 0 for an open, for a stamp at the end of the period, or for
+    an instant; None when the kind is unknown."""
+    kind, stamp = observation["kind"], observation["stamp"]
+    if kind == "unknown":
+        return None
+    if kind == "open" or stamp in ("period_end", "instant"):
+        return 0
+    return int(step)
 
 
 class PriceSeriesError(RuntimeError):
@@ -127,16 +167,31 @@ def _field(row, name):
 def import_series(src_path, out_dir, ts_field, price_field, ts_format,
                   step, publisher, url="", license_="unknown", note="",
                   currency="USD", stale_after=None, records_path=None,
-                  fetched_at=None):
+                  fetched_at=None, observation_kind=None,
+                  observation_stamp=None, observation_source=""):
     """Convert one external file into `<out_dir>/series.csv` + series.json.
 
     Rows with an empty price are skipped (a publisher's way of saying the
     market did not exist yet). Rows are sorted by time; two observations
     at the same second keep the first, so the output is strictly
-    ascending and the file is a total order. Returns the metadata."""
+    ascending and the file is a total order. The observation's kind and
+    stamp are required, like the publisher: a series that cannot say is
+    imported as `unknown`, on purpose and in writing. Returns the
+    metadata."""
     step = int(step)
     if step <= 0:
         raise PriceSeriesError("step must be a positive number of seconds")
+    if observation_kind not in OBSERVATION_KINDS:
+        raise PriceSeriesError(
+            f"the observation kind is required, one of "
+            f"{', '.join(OBSERVATION_KINDS)}: what the publisher's number "
+            "is over its period (`unknown` if the publisher does not say)")
+    if observation_stamp not in OBSERVATION_STAMPS:
+        raise PriceSeriesError(
+            f"the observation stamp is required, one of "
+            f"{', '.join(OBSERVATION_STAMPS)}: where the timestamp falls "
+            "relative to the period the number describes")
+    observation = {"kind": observation_kind, "stamp": observation_stamp}
     stale_after = int(stale_after) if stale_after is not None \
         else DEFAULT_STALE_STEPS * step
     rows = []
@@ -166,15 +221,19 @@ def import_series(src_path, out_dir, ts_field, price_field, ts_format,
         "currency": currency,
         "step": step,
         "stale_after": stale_after,
+        "observation": observation,
         "rule": ("price at ts = last row with row.ts <= ts, and only if "
-                 "ts - row.ts <= stale_after; otherwise no price"),
+                 "ts - row.ts <= stale_after; otherwise no price; a "
+                 "number stamped at the start of its period may have "
+                 "been fixed up to lookahead_s after ts"),
         "rows": len(dedup),
         "coverage": {"from": dedup[0][0], "to": dedup[-1][0]},
         "origin": {"publisher": publisher, "url": url, "license": license_,
                    "file": os.path.basename(src_path),
                    "fields": {"ts": ts_field, "price": price_field,
                               "ts_format": ts_format},
-                   "fetched_at": fetched_at, "note": note},
+                   "fetched_at": fetched_at, "note": note,
+                   "observation_source": observation_source},
         "file": CSV_NAME,
         "digest": sha_file(csv_path),
         "imported_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
@@ -195,7 +254,18 @@ def load_meta(series_dir):
                                "price series (run `price import`)")
     meta = read_json(path, PriceSeriesError)
     if meta.get("format") != FORMAT_TAG:
-        raise PriceSeriesError(f"not a {FORMAT_TAG} series: {series_dir}")
+        raise PriceSeriesError(
+            f"not a {FORMAT_TAG} series: {series_dir} says "
+            f"{meta.get('format')!r}; a series of an earlier format is "
+            "imported again from the publisher's file (seconds, same "
+            "digest), with its observation kind and stamp")
+    obs = meta.get("observation") or {}
+    if (obs.get("kind") not in OBSERVATION_KINDS
+            or obs.get("stamp") not in OBSERVATION_STAMPS):
+        raise PriceSeriesError(
+            f"{path}: the observation is missing or not one of the "
+            "declared values; no default is taken, because a default on "
+            "the semantics of a price is the defect the field retired")
     return meta
 
 
@@ -256,6 +326,8 @@ class Series:
         self.currency = self.meta["currency"]
         self.name = self.meta["origin"]["publisher"]
         self.digest = self.meta["digest"]
+        self.observation = dict(self.meta["observation"])
+        self.lookahead_s = lookahead_s(self.observation, self.step)
 
     def coverage(self):
         return self.ts[0], self.ts[-1]
@@ -273,9 +345,29 @@ class Series:
         return {"order": order, "publisher": self.name,
                 "digest": self.digest, "currency": self.currency,
                 "step": self.step, "stale_after": self.stale_after,
+                "observation": dict(self.observation),
+                "lookahead_s": self.lookahead_s,
                 "rows": len(self.ts),
                 "coverage": dict(self.meta["coverage"]),
                 "origin": dict(self.meta["origin"])}
+
+    def lookahead_sentence(self, order=None):
+        """What a consumer prints beside a fiat figure that rests on
+        this series: what the number could not have known at the
+        block, in words, never a number shifted."""
+        who = (f"series {order} ({self.name})" if order is not None
+               else f"series {self.name}")
+        kind, stamp = self.observation["kind"], self.observation["stamp"]
+        if self.lookahead_s is None:
+            return (f"{who} does not say what its observation is "
+                    f"(kind unknown, stamp {stamp}): how far after a block "
+                    "its number was fixed is not known")
+        if self.lookahead_s == 0:
+            return (f"{who} stamps its {kind} where it was fixed "
+                    f"({stamp}): a block's price was known at the block")
+        return (f"{who} stamps a {kind} of {self.step:,} s at the start of "
+                f"its period: a block's price may be a number fixed up to "
+                f"{self.lookahead_s / 3600:g} hours after the block")
 
 
 def open_series(dirs):
@@ -323,6 +415,8 @@ def verify_series(series_dir, out=None):
                                f"first at row {bad[0] + 2}")
     print(f"price series ok: {s.name}, {len(s.ts):,} rows, {s.currency}, "
           f"step {s.step} s, stale after {s.stale_after} s", file=out)
+    print(f"  observation {s.observation['kind']} stamped "
+          f"{s.observation['stamp']}: {s.lookahead_sentence()}", file=out)
     print(f"  coverage {_iso(lo)} .. {_iso(hi)}", file=out)
     print(f"  digest   {s.digest}", file=out)
     print("  (a digest identifies this file; it is not a fingerprint and "

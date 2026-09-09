@@ -74,8 +74,59 @@ def expected_rows(blocks):
         n_out = sum(len(t.outputs) for t in block.transactions)
         value = sum(o.value for t in block.transactions
                     for o in t.outputs)
-        rows.append((h, block.header.time, n_tx, n_in, n_out, value))
+        unsp = [o for t in block.transactions for o in t.outputs
+                if o.script_pubkey[:1] == b"\x6a"
+                or len(o.script_pubkey) > 10_000]
+        rows.append((h, block.header.time, n_tx, n_in, n_out, value,
+                     len(unsp), sum(o.value for o in unsp)))
     return rows
+
+
+def test_the_unspendable_rule_is_the_nodes():
+    """OP_RETURN as the first byte, or a script over 10,000 bytes: the
+    reference node's IsUnspendable, counted per block from the scripts
+    the graph keeps verbatim. A burn address is not unspendable by this
+    rule, and is not by the node's."""
+    rec = {"height": 7, "time": 1, "txs": [
+        {"inputs": [], "outputs": [(5, b"\x6a\x04data"),
+                                   (7, b"\x51" * 10_001),
+                                   (9, b"\x51" * 10_000),
+                                   (11, b"\x76\xa9\x14" + bytes(20)
+                                    + b"\x88\xac")]},
+        {"inputs": [b"x"], "outputs": [(13, b"\x6a")]},
+    ]}
+    check(bs.is_unspendable(b"\x6a") and not bs.is_unspendable(b"")
+          and bs.is_unspendable(b"\x00" * 10_001)
+          and not bs.is_unspendable(b"\x00" * 10_000),
+          "the rule's two edges")
+    check(bs.block_row(rec) == (7, 1, 2, 1, 5, 45, 3, 25),
+          f"the row counts the unspendable: {bs.block_row(rec)}")
+    print("ok  unspendable: the node's rule, per block")
+
+
+def test_verify_is_the_shared_audit(tmp, graph):
+    out = os.path.join(tmp, "audited.csv")
+    fp = bs.run_build(graph, out)
+    check(bs.run_verify(out, out=io.StringIO()) == fp,
+          "verify recomputes the fingerprint it sealed")
+    try:
+        bs.run_verify(out, graph_dir=graph, out=io.StringIO())
+        fail("an unsealed graph was confirmed as parent")
+    except bs.StatsError as e:
+        check("no parent" in str(e), f"unexpected: {e}")
+    ge.run_fingerprint(graph)
+    fp2 = bs.run_build(graph, out)
+    check(fp2 == fp, "the parent is outside the identity")
+    bs.run_verify(out, graph_dir=graph, out=io.StringIO())
+    with open(out, "a") as f:
+        f.write("9,1,1,1,1,1,0,0\n")
+    try:
+        bs.run_verify(out, out=io.StringIO())
+        fail("a changed CSV passed the audit")
+    except bs.StatsError:
+        pass
+    print("ok  verify: the CSV against its meta, the parent confirmed by "
+          "recomputing the graph's identity")
 
 
 def test_build_matches_parsed(tmp, blocks, graph):
@@ -95,6 +146,10 @@ def test_build_matches_parsed(tmp, blocks, graph):
           "meta n_tx total wrong")
     check(meta["build"]["totals"]["value_created_sats"] == sum(r[5] for r in want),
           "meta value total wrong")
+    check(meta["build"]["totals"]["n_unspendable"] == sum(r[6] for r in want)
+          and meta["build"]["rule"] == bs.UNSPENDABLE_RULE
+          and meta["build"]["files"]["csv"]["file"] == "stats.csv",
+          f"the meta names the rule and the file: {meta['build']}")
     print("ok  build: rows == independently parsed aggregates, meta exact")
     return out
 
@@ -212,7 +267,7 @@ def test_rejects_foreign_csv(tmp):
     try:
         list(bs.read_series(bad))
     except bs.StatsError:
-        print("ok  guard: a non block-stats-v2 CSV is refused")
+        print("ok  guard: a non block-stats-v3 CSV is refused")
         return
     fail("read_series accepted a foreign CSV")
 
@@ -226,6 +281,7 @@ def main():
         test_the_recorded_digest_is_the_files_own_sha256(tmp, graph)
         test_summary(tmp, blocks, out)
         test_rejects_foreign_csv(tmp)
+        test_the_unspendable_rule_is_the_nodes()
         # do these last: they write the graph manifest, changing later
         # builds (and the second leaves a v1 seal behind on purpose)
         test_meta_carries_sealed_graph(tmp, graph)
