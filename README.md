@@ -11,95 +11,38 @@ anyone else can recompute from the same chain. The artifacts are files: hand
 them to someone else and they check them by recomputing that fingerprint.
 Building every one of them costs about 110 hours and 950 GB at today's
 height; most questions need a fraction of that, and the table under
-*Building the artifacts* says which.
-
-## Why it exists
-
-Most questions about the chain get answered out of somebody else's index. That
-is usually the right trade: it is fast, it is free, and for most purposes the
-answer is fine. What you give up is narrow but specific. The number is as good
-as the service behind it, you cannot re-derive it yourself, and you had to say
-what you were curious about in order to ask.
-
-NodSig replaces trust with repetition. The artifacts are a deterministic
-function of the chain: rebuild them from the same blocks up to the same height
-and you get the same bytes, so two strangers compare a fingerprint instead of
-comparing trust. That property is what makes an answer worth citing, and it is
-also what makes it private, because nothing left the machine to obtain it.
-
-A second goal shapes the code as much as that one: get there with the least
-work and the least hardware the question actually needs. Chain-scale analysis
-is usually the business of people with a cluster. It does not have to be.
-
-If you already run a node, the reasonable objection is that the artifacts cost
-about what the blocks cost, so why pay for the disk twice.
-[`docs/why-artifacts.md`](docs/why-artifacts.md) answers that one directly: what
-a node can and cannot be asked, how little you actually have to keep, and when
-none of this is worth building.
+*Building the artifacts* says which. Nothing has to be installed or built to
+see how it behaves: the first command under *Try it* runs from a clone, with
+no node.
 
 ## What you can ask it
 
-- **Has this address's public key already appeared on the chain?** Spending
-  reveals a public key, so a [lock](docs/GLOSSARY.md#lock) that has been spent from is in a different
-  position from one that never has. Services answer this question too; the
-  point here is answering it without asking anyone, because a question about
-  your own coins is a question you would rather not send to a stranger.
+Seven questions. Each is answered from a file you built, each answer carries
+the height that file holds to, and where the file is missing the answer is an
+explicit UNDETERMINED that names the flag which would enable it:
 
-  You get more than yes or no: the address's **type**, **where the key was
-  seen** (directly in a scriptSig, in a witness, or *inside someone else's
-  revealed script*), and **when**, since `derived history` prints that lock's
-  events in order, each with its height and the block's timestamp, so the spend
-  that put the key on the chain is dated and not merely known.
+1. **Has this address's public key already appeared on the chain?** `check`,
+   against the archive of revelations; with the index built too, `derived
+   history` dates the spend that put it there.
+2. **Has one of your signatures ever reused its nonce point?** `nonces
+   address` for one address, `nonces groups` for the whole chain, from the
+   census the scan emits beside the archive.
+3. **What is this outpoint's whole story?** Created when, worth what, under
+   which [lock](docs/GLOSSARY.md#lock), spent by whom: `index lookup` and
+   `derived history`.
+4. **What did this transaction pay in fees, and what was spent together with
+   what?** `derived fee` and `derived cospends`, over your own files.
+5. **How much of the UTXO set sits behind keys that are already revealed?**
+   `census` counts it by lock type and by age; `reuse scan` finds the reuses.
+6. **How much of today's coin sits behind a key that was already public by a
+   given block?** `derived timeline`, as a series over the current UTXO set,
+   block by block and on calendar dates.
+7. **What was all that worth, in a currency?** `price`, only if you bring a
+   price series: nothing on the chain holds one, and the toolkit never fetches
+   one.
 
-  One case stays undated, and it is worth knowing which: when the revealing
-  transaction was not yours. A key exposed as a cosigner inside someone else's
-  script, or under another face of the same key, became public through an event
-  that is not in your lock's history. Exposure still reports it, which is the
-  point of keeping an archive of revelations rather than only a history of
-  locks, and the archive dates it (every record carries the height of its
-  first revelation); what is missing is a row in your lock's own history.
-
-- **Has one of your signatures ever reused its nonce point?** Signing two
-  different messages with the same nonce hands the private key to anyone who
-  noticed, which is why the census records every signature's nonce point,
-  ECDSA and schnorr alike. `nonces address` asks the question about one of
-  your addresses, from your own node; `nonces groups` asks it of the whole
-  chain at once. The census is careful about what a repetition means: a
-  repeated point is not yet a reused nonce (the same signature copied twice
-  shares the point and exposes nothing), and where the evidence cannot
-  settle the difference, the output says undecided instead of guessing.
-  [`docs/nonce-check.md`](docs/nonce-check.md) is the walkthrough.
-
-- **What is this outpoint's whole story?** Created when, worth what, under
-  which lock, spent by whom.
-
-- **What did this transaction pay in fees, and what was spent together with
-  what?** Local lookups over your own files, with no index provider in the
-  middle.
-
-- **How much of the UTXO set sits behind keys that are already revealed?**
-  Counted by lock type and by age, from the set itself, rather than estimated.
-
-- **How much of today's coin sits behind a key that was already public by a
-  given block?** As a series over the current UTXO set, block by block, and
-  on real calendar dates.
-
-- **What was all that worth, in a currency?** Only if you bring a price
-  series: nothing on the chain holds a price, so the toolkit never fetches
-  one. `nodsig price` converts a publisher's file into one canonical shape,
-  identified by a digest, and derives **one price per block** from it (the
-  header time is the only clock the chain certifies, to within hours). It is
-  the one family of figures here that a stranger cannot reproduce from the
-  chain alone, and it says so beside every number: see
-  [`docs/external-inputs.md`](docs/external-inputs.md). What it yields on
-  the real chain is in [the gallery's price
-  section](docs/gallery.md#what-it-was-worth-block-by-block-requires-a-price-series):
-  the same fees, per epoch, in BTC and in USD, and the two shapes disagree.
-
-Answering one address is a small enough job that it deserves its own page:
-[`docs/exposure-check.md`](docs/exposure-check.md) walks the exposure question
-end to end, including how little you actually have to keep on disk and how to
-run it on a machine that talks to nobody.
+Each question is taken up at more length under *The questions, one at a
+time*, after the part you can run.
 
 The output is text and CSV. Here is what the chain looks like when a spreadsheet
 draws one of those CSVs, at height 957,301:
@@ -195,6 +138,96 @@ addresses in the call, so the node learns the list. Neither matters on a machine
 and a node that are yours alone, which is the case this tool is written for, and
 both are in [`docs/exposure-check.md`](docs/exposure-check.md) for the cases
 that are not.
+
+## Why it exists
+
+Most questions about the chain get answered out of somebody else's index. That
+is usually the right trade: it is fast, it is free, and for most purposes the
+answer is fine. What you give up is narrow but specific. The number is as good
+as the service behind it, you cannot re-derive it yourself, and you had to say
+what you were curious about in order to ask.
+
+NodSig replaces trust with repetition. The artifacts are a deterministic
+function of the chain: rebuild them from the same blocks up to the same height
+and you get the same bytes, so two strangers compare a fingerprint instead of
+comparing trust. That property is what makes an answer worth citing, and it is
+also what makes it private, because nothing left the machine to obtain it.
+
+A second goal shapes the code as much as that one: get there with the least
+work and the least hardware the question actually needs. Chain-scale analysis
+is usually the business of people with a cluster. It does not have to be.
+
+If you already run a node, the reasonable objection is that the artifacts cost
+about what the blocks cost, so why pay for the disk twice.
+[`docs/why-artifacts.md`](docs/why-artifacts.md) answers that one directly: what
+a node can and cannot be asked, how little you actually have to keep, and when
+none of this is worth building.
+
+## The questions, one at a time
+
+The same seven, with what the answer contains and where its edges are.
+
+- **Has this address's public key already appeared on the chain?** Spending
+  reveals a public key, so a [lock](docs/GLOSSARY.md#lock) that has been spent from is in a different
+  position from one that never has. Services answer this question too; the
+  point here is answering it without asking anyone, because a question about
+  your own coins is a question you would rather not send to a stranger.
+
+  You get more than yes or no: the address's **type**, **where the key was
+  seen** (directly in a scriptSig, in a witness, or *inside someone else's
+  revealed script*), and **when**, since `derived history` prints that lock's
+  events in order, each with its height and the block's timestamp, so the spend
+  that put the key on the chain is dated and not merely known.
+
+  One case stays undated, and it is worth knowing which: when the revealing
+  transaction was not yours. A key exposed as a cosigner inside someone else's
+  script, or under another face of the same key, became public through an event
+  that is not in your lock's history. Exposure still reports it, which is the
+  point of keeping an archive of revelations rather than only a history of
+  locks, and the archive dates it (every record carries the height of its
+  first revelation); what is missing is a row in your lock's own history.
+
+- **Has one of your signatures ever reused its nonce point?** Signing two
+  different messages with the same nonce hands the private key to anyone who
+  noticed, which is why the census records every signature's nonce point,
+  ECDSA and schnorr alike. `nonces address` asks the question about one of
+  your addresses, from your own node; `nonces groups` asks it of the whole
+  chain at once. The census is careful about what a repetition means: a
+  repeated point is not yet a reused nonce (the same signature copied twice
+  shares the point and exposes nothing), and where the evidence cannot
+  settle the difference, the output says undecided instead of guessing.
+  [`docs/nonce-check.md`](docs/nonce-check.md) is the walkthrough.
+
+- **What is this outpoint's whole story?** Created when, worth what, under
+  which lock, spent by whom.
+
+- **What did this transaction pay in fees, and what was spent together with
+  what?** Local lookups over your own files, with no index provider in the
+  middle.
+
+- **How much of the UTXO set sits behind keys that are already revealed?**
+  Counted by lock type and by age, from the set itself, rather than estimated.
+
+- **How much of today's coin sits behind a key that was already public by a
+  given block?** As a series over the current UTXO set, block by block, and
+  on real calendar dates.
+
+- **What was all that worth, in a currency?** Only if you bring a price
+  series: nothing on the chain holds a price, so the toolkit never fetches
+  one. `nodsig price` converts a publisher's file into one canonical shape,
+  identified by a digest, and derives **one price per block** from it (the
+  header time is the only clock the chain certifies, to within hours). It is
+  the one family of figures here that a stranger cannot reproduce from the
+  chain alone, and it says so beside every number: see
+  [`docs/external-inputs.md`](docs/external-inputs.md). What it yields on
+  the real chain is in [the gallery's price
+  section](docs/gallery.md#what-it-was-worth-block-by-block-requires-a-price-series):
+  the same fees, per epoch, in BTC and in USD, and the two shapes disagree.
+
+Answering one address is a small enough job that it deserves its own page:
+[`docs/exposure-check.md`](docs/exposure-check.md) walks the exposure question
+end to end, including how little you actually have to keep on disk and how to
+run it on a machine that talks to nobody.
 
 ## How it works
 
