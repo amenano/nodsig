@@ -902,118 +902,36 @@ def test_double_spend_survives_a_rewind(doubled):
 
 
 # ---------------------------------------------------------------------------
-# The readable predecessor: a sealed v2 index must stay readable
+# One format per major: an index of an earlier format is refused by name
 # ---------------------------------------------------------------------------
 
-def make_v2_index(src, dst):
-    """A genuine outpoint-index-v2 artifact, projected from a v3 one.
-
-    v3 replaced spends.bin with spender_of.bin + spend_extra.bin, so
-    this walks the projection BACKWARDS: it rebuilds the sorted
-    (output, spender) file and its ladder, seals the v2 file list, and
-    recomputes the fingerprint from it. It is deliberately written
-    against the v2 format text rather than by calling any code that
-    still exists — the point of the test is that the reader meets an
-    artifact it did not produce."""
-    shutil.copytree(src, dst)
-    manifest = json.load(open(os.path.join(dst, oi.MANIFEST_NAME)))
-    build = manifest["build"]
-
-    edges = []
-    with open(os.path.join(dst, build["files"]["spender_of"]["file"]),
-              "rb") as f:
-        slots = f.read()
-    extra = {}
-    with open(os.path.join(dst, build["files"]["spend_extra"]["file"]),
-              "rb") as f:
-        blob = f.read()
-    for i in range(0, len(blob), 10):
-        extra.setdefault(blob[i:i + 5], []).append(blob[i + 5:i + 10])
-    for o in range(len(slots) // 5):
-        slot = slots[o * 5:(o + 1) * 5]
-        key = o.to_bytes(5, "big")
-        if slot == oi.SLOT_MANY:
-            edges += [key + s for s in extra[key]]
-        elif slot != oi.SLOT_UNSPENT:
-            edges.append(key + slot)
-    edges.sort()
-
-    spends_path = os.path.join(dst, "spends.bin")
-    with open(spends_path, "wb") as f:
-        f.write(b"".join(edges))
-    sha, ladder = sha_and_ladder(spends_path, oi.SPEND_REC, oi.ORD, 4096,
-                                 oi.OutpointError)
-    with open(os.path.join(dst, "spends.lad"), "wb") as f:
-        f.write(ladder)
-
-    for gone in ("spender_of", "spend_extra"):
-        os.remove(os.path.join(dst, build["files"][gone]["file"]))
-        del build["files"][gone]
-    build["files"]["spends"] = {"file": "spends.bin",
-                                "records": len(edges), "sha256": sha}
-    build["caches"]["spends"] = {
-        "file": "spends.lad", "every": 4096,
-        "sha256": hashlib.sha256(ladder).hexdigest()}
-
-    identity = make_identity(
-        "outpoint-index-v2", 1, manifest["identity"]["coverage"]["to"],
-        ((n, build["files"][n]["sha256"]) for n in oi.LEGACY_FP_ORDER))
-    with open(os.path.join(dst, oi.MANIFEST_NAME), "w") as f:
-        json.dump(seal_manifest("outpoint-index-v2", identity, build), f)
-
-    # The state too, or the artifact would be half-projected: a real v2
-    # directory carries a v2 state.json, and `stats` reads that one.
-    spath = os.path.join(dst, oi.STATE_NAME)
-    state = json.load(open(spath))
-    state["format"] = "outpoint-index-v2"
-    state["files"] = dict(build["files"])
-    state["caches"] = dict(build["caches"])
-    with open(spath, "w") as f:
-        json.dump(state, f)
-    return dst
-
-
-def test_a_v2_index_is_still_readable(built):
-    """The promise the READ_TAGS widening exists for: a stranger who
-    downloaded the published v2 artifacts can still read them with this
-    version. Emission is never widened — only reading."""
-    tmp, _graph, index, txids = built
-    v2 = make_v2_index(index, os.path.join(tmp, "as_v2"))
-
-    idx = oi.Index(v2)
-    try:
-        check(idx.format == "outpoint-index-v2",
-              "the reader must see the artifact for what it is")
-        check(idx.spenders(3) == [4],
-              f"a v2 spend lookup must still answer: {idx.spenders(3)}")
-        check(idx.spenders(6) == [], "and so must an unspent one")
-        check(idx.resolve(txids["t1"]) == (2, 2),
-              "the rest of the reader is untouched by the change")
-    finally:
-        idx.close()
-
-    buf = io.StringIO()
-    oi.run_verify(v2)                       # its own file list, its own tag
-    oi.run_stats(v2, out=buf)
-    check("spends.bin" in buf.getvalue(),
-          f"stats must describe the v2 artifact it was given: {buf.getvalue()}")
-    print("ok  a sealed v2 index still reads, verifies and reports")
-
-
-def test_building_on_a_v2_index_refuses_loudly(built):
-    """Reading widens, BUILDING does not. The refusal has to name the
-    reason, because the failure it replaces was a KeyError on a file
-    that simply is not there."""
+def test_an_index_of_an_earlier_format_is_refused_by_name(built):
+    """2.0.0 reads and writes one format. A v2 index is not read at the
+    wrong widths and not called unknown: the refusal names the tag and
+    the release that reads it, for the reader, the audit and a build
+    on top of it alike."""
+    import shutil
     tmp, _graph, index, _txids = built
-    v2 = make_v2_index(index, os.path.join(tmp, "as_v2_build"))
-    try:
-        dv.run_build(v2, os.path.join(tmp, "derived_from_v2"))
-    except oi.OutpointError as e:
-        check("outpoint-index-v2" in str(e) and "Rebuild" in str(e),
-              f"the refusal must say what and why: {e}")
-        print("ok  derivatives refuse a v2 index, and say why")
-        return
-    fail("building derivatives on a v2 index must refuse")
+    old = os.path.join(tmp, "index_v2_label")
+    shutil.copytree(index, old)
+    for name in (oi.STATE_NAME, oi.MANIFEST_NAME):
+        path = os.path.join(old, name)
+        doc = json.load(open(path))
+        doc["format"] = "outpoint-index-v2"
+        if "identity" in doc:
+            doc["identity"]["format"] = "outpoint-index-v2"
+        with open(path, "w") as f:
+            json.dump(doc, f)
+    for road in (lambda: oi.Index(old), lambda: oi.run_verify(old),
+                 lambda: oi.run_stats(old, out=io.StringIO()),
+                 lambda: dv.run_build(old, os.path.join(tmp, "derived_on_v2"))):
+        try:
+            road()
+            fail("an index of an earlier format was read or built on")
+        except oi.OutpointError as e:
+            check("outpoint-index-v2" in str(e) and "earlier format" in str(e),
+                  f"unexpected: {e}")
+    print("ok  an index of an earlier format: refused by name")
 
 
 # The frozen outpoint-index-v3 fingerprint of the synthetic chain — an

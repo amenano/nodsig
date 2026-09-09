@@ -122,7 +122,8 @@ about **9 GB**.
 
 ## The previous format (`outpoint-derived-v2`)
 
-`outpoint-derived-v2` is this format with `u64` satoshis: `history.bin` rows are
+Not read by 2.0.0: derivatives sealed under it are read with the release that
+wrote them. `outpoint-derived-v2` is this format with `u64` satoshis: `history.bin` rows are
 38 bytes and `fees.bin` records 8. Same three files, same order, same keys, same
 ladder steps.
 

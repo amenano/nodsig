@@ -239,7 +239,10 @@ FORMAT_TAG = "outpoint-index-v3"
 # this project makes to a stranger — the published v2 artifacts must stay
 # readable with a newer tool. `_load_state` is therefore strict unless a
 # caller asks otherwise, and only readers ask.
-READ_TAGS = (FORMAT_TAG, "outpoint-index-v2")
+# One format per major, read and written: an index of an earlier format
+# is read with the release that wrote it (the CHANGELOG names it). The
+# tuple stays so every read path says, at its call site, that it reads.
+READ_TAGS = (FORMAT_TAG,)
 
 STATE_NAME = "state.json"
 MANIFEST_NAME = "manifest.json"
@@ -296,15 +299,6 @@ POSITIONAL = {"blocks": BLOCK_REC, "txids": TXID_REC,
 # round-trip on a NAS-mounted index.
 MERGED = {"txid_index": (RESOLVER_REC, 32, 1024)}
 
-# v2's spend side, which this code no longer WRITES but must still
-# READ: a sealed v2 index keeps spends.bin, a sorted (out, spender)
-# file with a ladder, and the published artifacts stay readable.
-LEGACY_MERGED = {"spends": (SPEND_REC, ORD, 4096)}
-
-# v2 also stored satoshis as u64, so its outputs.bin record is one byte
-# wider. The reader carries both; only the reader.
-LEGACY_OUT_REC = 8 + 20
-
 # The THIRD category, which the two above cannot express. These are
 # generation-committed like a merged file (written whole at every fusion
 # and rewind, named in the state, old generation deleted only after the
@@ -341,13 +335,6 @@ FP_ORDER = ("blocks", "txids", "tx_first_out", "txid_index",
             "outputs", "spender_of", "spend_extra")
 
 # What a sealed v2 index is made of, kept so `verify` can audit one.
-# It needs its OWN pair: `verify_sealed` takes the file list once, so a
-# format that replaced a file cannot be folded into a tag sequence.
-LEGACY_FP_ORDER = ("blocks", "txids", "tx_first_out", "txid_index",
-                   "outputs", "spends")
-LEGACY_LADDERS = dict(MERGED, **LEGACY_MERGED,
-                      tx_first_out=(TFO_REC, TFO_REC, TFO_LADDER_EVERY))
-
 PHASES = ("scan", "merge-txids", "resolve", "merge-spends", "seal",
           "sealed")
 
@@ -417,14 +404,10 @@ def _load_state(index_dir, required=True, accept=(FORMAT_TAG,)):
     state = read_json(path, OutpointError)
     found = state.get("format")
     if found not in accept:
-        if found in READ_TAGS:
-            raise OutpointError(
-                f"this index is {found} and this build emits "
-                f"{FORMAT_TAG}: the two lay their spend side out "
-                "differently, so extending or rewinding one as the other "
-                "would write bytes no rebuild reproduces. Read it, or "
-                "build a fresh index directory")
-        raise OutpointError("unknown index state format")
+        raise OutpointError(
+            f"this index is {found!r} and this release reads {FORMAT_TAG!r} "
+            "only: an index of an earlier format is read with the release "
+            "that wrote it, or rebuilt with `index build`")
     return state
 
 
@@ -1413,7 +1396,10 @@ def _load_manifest(index_dir, accept=(FORMAT_TAG,)):
                             "index is not sealed — run `build`")
     manifest = read_json(path, OutpointError)
     if manifest.get("format") not in accept:
-        raise OutpointError("unknown index manifest format")
+        raise OutpointError(
+            f"this index is sealed as {manifest.get('format')!r} and this "
+            f"release reads {FORMAT_TAG!r} only: an index of an earlier "
+            "format is read with the release that wrote it")
     return manifest
 
 
@@ -1476,12 +1462,7 @@ class Index:
             self.times.append(int.from_bytes(rec[10:14], "big"))
         self.n_tx = self.build["transactions"]
         self.n_out = self.build["outputs"]
-        # Declared by the format, not inferred from the bytes: a v2
-        # index carries 28-byte outputs (u64 value), a v3 one 27 (u56).
-        # Deducing it from the file size would make a truncated file
-        # look like a different format instead of a broken one.
-        self.out_rec = OUT_REC if self.format == FORMAT_TAG \
-            else LEGACY_OUT_REC
+        self.out_rec = OUT_REC
         self.watermark = self.manifest["identity"]["coverage"]["to"]
 
     # -- plumbing ----------------------------------------------------------
@@ -1523,7 +1504,7 @@ class Index:
         """The SortedFile for one of the searchable artifacts, opened
         lazily with its ladder verified and resident."""
         if logical not in self._sorted:
-            spec = MERGED.get(logical) or LEGACY_MERGED[logical]
+            spec = MERGED[logical]
             self._sorted[logical] = SortedFile.open(
                 self.dir, self.build["files"][logical],
                 self.build["caches"][logical], spec, error=OutpointError)
@@ -1581,18 +1562,12 @@ class Index:
         entry under consensus (more would echo a duplicate_spends
         anomaly, reported as found).
 
-        v3 reads one 5-byte slot positionally. The third state is the
+        One 5-byte slot read positionally. The third state is the
         point: a slot that says MANY carries no spender at all, so a
         reader cannot answer from the array alone and cannot silently
         answer wrongly either — it is sent to the overflow file, which
-        is resident and, on any real chain, empty.
-
-        v2 indexes are still read here, through the sorted file they
-        were built with: the published artifacts stay readable."""
+        is resident and, on any real chain, empty."""
         key = out_ord.to_bytes(ORD, "big")
-        if self.format != FORMAT_TAG:
-            return [int.from_bytes(r[ORD:2 * ORD], "big")
-                    for r in self.sorted_file("spends").find(key)]
         if not 0 <= out_ord < self.n_out:
             raise OutpointError(f"output ordinal {out_ord} is outside "
                                 f"the {self.n_out:,} this index holds")
@@ -1747,22 +1722,14 @@ def run_verify(index_dir, graph_dir=None):
                 "that graph is not this index's parent (fingerprints "
                 "differ)")
         parent_confirmed = True
-    # One call per format, not one call with both tags. `verify_sealed`
-    # says why in its own docstring: a tag sequence is legitimate only
-    # while every tag in it is made of the SAME files in the same order,
-    # because `fp_order` is passed once — and v3 replaced one file with
-    # two. Widening the sequence here would audit a v2 index against a
-    # file list it does not have.
-    v2 = manifest["format"] != FORMAT_TAG
     verify_sealed(
-        index_dir, manifest,
-        "outpoint-index-v2" if v2 else FORMAT_TAG, OutpointError,
-        fp_order=LEGACY_FP_ORDER if v2 else FP_ORDER,
+        index_dir, manifest, FORMAT_TAG, OutpointError,
+        fp_order=FP_ORDER,
         coverage_from_data=lambda: (
             "exact",
             os.path.getsize(_positional_path(index_dir, "blocks")) // BLOCK_REC),
         ladder_hint=" (rebuildable: re-run build after deleting it)",
-        ladders=LEGACY_LADDERS if v2 else LADDERS,
+        ladders=LADDERS,
         trust_hint="--graph",
         parent_confirmed=parent_confirmed)
 

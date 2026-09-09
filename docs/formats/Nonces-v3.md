@@ -224,8 +224,9 @@ which keeps the whole scalar (see
 record, same order, same ladder, same fusion. A v2 census therefore holds every
 record a v3 one holds, plus a handful of items that were never signatures.
 
-The tool **reads a v2 census**: `groups`, `lookup`, `verify`, `resolve`,
-`witness-verify` and `check` all work on one, so an artifact downloaded under
+The 2.0.0 tool does **not** read a v2 census: it is read with the release
+that wrote it. Earlier 1.x releases read one (`groups`, `lookup`, `verify`,
+`resolve`, `witness-verify` and `check` all worked on one), so an artifact downloaded under
 the previous version keeps its value.
 
 It **cannot be grown or rewound**, and that limit is not an omission. Both

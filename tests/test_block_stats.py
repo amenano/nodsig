@@ -225,19 +225,19 @@ def test_the_recorded_digest_is_the_files_own_sha256(tmp, graph):
 
 def test_a_graph_sealed_by_an_earlier_major_is_refused_as_parent(tmp,
                                                                  graph):
-    """graphemit reads a graph-v1 emission on purpose, so one can reach
-    this builder — but its seal cannot become the parent: that
-    fingerprint comes from a recipe this major does not compute, and
-    declaring it under the v2 tag would publish an ancestry claim no
-    seal of any graph can ever confirm. The index already refuses this
-    at its own seal; the derivative must too."""
+    """A graph whose stream is current but whose seal came from an
+    earlier major cannot become the parent: that fingerprint comes from
+    a recipe this major does not compute, and declaring it under the v2
+    tag would publish an ancestry claim no seal of any graph can ever
+    confirm. The index already refuses this at its own seal; the
+    derivative must too."""
     with open(os.path.join(graph, ge.MANIFEST_NAME), "w") as f:
         json.dump({"format": "graph-v1", "fingerprint": "ab" * 32}, f)
     try:
         bs.run_build(graph, os.path.join(tmp, "v1parent.csv"))
         fail("a graph-v1 seal was adopted as a graph-v2 parent")
     except bs.StatsError as e:
-        check("--reseal" in str(e), f"v1 seal refused as: {e}")
+        check("earlier major" in str(e), f"v1 seal refused as: {e}")
     print("ok  ancestry: a seal from an earlier major is refused, with "
           "the way out named")
 

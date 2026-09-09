@@ -213,8 +213,8 @@ def run_build(graph_dir, out_path):
                 f"the graph is sealed as {graph_manifest.get('format')}, "
                 f"not {ge.FORMAT_TAG}: its fingerprint comes from a "
                 "recipe this major does not compute and cannot be named "
-                "as a parent. Re-seal the graph first with "
-                "`graph fingerprint --reseal` (the bytes do not change).")
+                "as a parent; a graph sealed by an earlier major is read "
+                "with the release that wrote it")
         sealed_to = graph_manifest["identity"]["coverage"]["to"]
         if sealed_to != covered:
             # The graph keeps growing after `fingerprint`; its manifest

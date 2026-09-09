@@ -668,47 +668,28 @@ def _relabel(nonces_dir, tag):
         json.dump(seal_manifest(tag, man["identity"], man["build"]), f)
 
 
-def test_the_previous_census_reads_but_cannot_be_grown(tmp, tiny_flush):
-    """The compatibility promise of this release, and its exact limit.
-
-    Anyone who downloaded the published census keeps a working tool:
-    every command that only READS one works on the previous format.
-    The census is appendable, though, and growing an old one would fuse
-    records the current rules refuse to collect, producing a file no
-    rebuild reproduces, which is `append ≡ rebuild` broken in the one
-    way no digest would catch. So the writing commands refuse, and say
-    that instead of "unknown format".
-    """
+def test_a_census_of_an_earlier_format_is_refused_by_name(tmp, tiny_flush):
+    """2.0.0 reads and writes one format. A census of an earlier format
+    is neither read nor grown: every road refuses by name, with the
+    release that reads it, and a format from no generation is refused
+    the same way."""
     nd = _scan(tmp, "compat")
     nn.run_merge(nd)
     assert nn._load_manifest(nd)["format"] == "nonces-v3"
-    before = _records(nd)
 
-    _relabel(nd, "nonces-v2")
-
-    # Reading: same answers, from the older format.
-    assert _records(nd) == before
-    groups = {g.point: g for g in nn.run_groups(nd, out=io.StringIO())}
-    assert groups[point_of(NONCE_A)].count == 2
-    nn.run_lookup(nd, [point_of(NONCE_A).hex()], out=io.StringIO())
-    nn.run_verify(nd, deep=True)
-
-    # Writing: refused, naming the reason.
-    with pytest.raises(nn.NonceError, match="not be the file a rebuild"):
-        nn.run_merge(nd)
-    with pytest.raises(nn.NonceError, match="not be the file a rebuild"):
-        nn.run_rewind(nd, 3)
-    # Including the scan itself, which is the road a growing archive
-    # would actually take.
-    with pytest.raises(nn.NonceError, match="collect different things"):
-        _scan(tmp, "compat2", nonces_dir=nd,
-              archive_dir=os.path.join(tmp, "compat2_archive"))
-
-    # A format from neither generation stays simply unknown: the widened
-    # gate accepts two tags, not anything that parses.
-    _relabel(nd, "nonces-v1")
-    with pytest.raises(nn.NonceError, match="unknown nonce archive format"):
-        nn.run_groups(nd, out=io.StringIO())
+    for tag in ("nonces-v2", "nonces-v1"):
+        _relabel(nd, tag)
+        for road in (lambda: nn.run_groups(nd, out=io.StringIO()),
+                     lambda: nn.run_lookup(nd, [point_of(NONCE_A).hex()],
+                                           out=io.StringIO()),
+                     lambda: nn.run_verify(nd, deep=True),
+                     lambda: nn.run_merge(nd),
+                     lambda: nn.run_rewind(nd, 3)):
+            with pytest.raises(nn.NonceError, match="earlier format"):
+                road()
+        with pytest.raises(nn.NonceError, match="earlier format"):
+            _scan(tmp, f"compat_{tag}", nonces_dir=nd,
+                  archive_dir=os.path.join(tmp, f"compat_{tag}_archive"))
 
 
 def test_append_equals_rebuild(tmp, tiny_flush):

@@ -237,7 +237,10 @@ DOCUMENTED_ELSEWHERE = {
     "reuse-stats-v1": "historical: superseded by v2, named in the changelog",
     "nodsig-identity-v3": "artifact.IDENTITY_TAG, the fingerprint recipe",
     "nodsig-statement-v1": "historical: superseded by v2, named in the changelog",
-    "graph-v1": "historical: the earlier seal, which still decodes",
+    "graph-v1": "historical: the earlier seal, read with the release that wrote it",
+    "nonces-v2": "historical: superseded by v3, read with the release that wrote it",
+    "outpoint-index-v2": "historical: superseded by v3, read with the release that wrote it",
+    "outpoint-derived-v2": "historical: superseded by v3, read with the release that wrote it",
     "reveal-archive-v1": "historical: the first published archive, named "
                          "by the v3 page as what the v2 projection reproduced",
     "reuse-hits-v1": "historical: the v1 identity of a burnt set, a literal "

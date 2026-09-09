@@ -409,12 +409,12 @@ repeat. Scan and cross-check must use the **same perimeter** (rule 3).
 
 ## Growing them, when the chain moves
 
-> **First, if the artifacts predate this version.** Growing and rewinding both
-> promise the bytes a rebuild would have written, so neither works across a
-> format change: an `outpoint-index-v2`, an `outpoint-derived-v2` or a
-> `nonces-v2` **cannot be extended or rewound** by 1.2.0, and the builders
-> refuse by name rather than producing something no rebuild matches. They are
-> still read, verified and queried — see the table in
+> **First, if the artifacts predate this version.** 2.0.0 reads and writes one
+> format per artifact: an `outpoint-index-v2`, an `outpoint-derived-v2`, a
+> `nonces-v2` or a `graph-v1` is neither read nor grown by it, and every
+> reader refuses by name, with the release that reads it. Growing and
+> rewinding promise the bytes a rebuild would have written, and a fusion
+> across two layouts matches no rebuild — see the table in
 > [ARTIFACTS](ARTIFACTS.md#what-this-version-emits-and-what-it-still-reads).
 > Growing past one means building the new artifact from its parent, and for the
 > nonce census that means a fresh scan, because the census is co-emitted by the

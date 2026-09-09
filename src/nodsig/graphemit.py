@@ -132,15 +132,9 @@ DIGEST_STATE_NAME = "graph-digest.json"
 RUNS_DIR = "runs"
 FORMAT_TAG = "graph-v2"
 
-# Emissions this reader accepts. The v1 → v2 break changed the SEAL (the
-# identity block and the manifest built from it) and not one byte of the
-# record stream, so a v1 emission is still exactly what it claims to be:
-# it decodes, its per-run digests hold, and it can serve as the reference
-# a --graph-digest check measures against. What it cannot do is act as a
-# PARENT, because a v1 manifest's fingerprint comes from a recipe this
-# major does not compute; `fingerprint --reseal` is what gives those same
-# bytes a v2 identity. Only FORMAT_TAG is ever written.
-READABLE_TAGS = ("graph-v1", "graph-v2")
+# One format per major, read and written: an archive emitted under an
+# earlier seal is read with the release that wrote it (the CHANGELOG
+# names it). Only FORMAT_TAG is ever written.
 
 FLAG_COINBASE = 1
 
@@ -267,17 +261,10 @@ class GraphEmitter:
                 state = json.load(f)
             self.clock = WallClock("scan", state)
             if state.get("format") != FORMAT_TAG:
-                # A readable earlier major is not an unknown format, and
-                # saying "unknown" to the owner of a 300 GB archive
-                # would hide the one command that opens the road.
                 raise GraphError(
-                    f"graph archive state says "
-                    f"{state.get('format')!r}, not {FORMAT_TAG!r}"
-                    + (": re-seal it first with `graph fingerprint "
-                       "--reseal` (the bytes do not change, and the "
-                       "state is relabelled with them)"
-                       if state.get("format") in READABLE_TAGS
-                       else ""))
+                    f"graph archive state says {state.get('format')!r}, "
+                    f"not {FORMAT_TAG!r}: an archive of an earlier format "
+                    "is read and grown with the release that wrote it")
             self.runs = state["runs"]
             self.watermark = state["last_height"]
             self.last_hash = state["last_block_hash"]
@@ -515,8 +502,7 @@ class GraphDigest:
     Those recorded digests are worth exactly what the last
     `graph fingerprint` is worth: that pass re-reads every byte and
     checks each one against the file it names. Run it on the reference
-    before trusting this. (It is the same pass that re-seals a v1
-    archive into a v2 one, so it is on the path anyway.)
+    before trusting this.
 
     Interruptions cost one interval, not the run. A scan resumes at its
     host's checkpoint, which almost never falls on a reference run
@@ -774,9 +760,11 @@ def _load_state(graph_dir):
         raise GraphError(f"no {STATE_NAME} in {graph_dir}: not a graph "
                          "archive (or the scan never checkpointed)")
     state = read_json(path, GraphError)
-    if state.get("format") not in READABLE_TAGS:
-        raise GraphError(f"unknown graph archive format "
-                         f"{state.get('format')!r}")
+    if state.get("format") != FORMAT_TAG:
+        raise GraphError(
+            f"graph archive state says {state.get('format')!r}, not "
+            f"{FORMAT_TAG!r}: an archive of an earlier format is read with "
+            "the release that wrote it")
     return state
 
 
@@ -891,7 +879,7 @@ def stream_digest(graph_dir):
     return digest.hexdigest(), state
 
 
-def run_fingerprint(graph_dir, reseal=False):
+def run_fingerprint(graph_dir):
     """Seal the graph: stream it, digest its canonical form, write the
     identity.
 
@@ -901,33 +889,21 @@ def run_fingerprint(graph_dir, reseal=False):
     identity of every artifact, so a graph is fingerprinted by the same
     recipe as an index and binds to a child the same way.
 
-    Superseding a seal from an earlier major is a deliberate act, so it
-    asks: an archive emitted under v1 holds a manifest whose fingerprint
-    came from a recipe this code does not compute, and that number may
-    be published somewhere no rerun can reach. With `reseal` the old
-    manifest is kept beside the new one under its own format's name, so
-    re-sealing adds an identity and destroys none.
+    A manifest sealed by an earlier major is not superseded here: its
+    fingerprint came from a recipe this code does not compute and may be
+    published somewhere no rerun can reach, and this release reads such
+    an archive with the release that wrote it.
     """
-    existing = None
     mpath = os.path.join(graph_dir, MANIFEST_NAME)
     if os.path.exists(mpath):
         with open(mpath) as f:
             existing = json.load(f)
-    if existing and existing.get("format") != FORMAT_TAG:
-        old = existing.get("format")
-        if not reseal:
+        if existing.get("format") != FORMAT_TAG:
             raise GraphError(
-                f"this archive is sealed as {old}, whose fingerprint "
-                f"({existing.get('fingerprint')}) comes from a recipe "
-                f"{FORMAT_TAG} does not compute. The bytes are readable "
-                "either way; re-sealing is what gives them an identity a "
-                "child can name. Pass --reseal to do it (the old manifest "
-                "is kept).")
-        keep = os.path.join(graph_dir, f"manifest.{old}.json")
-        if not os.path.exists(keep):
-            atomic_json(keep, existing)
-            print(f"kept the {old} seal as manifest.{old}.json "
-                  f"({existing.get('fingerprint')})")
+                f"this archive is sealed as {existing.get('format')!r}, "
+                f"whose fingerprint ({existing.get('fingerprint')}) comes "
+                f"from a recipe {FORMAT_TAG} does not compute: an archive "
+                "of an earlier format is read with the release that wrote it")
 
     fingerprint_of_bytes, state = stream_digest(graph_dir)
     identity = make_identity(FORMAT_TAG, 1, state["last_height"],
@@ -946,18 +922,6 @@ def run_fingerprint(graph_dir, reseal=False):
          "totals": totals, "runs": len(state["runs"]),
          "files": {"stream": {"file": RUNS_DIR}}, "caches": {}})
     atomic_json(os.path.join(graph_dir, MANIFEST_NAME), manifest)
-
-    if state.get("format") != FORMAT_TAG:
-        # The state file is bookkeeping, not data: the v1 → v2 break
-        # changed the seal recipe and not one byte of the stream, so an
-        # archive this command just sealed is v2 in every respect —
-        # including the label its own emitter checks. Leaving the old
-        # one would make `--graph` refuse to grow the very archive the
-        # reseal promised was current.
-        atomic_json(os.path.join(graph_dir, STATE_NAME),
-                    {**state, "format": FORMAT_TAG})
-        print(f"state relabelled {FORMAT_TAG} (bookkeeping only: the "
-              "bytes did not change)")
 
     print(f"graph archive covers heights 1..{state['last_height']:,}")
     for k in ("blocks", "transactions", "inputs", "outputs"):
@@ -1018,9 +982,6 @@ def main(argv=None):
                         help="canonical fingerprint + integrity audit "
                              "(reads every byte)")
     pf.add_argument("--graph", required=True, help="archive directory")
-    pf.add_argument("--reseal", action="store_true",
-                    help="supersede a seal written by an earlier major "
-                         "(the old manifest is kept beside the new one)")
 
     pt = sub.add_parser("stats", help="watermark and totals (instant)")
     pt.add_argument("--graph", required=True)
@@ -1040,7 +1001,7 @@ def main(argv=None):
     args = p.parse_args(argv)
     try:
         if args.cmd == "fingerprint":
-            run_fingerprint(args.graph, reseal=args.reseal)
+            run_fingerprint(args.graph)
         elif args.cmd == "stats":
             run_stats(args.graph)
         elif args.cmd == "digest":

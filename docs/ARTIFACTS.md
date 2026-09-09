@@ -19,10 +19,10 @@ placeholders: every one of them is a path you choose on the command line.
 | graph | `graph-v2` | — |
 | headers | `headers-v2` | — |
 | revelation archive | `reveal-archive-v3` | — |
-| nonce census | `nonces-v3` | `nonces-v2` |
+| nonce census | `nonces-v3` | — |
 | nonce witness table | `nonces-witness-v2` | — |
-| outpoint index | `outpoint-index-v3` | `outpoint-index-v2` |
-| outpoint derivatives | `outpoint-derived-v3` | `outpoint-derived-v2` |
+| outpoint index | `outpoint-index-v3` | — |
+| outpoint derivatives | `outpoint-derived-v3` | — |
 | first-spend table | `firstspend-v1` | — |
 | first-reveal table | `firstreveal-v2` | — |
 | block stats | `block-stats-v3` | — |
@@ -37,11 +37,13 @@ the identity when a price table was given) — the same CSV-plus-sealed-meta
 shape as block stats, but produced by the derivatives module rather than a
 module of its own, and the table maps modules to the one artifact each emits.
 
-**Reading widens; emission never does.** Where a previous format is listed, an
-artifact sealed under it still verifies and still answers questions, so what
-you downloaded keeps its value. It cannot be **extended or rewound**: both
-operations promise the bytes a rebuild would have written, and a fusion across
-two layouts matches no rebuild. Each refusal says which format it met and why.
+**One format per major, read and written.** 2.0.0 reads only what it emits:
+an artifact sealed under an earlier format is read, verified and queried with
+the release that wrote it (the CHANGELOG names the format and the release),
+and every reader refuses it by name rather than reading bytes at the wrong
+widths. Reproducibility is untouched: the same chain and the same tag give the
+same bytes; what 2.0.0 gives up is a reader for the previous layouts, which no
+published figure needs.
 
 This table is not maintained by hand. It is checked against the modules'
 `FORMAT_TAG` and `READ_TAGS` by the test suite, so a format that moves without

@@ -7,8 +7,7 @@ from a [Graph-v2](./Graph-v2.md) archive in one pass. Read by
 
 - **Directory** of fixed-width record files + sidecar ladders + `state.json` +
   `manifest.json`.
-- **Defined over:** a Graph-v2 archive (a `graph-v1` emission reads identically:
-  that break moved the seal, not the stream). The parent it was actually built
+- **Defined over:** a Graph-v2 archive. The parent it was actually built
   from is **declared** in `build.parent`, outside the fingerprint.
 - **Captures:** for every output, its value, lock hash160 and the transaction
   that spent it (if any); per transaction, txid and first-output ordinal; per
@@ -226,7 +225,8 @@ inside the live file has no recoverable failure mode.
 
 ## The previous format (`outpoint-index-v2`)
 
-`outpoint-index-v2` is this format with the spend side as a single sorted file,
+Not read by 2.0.0: an index sealed under it is read with the release that
+wrote it. `outpoint-index-v2` is this format with the spend side as a single sorted file,
 `spends.bin` (10 B: `spent_out:u40 | spender_tx:u40`, key `spent_out`, ladder
 every 4096), and `FP_ORDER` ending in `spends` instead of the two files above.
 Everything else — the positional files, the resolver, BIP30, the watermark — is

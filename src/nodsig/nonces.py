@@ -136,7 +136,10 @@ FORMAT_TAG = "nonces-v3"
 # rewind, which promises the bytes a build stopped at that height would
 # have written. So `_load_state` is strict unless a caller asks otherwise,
 # and only the read paths ask.
-READ_TAGS = (FORMAT_TAG, "nonces-v2")
+# One format per major, read and written: a census of an earlier format
+# is read with the release that wrote it (the CHANGELOG names it). The
+# tuple stays so every read path says, at its call site, that it reads.
+READ_TAGS = (FORMAT_TAG,)
 STATE_NAME = "state.json"
 MANIFEST_NAME = "manifest.json"
 RUNS_DIR = "runs"
@@ -707,13 +710,12 @@ class NonceEmitter:
                 self.state = json.load(f)
             found = self.state.get("format")
             if found != FORMAT_TAG:
-                if found in READ_TAGS:
-                    raise NonceError(
-                        f"this archive is {found} and this scan emits "
-                        f"{FORMAT_TAG}: the two collect different things, so "
-                        "feeding one into the other would write a file no "
-                        "rebuild reproduces. Use a fresh scan directory")
-                raise NonceError("unknown nonce archive format")
+                raise NonceError(
+                    f"this archive is {found!r} and this scan emits "
+                    f"{FORMAT_TAG}: an archive of an earlier format is read "
+                    "with the release that wrote it, and feeding one into "
+                    "this scan would write a file no rebuild reproduces. Use "
+                    "a fresh scan directory")
             saved = self.state["scan_stats"]
             self.stats = dict(saved) if saved else new_stats()
             self.stats_valid = saved is not None
@@ -888,14 +890,10 @@ def _load_state(nonces_dir, accept=(FORMAT_TAG,)):
     state = read_json(path, NonceError)
     found = state.get("format")
     if found not in accept:
-        if found in READ_TAGS:
-            raise NonceError(
-                f"this archive is {found} and the tool writes {FORMAT_TAG}: "
-                "it can be read, but not extended or rewound. Growing it "
-                "would write records the current rules refuse to collect, "
-                "so the result would not be the file a rebuild produces. "
-                "Build a fresh one with `archive scan --nonces`")
-        raise NonceError("unknown nonce archive format")
+        raise NonceError(
+            f"this archive is {found!r} and this release reads {FORMAT_TAG!r} "
+            "only: an archive of an earlier format is read with the release "
+            "that wrote it, or rebuilt with `archive scan --nonces`")
     return state
 
 

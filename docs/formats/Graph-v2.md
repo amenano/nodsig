@@ -112,20 +112,14 @@ and re-read with `graph digest --scan <scan-dir>`.
 
 ## An archive emitted under v1
 
-The v1 → v2 break moved the **seal** and not one byte of the record stream, so
-an archive emitted under `graph-v1` still decodes here, its per-run digests
-still hold, and it can serve as the reference of a `--graph-digest` check. The
-readers accept both tags; only `graph-v2` is ever written.
-
-One thing such an archive cannot do is act as a **parent**. A v1 manifest's
-fingerprint comes from a recipe this major does not compute, so an index that
-adopted it would seal an ancestry nobody can rederive from these formats. The
-index refuses it by name rather than taking it silently.
-
-`fingerprint --reseal` is what gives the same bytes a v2 identity. It asks,
-rather than superseding a published number by surprise, and it keeps the old
-manifest beside the new one as `manifest.<oldformat>.json`: re-sealing adds an
-identity and destroys none.
+The v1 → v2 break moved the **seal** and not one byte of the record stream.
+2.0.0 nevertheless reads only `graph-v2`: an archive whose state or manifest
+wears the `graph-v1` label is refused by name and read with the release that
+wrote it, and a v1 manifest's fingerprint, which comes from a recipe this
+major does not compute, is never adopted as a parent (the index and the block
+stats refuse it by name). Earlier 1.x releases could re-seal such an archive
+under v2; 2.0.0 keeps one reader per format instead, and the CHANGELOG names
+the release that holds the other.
 
 ## Notes for porters
 

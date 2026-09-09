@@ -597,7 +597,7 @@ def test_digest_refusals(tmp, blocks, graph_oneshot):
 
 
 # ---------------------------------------------------------------------------
-# an emission sealed by an earlier major: readable, but not a parent
+# an emission sealed by an earlier major: refused by name, never a parent
 # ---------------------------------------------------------------------------
 
 def test_digest_names_the_gap_it_did_not_measure(tmp):
@@ -626,72 +626,45 @@ def test_digest_names_the_gap_it_did_not_measure(tmp):
 
 
 def test_earlier_major(tmp, blocks, graph_oneshot):
-    """The v1 → v2 break moved the seal and not the stream, so a v1
-    emission still has to be readable — and re-sealing it must not
-    destroy the number it was published under."""
+    """2.0.0 reads and writes one format: an archive whose state wears an
+    earlier label is refused by name, the seal of an earlier major is
+    not superseded, and an index refuses such a seal as a parent."""
     import shutil
     from nodsig import outpoint_index as oi
 
     old = os.path.join(tmp, "graph_v1")
     shutil.copytree(graph_oneshot, old)
     state = ge._load_state(old)
-    v1_fingerprint = "0" * 64
     with open(os.path.join(old, ge.STATE_NAME), "w") as f:
         json.dump({**state, "format": "graph-v1"}, f)
-    ge.atomic_json(os.path.join(old, ge.MANIFEST_NAME),
-                   {"format": "graph-v1", "covered_through": 4,
-                    "fingerprint": v1_fingerprint})
+    for road in (lambda: list(ge.iter_blocks(old)),
+                 lambda: ge.run_fingerprint(old),
+                 lambda: ge.GraphEmitter(old).load(5)):
+        try:
+            road()
+            fail("an archive labelled graph-v1 was read, sealed or grown")
+        except ge.GraphError as e:
+            check("graph-v1" in str(e) and "release that wrote it" in str(e),
+                  f"the refusal names the tag and the way: {e}")
 
-    # Readable: the stream is the stream.
-    check(len(list(ge.iter_blocks(old))) == 4,
-          "a v1 emission did not decode with today's reader")
-    check(ge.stream_digest(old)[0] == ge.stream_digest(graph_oneshot)[0],
-          "the same bytes digested differently under the two tags")
-
-    # Not re-sealed silently…
-    try:
-        ge.run_fingerprint(old)
-        fail("an earlier major's seal was superseded without asking")
-    except ge.GraphError:
-        pass
-    # …not grown while the state still wears the old label — but the
-    # refusal must name the way out, not call a readable major unknown…
-    try:
-        ge.GraphEmitter(old).load(5)
-        fail("the emitter grew an archive still labelled graph-v1")
-    except ge.GraphError as e:
-        check("--reseal" in str(e), f"v1 state refused as: {e}")
-    # …and when asked, the superseded seal survives beside the new one.
-    fp = ge.run_fingerprint(old, reseal=True)
-    kept = os.path.join(old, "manifest.graph-v1.json")
-    check(os.path.exists(kept), "the superseded manifest was destroyed")
-    with open(kept) as f:
-        check(json.load(f)["fingerprint"] == v1_fingerprint,
-              "the kept manifest is not the one that was superseded")
-    check(fp == ge.run_fingerprint(graph_oneshot),
-          "re-sealing produced a different identity for the same bytes")
-
-    # The reseal makes the archive current in EVERY respect: the state
-    # label travels with the new seal, so the emitter now agrees to grow
-    # the very archive the reseal just certified — the append run the
-    # whole exercise exists for.
-    check(ge._load_state(old)["format"] == ge.FORMAT_TAG,
-          "reseal left the state labelled graph-v1")
-    ge.GraphEmitter(old).load(5)
-    print("ok  earlier major: readable, re-seal is asked for, old seal "
-          "kept, and the resealed archive can grow again")
-
-    # An index must refuse a parent it cannot rederive.
-    unsealed = os.path.join(tmp, "graph_v1_unsealed")
+    # A v2 stream under an earlier seal: not superseded by surprise, and
+    # not adopted as a parent.
+    unsealed = os.path.join(tmp, "graph_v1_seal")
     shutil.copytree(graph_oneshot, unsealed)
     ge.atomic_json(os.path.join(unsealed, ge.MANIFEST_NAME),
                    {"format": "graph-v1", "covered_through": 4,
-                    "fingerprint": v1_fingerprint})
+                    "fingerprint": "0" * 64})
+    try:
+        ge.run_fingerprint(unsealed)
+        fail("an earlier major's seal was superseded")
+    except ge.GraphError as e:
+        check("earlier format" in str(e), f"unexpected: {e}")
     try:
         oi.run_build(unsealed, os.path.join(tmp, "index_v1"))
         fail("an index adopted a parent fingerprint from another recipe")
     except oi.OutpointError:
-        print("ok  earlier major: an index refuses it as a parent")
+        print("ok  earlier major: refused by name, never superseded, "
+              "never a parent")
 
 
 def main():

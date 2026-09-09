@@ -421,12 +421,11 @@ which is the pass that verifies those per-run digests against the files
 themselves. An interruption costs only the interval it lands inside, and the
 report names it; read it back with `graph digest --scan <archive-dir>`.
 
-An archive written under the earlier `graph-v1` seal reads here unchanged: that
-break moved the seal, not the stream. It cannot be a **parent** until it is
-re-sealed, though, because its fingerprint comes from a recipe this code does
-not compute, and `index build` refuses it by name rather than sealing an
-ancestry nobody can rederive. `graph fingerprint --reseal` gives the same bytes
-a `graph-v2` identity and keeps the old manifest beside the new one.
+An archive written under the earlier `graph-v1` seal is not read by this
+release: 2.0.0 reads and writes one format per artifact, and an artifact of an
+earlier format is read with the release that wrote it (the CHANGELOG names
+it). `index build` refuses a `graph-v1` seal as a parent by name rather than
+sealing an ancestry nobody can rederive from these formats.
 
 `--nonces` costs about 55 GB and roughly 10% of this pass's CPU, measured rather
 than guessed, and records every signature's nonce point with the height that

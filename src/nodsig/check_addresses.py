@@ -41,7 +41,7 @@ signs:
 
 history and co-inputs were NOT PLUGGED stubs until 2026-07-21, with
 "Electrs or a graph-v2 derivative" on the label: the derivative
-arrived (outpoint-index-v3 + outpoint-derived-v2), so the interface
+arrived (outpoint-index-v3 + outpoint-derived-v3), so the interface
 absorbed it exactly as designed — two new classes, zero changes
 elsewhere, and no third-party indexer was ever needed. Both answer
 from local sorted files (one ~40 KB bucket read per question) and
@@ -64,7 +64,7 @@ the readers below it must work for any interface, and a signature that
 demanded a Namespace would have made the one designed attachment point
 the one place a second interface could not reach.
 
-The source is also why a report names `outpoint-derived-v2` and a
+The source is also why a report names `outpoint-derived-v3` and a
 fingerprint instead of the directory it read: a result must be
 portable and must not describe the machine that produced it. Defaults are OUR documented choice; flags exist so that
 third parties can explore other mixes (same philosophy as the scan's
@@ -915,7 +915,7 @@ def build_backends(sources, rpc_call=None):
 
         archive       a reveal-archive-v2 directory
         index         an outpoint-index-v3 directory
-        derived       an outpoint-derived-v2 directory (needs `index`)
+        derived       an outpoint-derived-v3 directory (needs `index`)
         witness       a nonces-witness-v2 directory
         rpc           a node URL, for the live balance
         cookie_file   where the node's credential is (never the value)
@@ -1623,7 +1623,7 @@ def main(argv=None):
     p.add_argument("--index", help="outpoint-index-v3 directory "
                                    "(with --derived enables history "
                                    "and co-inputs)")
-    p.add_argument("--derived", help="outpoint-derived-v2 directory "
+    p.add_argument("--derived", help="outpoint-derived-v3 directory "
                                      "built from that same index")
     p.add_argument("--witness",
                    help=f"{wit.FORMAT_TAG} directory (enables "

@@ -195,8 +195,11 @@ FORMAT_TAG = "outpoint-derived-v3"
 # unlike the index, where a file was replaced and the file LIST changed.
 # Builders stay strict: extending a v2 artifact would fuse 38-byte rows
 # into a 37-byte file, which is not a format question but a corruption.
-READ_TAGS = (FORMAT_TAG, "outpoint-derived-v2")
-LEGACY_VAL = 8
+# One format per major, read and written: derivatives of an earlier
+# format are read with the release that wrote them (the CHANGELOG names
+# it). The tuple stays so every read path says, at its call site, that
+# it reads.
+READ_TAGS = (FORMAT_TAG,)
 STATE_NAME = "state.json"
 MANIFEST_NAME = "manifest.json"
 RUNS_DIR = "runs"
@@ -227,12 +230,6 @@ FP_ORDER = ("history", "tx_inputs", "fees")
 LADDERS = {"history": (HIST_REC, HIST_KEY, HIST_EVERY),
            "tx_inputs": (TXIN_REC, ORD, TXIN_EVERY)}
 
-# The same table for a v2 artifact, whose history row is one byte wider.
-# The file LIST is identical across the two versions — which is what lets
-# `verify_sealed` take the tag pair — but a ladder is rebuilt FROM its
-# file, so its spec has to carry that file's actual record width.
-LEGACY_LADDERS = {"history": (HIST_VAL + LEGACY_VAL, HIST_KEY, HIST_EVERY),
-                  "tx_inputs": (TXIN_REC, ORD, TXIN_EVERY)}
 PHASES = ("scan", "merge-history", "merge-inputs", "seal", "sealed")
 
 
@@ -280,14 +277,11 @@ def _load_state(derived_dir, required=True, accept=(FORMAT_TAG,)):
     state = read_json(path, OutpointError)
     found = state.get("format")
     if found not in accept:
-        if found in READ_TAGS:
-            raise OutpointError(
-                f"these derivatives are {found} and this build emits "
-                f"{FORMAT_TAG}: satoshi fields are one byte narrower "
-                "now, so extending or rewinding them as the new format "
-                "would fuse records of two widths into one file. Read "
-                "them, or build a fresh directory")
-        raise OutpointError("unknown derivatives state format")
+        raise OutpointError(
+            f"these derivatives are {found!r} and this release reads "
+            f"{FORMAT_TAG!r} only: derivatives of an earlier format are "
+            "read with the release that wrote them, or rebuilt with "
+            "`derived build`")
     return state
 
 
@@ -299,7 +293,10 @@ def _load_manifest(derived_dir, accept=(FORMAT_TAG,)):
                             "`build`")
     manifest = read_json(path, OutpointError)
     if manifest.get("format") not in accept:
-        raise OutpointError("unknown derivatives manifest format")
+        raise OutpointError(
+            f"these derivatives are sealed as {manifest.get('format')!r} and "
+            f"this release reads {FORMAT_TAG!r} only: derivatives of an "
+            "earlier format are read with the release that wrote them")
     return manifest
 
 
@@ -1133,12 +1130,9 @@ class Derived:
         self.manifest = _load_manifest(derived_dir, accept=READ_TAGS)
         self.format = self.manifest["format"]
         self.build = self.manifest["build"]
-        # Declared by the format, never inferred from the file size: v2
-        # stored satoshis as u64, v3 as u56, and the value is the tail
-        # of the record either way.
-        self.val = VAL if self.format == FORMAT_TAG else LEGACY_VAL
-        self.hist_rec = HIST_VAL + self.val
-        self.fee_rec = self.val
+        self.val = VAL
+        self.hist_rec = HIST_REC
+        self.fee_rec = FEE_REC
         parent = self.manifest["build"].get("parent")
         if (parent is None
                 or parent["fingerprint"] != index.manifest["fingerprint"]):
@@ -1243,11 +1237,6 @@ def run_verify(derived_dir, index_dir=None):
     manifest = _load_manifest(derived_dir, accept=READ_TAGS)
     coverage = None
     if index_dir is not None:
-        # The parent is being READ, not built on, so the widened set
-        # applies: a v2 pair must be able to confirm its own ancestry.
-        # This was strict, and the real artifacts found it — the audit
-        # refused at the door with "unknown index manifest format" while
-        # every other v2 path worked.
         imanifest = oi._load_manifest(index_dir, accept=oi.READ_TAGS)
         # The parent's manifest must first agree with itself: comparing
         # two stored fingerprint strings confirms nothing if the one in
@@ -1269,16 +1258,9 @@ def run_verify(derived_dir, index_dir=None):
     # reaching this call with an index means the declaration WAS
     # confronted — and the report has to say so, or it tells the
     # operator to pass the very flag they passed.
-    # The tag PAIR is legitimate here and was not for the index: both
-    # versions are the same three files in the same order, which is the
-    # condition verify_sealed states for a sequence. The LADDERS are a
-    # different matter — they are rebuilt from their file, so their spec
-    # must carry that file's real record width — and getting that wrong
-    # showed up as "truncated record", not as a wrong digest.
     verify_sealed(derived_dir, manifest, READ_TAGS, OutpointError,
                   fp_order=FP_ORDER,
-                  ladders=(LADDERS if manifest["format"] == FORMAT_TAG
-                           else LEGACY_LADDERS),
+                  ladders=LADDERS,
                   coverage_from_data=coverage,
                   trust_hint="--index",
                   parent_confirmed=(True if index_dir is not None
