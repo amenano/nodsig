@@ -156,6 +156,8 @@ FLAGS_DEFINED = 255
 
 # The attribution classes, two bits of the flags byte.
 BESIDE, POSITION, OUTPUT, NONE = 0, 1, 2, 3
+# Two witnesses settle a triple in either direction; more is weight.
+ROWS_PER_TRIPLE = 2
 CLASS_NAMES = {BESIDE: "beside", POSITION: "position", OUTPUT: "output",
                NONE: "none"}
 
@@ -868,7 +870,7 @@ def _reduce(sightings):
         k = sg.triple()
         counts.setdefault(k, set()).add(sg.scheme_s)
         w = seen.setdefault(k, {})
-        if sg.scheme_s not in w and len(w) < 2:
+        if sg.scheme_s not in w and len(w) < ROWS_PER_TRIPLE:
             w[sg.scheme_s] = (h, sg)
     rows = []
     counters = {c: 0 for c in ("attributed_beside", "attributed_position",

@@ -21,6 +21,110 @@ contract, the **CLI** is convenience, and `reveal-archive-v2` inside a tool
 numbered 1.3.0 is not a discrepancy. Artifacts are identified by their
 fingerprint, never by a tag.
 
+## 2.0.0 — one format per artifact, and the point as the identity of a key
+
+The first major after the repository went public, and the one that trades
+continuity for correctness and efficiency: every artifact that moves moves in
+one release, the tool reads only what it writes, and the reproducibility
+promise stays whole — the same chain and the same tag give the same bytes.
+The v2 fingerprints published under 1.x stay historical numbers, reproducible
+with `v1.9.0`.
+
+### Command line
+
+- **`nodsig manifest reseal <dir> [--parent <dir>]`**, new: a manifest
+  re-sealed under this release's statement, the artifact's bytes and
+  fingerprint untouched (the previous manifest is kept beside it). This is
+  what the artifacts 2.0.0 does not rebuild need, once.
+- **`nonces resolve --index <index>`**: the index is required, and has to
+  cover the census (refused otherwise): it ties a key beside a signature to
+  the lock the input spends, and names the key of a pay-to-pubkey or taproot
+  key-path spend. `witness-verify` gains `--keys-csv`; its `--csv` is per
+  scalar, not per census prefix.
+- **`nonces address`** attributes each signature by the road the witness
+  table uses (a key beside the signature that links to the lock, a position
+  in an m-of-m script or a tapscript template, the spent output) instead of
+  by kind of address; an m-of-m multisig and a P2SH-P2WPKH input now get a
+  conclusion.
+- **`check --key`** asks about the point: both serializations, each behind
+  its address forms, one entry per key with the faces under it, and the one
+  square root the project takes named beside every derived face. The report
+  is `check-report-v3`.
+- **`reuse prepare --height <S> | --headers <dir>`**: one of the two is
+  required; **`reuse verify --locks`**, new. **`archive derive
+  --checkpoint <dir>`** writes the bitmaps `reuse stats` reads, from the
+  first road; **`archive crosscheck --curve <curve.csv>`** compares the
+  scan's curve with one replayed from the archive. The scan checkpoints on
+  the grid exactly, block by block.
+- **`derived timeline-verify`**, new; `derived timeline --price` writes a
+  third CSV outside the identity instead of two extra columns. The `supply`
+  banner says what coinbase, unspent and unclaimed contain.
+- **`blockstats verify`**, new; `blockstats build` counts the outputs no key
+  can spend.
+- **`price import --observation-kind --observation-stamp`**: required, unless
+  the preset pins them; every fiat figure prints the look-ahead that follows.
+- **`curve deltas`** names a hole in the grid instead of folding it into the
+  next interval, and reads its sidecar when there is one; its rankings are
+  worded as what they are (locks and value still unspent at the snapshot, by
+  era of their revelation).
+- Removed: `graph fingerprint --reseal`, and every reader of an earlier
+  format (below).
+
+### Formats
+
+| artifact | 1.9.0 | 2.0.0 | why |
+|---|---|---|---|
+| revelation archive | `reveal-archive-v2` | `reveal-archive-v3` | one identity per point (the compressed form's digest), the key seen in an output, the other serialization, the x-only keys of a taproot script path, the hybrid forms, and candidate scripts filtered by shape with the exception counted; `v1-digests` gone |
+| first-reveal table | `firstreveal-v1` | `firstreveal-v2` | positional: `keys.bin` plus `first_off.bin`, no ladder, an append that is an append of files |
+| nonce witness table | `nonces-witness-v1` | `nonces-witness-v2` | 124-byte rows keyed by the point (`x`) and an attribution class earned by consensus; the resolution per full scalar; Schnorr `s` as published; the index declared beside the parent; no append |
+| lock set | `locks-v1` | `locks-v2` | sealed with the snapshot's height |
+| reuse checkpoint, burnt set, stats | `reuse-scan-v1`, `reuse-hits-v1`, (none) | `reuse-scan-v2`, `reuse-hits-v2`, `reuse-stats-v2` | the identity of a burnt set names the locks, the height and the perimeter |
+| the curves | bare CSV | `reuse-curve-v2`, `archive-curve-v2` sidecars | a sealed meta beside each CSV; `revelations.csv` counts points, not serializations |
+| timeline | `derived-timeline-v1` | `derived-timeline-v2` | the price outside the identity, the conventions in the meta |
+| block stats | `block-stats-v2` | `block-stats-v3` | `n_unspendable`, `unspendable_sats` |
+| price series, block price | `price-series-v1`, `blockprice-v1` | `price-series-v2`, `blockprice-v2` | the observation's kind and stamp, and the look-ahead that follows |
+| check report | `check-report-v2` | `check-report-v3` | the `keys` block, the linkage fields made explicit |
+| statement | `nodsig-statement-v1` | `nodsig-statement-v2` | binds the declared parent's coverage |
+
+**Unchanged, bytes and fingerprints alike:** `graph-v2`, `headers-v2`,
+`nonces-v3`, `outpoint-index-v3`, `outpoint-derived-v3`, `firstspend-v1`,
+`address-book-v2`. Their manifests are re-sealed with `nodsig manifest
+reseal` so the statement carries the parent's coverage; nothing else moves.
+
+**No reader of an earlier format remains.** `nonces-v2`,
+`outpoint-index-v2`, `outpoint-derived-v2` and the `graph-v1` seal are
+refused by name, with this sentence: an artifact of an earlier format is read
+with the release that wrote it, `v1.9.0`.
+
+### Do your artifacts still work?
+
+The 1.x artifacts keep every number they were published with, under
+`v1.9.0`. Under 2.0.0, in real hours on the machine the 1.x figures were
+measured on:
+
+| step | what to run | cost |
+|---|---|---|
+| the revelation archive | `archive scan --headers --graph-digest` from zero, then `archive merge` | the whole chain: ~25 h of scan (the graph is not rewritten; `--graph-digest` confirms it), ~5 h of merge |
+| the first-reveal table | `firstreveal build` from the merged archive | ~1 h |
+| the nonce census | nothing: `nonces-v3` does not change | 0 |
+| the witness table | `nonces resolve --index` | ~1.5 h of node reads, plus one index lookup per witness and one block read per spent output it has to see |
+| the lock set and the reuse figures | `reuse prepare --height`, then `archive derive --curve --checkpoint` (and, for the cross-check, a `reuse scan`: a full pass, never measured with a local node, 25–35 h estimated) | 20 min, ~5 h, and the optional pass |
+| the timeline | `derived timeline` | one pass over `history.bin`, ~4 h |
+| block stats | `blockstats build` | one pass over the graph, hours |
+| the price tables | `price import` (with the observation), `price build` | seconds |
+| the index, the derivatives, the first-spend table, the headers, the graph | `nodsig manifest reseal` on each | seconds |
+
+### Documentation
+
+One page per emitted format under `docs/formats/`, each ending with the
+constants a porter needs and a test that reads them back; the previous
+pages are gone and the previous tags live here. `ARTIFACTS.md` reads one
+format per major; the reuse curve is described everywhere as what it is, a
+survivorship series over one snapshot; the archive is said to date every
+revelation; the doctrine reads "no point arithmetic; one field square root,
+in `check --key`". `docs/contracts/Artifact.md` carries the second statement
+and the re-seal; `NonceExposureBackend.md` the v2 join.
+
 ## 1.9.0 — the timeline: the scan history.bin was laid out for
 
 ### Command line

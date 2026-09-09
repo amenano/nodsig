@@ -961,7 +961,7 @@ def build_backends(sources, rpc_call=None):
     if get("witness"):
         backends["nonce-exposure"] = WitnessNonceExposure(get("witness"))
     for cap, candidates in (
-            ("exposure", "reveal-archive-v2 (--archive)"),
+            ("exposure", f"{ra.FORMAT_TAG} (--archive)"),
             ("balance", "bitcoin-core-rpc scantxoutset (--rpc)"),
             ("history", "outpoint-index derivatives "
                         "(--index + --derived)"),

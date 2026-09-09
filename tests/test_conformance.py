@@ -297,3 +297,111 @@ def test_docs_name_no_format_that_does_not_exist():
         + "\n  ".join(f"{t}  ({where})" for t, where in sorted(unknown.items()))
         + "\nEither the tag is stale, or it is deliberate and belongs on the "
           "list with the reason it is there.")
+
+
+# ---------------------------------------------------------------------------
+# The format pages pin their constants: "Constants, for a porter and for the
+# test that pins this page" is read back and confronted with the code
+# ---------------------------------------------------------------------------
+
+def _constants_table(page):
+    """The `name -> value` rows of a page's constants table, as text."""
+    path = os.path.join(ROOT, "docs", "formats", page)
+    with open(path) as f:
+        text = f.read()
+    start = text.index("## Constants, for a porter")
+    rows = {}
+    for line in text[start:].splitlines()[1:]:
+        if line.startswith("## "):
+            break
+        if not line.startswith("|") or line.startswith("|---"):
+            continue
+        cells = [c.strip() for c in line.strip("|").split("|")]
+        if len(cells) == 2 and cells[0] != "name":
+            rows[cells[0].replace("`", "")] = cells[1]
+    return rows
+
+
+def _ints(text):
+    import re
+    return [int(x.replace(",", "")) for x in re.findall(r"\d[\d,]*", text)]
+
+
+def _ticks(text):
+    import re
+    return re.findall(r"`([^`]+)`", text)
+
+
+def test_the_format_pages_pin_their_constants():
+    """Each 2.0.0 page ends with the numbers a porter needs; this reads
+    them back off the page and confronts the module, so a constant that
+    moves without the page moving fails here."""
+    from nodsig import block_stats as bs
+    from nodsig import curve as cv
+    from nodsig import derivatives as dv
+    from nodsig import firstreveal as fr
+    from nodsig import graphemit as ge
+    from nodsig import nonces as nn
+    from nodsig import reuse_scan as rs
+    from nodsig import reveal_archive as ra
+    from nodsig import sightings as sg
+    from nodsig import witness as wt
+
+    t = _constants_table("BlockStats-v3.md")
+    assert _ticks(t["columns"]) == [",".join(bs.COLUMNS)]
+    assert _ticks(t["unspendable rule"])[0] == f"0x{bs.OP_RETURN:02x}"
+    assert _ints(t["unspendable rule"])[-1] == bs.MAX_SCRIPT_SIZE
+    assert _ticks(t["identity tag"]) == [bs.FORMAT_TAG]
+    assert _ticks(t["parent tag accepted"]) == [ge.FORMAT_TAG]
+
+    t = _constants_table("Nonces-witness-v2.md")
+    assert _ints(t["record width"]) == [wt.REC]
+    assert _ticks(t["fields"]) == ["r", "x", "key_seen", "s", "count",
+                                   "height", "flags"]
+    assert _ints(t["fields"])[:4] == [wt.R_LEN, wt.X_LEN, wt.KEY_LEN, wt.S_LEN]
+    assert _ints(t["flags"]) == [wt.FLAG_SCHNORR, wt.FLAG_HIGH_S, 4, 8,
+                                 wt.FLAG_AMBIGUOUS, wt.FLAG_ODD_Y,
+                                 wt.FLAG_UNCOMPRESSED, wt.FLAG_XONLY]
+    assert wt.ATTR_MASK == 4 | 8
+    assert _ints(t["rows per triple"]) == [wt.ROWS_PER_TRIPLE]
+    assert _ticks(t["identity tag"]) == [wt.FORMAT_TAG]
+    assert _ticks(t["parent tag accepted"]) == list(wt.PARENT_TAGS) == [nn.FORMAT_TAG]
+
+    t = _constants_table("DerivedTimeline-v2.md")
+    assert _ticks(t["identity files"]) == list(dv.TIMELINE_FILES)
+    assert _ticks(t["bands columns"]) == [",".join(dv.BANDS_COLUMNS)]
+    assert _ticks(t["windows columns"]) == [",".join(dv.WINDOWS_COLUMNS)]
+    assert _ticks(t["priced columns"]) == [
+        ",".join(dv.PRICED_COLUMNS) + ",cost_at_creation_<currency>"]
+    assert _ticks(t["identity tag"]) == [dv.TIMELINE_TAG]
+    assert _ticks(t["parent tag accepted"]) == [dv.FORMAT_TAG]
+
+    t = _constants_table("ReuseScan-v2.md")
+    assert _ticks(t["TYPE_ORDER"]) == list(rs.TYPE_ORDER)
+    widths = _ints(t["lock record"])
+    assert widths[:2] == [rs.LOCK_TYPES["p2pkh"], rs.LOCK_TYPES["p2wsh"]]
+    assert widths[-1] == 64                 # the satoshis, u64
+    assert set(_ticks(t["tags"])) == {rs.LOCKS_TAG, rs.STATE_TAG, rs.HITS_TAG,
+                                      rs.STATS_TAG, cv.REUSE_TAG,
+                                      cv.ARCHIVE_TAG}
+    header = cv.reuse_header(rs.TYPE_ORDER).strip().split(",")
+    assert header[0] == "height" and header[-1] == "fingerprint"
+    assert _ticks(t["curve columns"])[0] == "height"
+
+    t = _constants_table("RevealArchive-v3.md")
+    assert _ticks(t["CAT_ORDER"]) == list(ra.CAT_ORDER)
+    assert _ints(t["record widths"]) == [ra.rec_width(c) for c in ra.CAT_ORDER]
+    assert _ints(t["digest widths"]) == [ra.CATEGORIES[c] for c in ra.CAT_ORDER]
+    assert _ints(t["ARCHIVE_LADDER_EVERY"]) == [ra.ARCHIVE_LADDER_EVERY]
+    assert _ints(t["keys flags"])[:8] == [
+        sg.FLAG_SIG, sg.FLAG_WIT, sg.FLAG_INNER_SIG, sg.FLAG_INNER_WIT,
+        sg.FLAG_UNCOMPRESSED, sg.FLAG_OUT, sg.FLAG_OTHER_FACE, sg.FLAG_XONLY]
+    assert _ints(t["scripts* payload"]) == [sg.MAX_INNER_KEYS]
+    assert _ticks(t["identity tag"]) == [ra.FORMAT_TAG]
+
+    t = _constants_table("FirstReveal-v2.md")
+    assert _ints(t["keys row"])[0] == fr.KEY
+    assert _ints(t["first_off entry"])[0] == fr.OFF * 8
+    assert _ticks(t["identity files"]) == list(fr.FP_ORDER)
+    assert _ticks(t["identity tag"]) == [fr.FORMAT_TAG]
+    assert _ticks(t["parent tag accepted"]) == [ra.FORMAT_TAG]

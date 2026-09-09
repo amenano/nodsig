@@ -138,7 +138,7 @@ typing:
 
 ```console
 $ nodsig check --stdout 1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa
-# exposure: not configured (pluggable: reveal-archive-v2 (--archive))
+# exposure: not configured (pluggable: reveal-archive-v3 (--archive))
 # balance: not configured (pluggable: bitcoin-core-rpc scantxoutset (--rpc))
 # history: not configured (pluggable: outpoint-index derivatives (--index + --derived))
 # co-inputs: not configured (pluggable: outpoint-index derivatives (--index + --derived))
