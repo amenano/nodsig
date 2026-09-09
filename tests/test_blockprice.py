@@ -24,6 +24,7 @@ Usage:
     (also runs under pytest via the shared conftest fixtures)
 """
 
+import hashlib
 import io
 import json
 import os
@@ -405,42 +406,57 @@ def test_timeline_with_a_price(built):
     dv.run_timeline(derived, index, out_dir, grid=2, price_dir=table,
                     out=log)
     S = td.S
-    windows = open(os.path.join(out_dir,
-                                dv.WINDOWS_CSV)).read().splitlines()
-    check(windows == [
-        "create_from,spend_from,outputs,sats,"
-        "sat_heights_created,sat_heights_spent,"
-        "sats_priced,cost_at_creation",
+    priced = open(os.path.join(out_dir,
+                               dv.PRICED_CSV)).read().splitlines()
+    check(priced == [
+        "create_from,spend_from,sats_priced,cost_at_creation_usd",
         # 50 BTC at 100.50 = 5025; at 200 = 10000
-        f"0,,1,{S},{S},0,{S},5025.000000",
-        f"2,,1,{S},{3 * S},0,{S},10000.000000",
+        f"0,,{S},5025.000000",
+        f"2,,{S},10000.000000",
         # out1 (S) and out3 (3 sat) both created at h2, price 100.50
-        f"2,2,2,{S + 3},{2 * S + 6},{2 * S + 9},{S + 3},5025.000003",
+        f"2,2,{S + 3},5025.000003",
         # out2: 7 sat at 100.50, out5: 2 sat at 200
-        "2,4,2,9,20,38,9,0.000011",
+        "2,4,9,0.000011",
         # out6, out8 (50 BTC each) and out9 (5 sat), all at 200
-        f"4,,3,{2 * S + 5},{9 * S + 25},0,{2 * S + 5},20000.000010",
+        f"4,,{2 * S + 5},20000.000010",
         # out7: 6 sat at 200
-        "4,4,1,6,24,30,6,0.000012",
-    ], f"priced windows differ from the hand model:\n{windows}")
+        "4,4,6,0.000012",
+    ], f"priced table differs from the hand model:\n{priced}")
     meta = json.load(open(os.path.join(out_dir, dv.TIMELINE_META)))
-    check(meta["build"]["price"]["currency"] == "USD"
-          and meta["build"]["price"]["digest"],
-          "the external input must be declared in the meta")
+    price = meta["build"]["price"]
+    with open(os.path.join(out_dir, dv.PRICED_CSV), "rb") as f:
+        priced_sha = hashlib.sha256(f.read()).hexdigest()
+    check(price["currency"] == "USD" and price["digest"]
+          and price["file"] == dv.PRICED_CSV and price["sha256"] == priced_sha
+          and price["rows"] == 6 and price["series"]
+          and "external series" in price["sentence"],
+          f"the external input must be declared in the meta: {price}")
     check("external input" in log.getvalue(),
           "the summary must say what the cost figures rest on")
-    # The price-free columns must not move: same pass, same folds.
+    # The chain tables must not move: same pass, same folds, and the
+    # SAME fingerprint, because the price is outside the identity.
     plain_dir = os.path.join(tmp, "timeline_plain")
     dv.run_timeline(derived, index, plain_dir, grid=2,
                     out=io.StringIO())
-    plain = open(os.path.join(plain_dir,
-                              dv.WINDOWS_CSV)).read().splitlines()
-    stripped = [",".join(r.split(",")[:6]) for r in windows]
-    check(stripped == plain,
-          "the price channel must only append columns, never change one")
-    check(open(os.path.join(plain_dir, dv.BANDS_CSV)).read()
-          == open(os.path.join(out_dir, dv.BANDS_CSV)).read(),
-          "bands do not depend on the price at all")
+    for name in (dv.WINDOWS_CSV, dv.BANDS_CSV):
+        check(open(os.path.join(plain_dir, name)).read()
+              == open(os.path.join(out_dir, name)).read(),
+              f"{name} does not depend on the price at all")
+    plain_meta = json.load(open(os.path.join(plain_dir, dv.TIMELINE_META)))
+    check(plain_meta["fingerprint"] == meta["fingerprint"],
+          "one timeline, one name, whether or not a price was given")
+    check(not os.path.exists(os.path.join(plain_dir, dv.PRICED_CSV)),
+          "no price, no third file")
+    # The audit confronts the priced table and the block-price table.
+    vlog = io.StringIO()
+    dv.run_timeline_verify(out_dir, derived_dir=derived, price_dir=table,
+                           out=vlog)
+    check("blockprice" in vlog.getvalue() and "confirmed" in vlog.getvalue(),
+          f"the audit names the price table it confirmed: {vlog.getvalue()}")
+    with open(os.path.join(out_dir, dv.PRICED_CSV), "a") as f:
+        f.write("9,,1,1.000000\n")
+    with pytest.raises(dv.OutpointError):
+        dv.run_timeline_verify(out_dir, out=io.StringIO())
     # a table built on another index is refused, like supply's
     blocks, _ = td.derived_chain()
     _g, other = td.build_index(tmp, blocks, name="tl_other", end=4)

@@ -49,7 +49,7 @@ PUBLIC_SURFACE = {
     "graph": ("stats", "fingerprint", "show", "digest"),
     "index": ("build", "rewind", "stats", "verify", "lookup"),
     "derived": ("build", "rewind", "stats", "verify", "history", "fee",
-                "cospends", "supply", "timeline"),
+                "cospends", "supply", "timeline", "timeline-verify"),
     "firstspend": ("build", "stats", "verify", "between", "rewind"),
     "firstreveal": ("build", "stats", "verify", "between"),
     "blockstats": ("build", "summary"),

@@ -312,13 +312,22 @@ age of the unspent at a height H is (H · sats − Σ value·create_height) /
 sats, exact. The pass re-meets the manifest's identities before writing
 (row count, spent satoshis, distinct locks) and the two tables must agree
 on the unspent satoshis at the tip, so a defect fails the run instead of
-shipping a plausible CSV. The meta beside the CSVs declares the parent
-derivatives fingerprint and, with `--price <blockprice>` (section 6b), the
-price table's digest; the price adds two columns per cell — the satoshis
-that had a price at creation, and Σ value·price(create_height), the
-at-creation cost basis of the coins that ended in that cell. A lock is an
-identical scriptPubKey, not a wallet and not a person; the bands say
-nothing about who holds what, only how balances distribute.
+shipping a plausible CSV. The meta beside the CSVs is sealed
+(`derived-timeline-v2`, over the two chain tables) and declares the parent
+derivatives fingerprint; `derived timeline-verify` is the audit. Two
+conventions are written in it, because a join needs them side by side: a
+checkpoint row holds balances **through** its height, inclusive; a window is
+`[from, from + grid)`, so its last height is the next checkpoint minus one.
+With `--price <blockprice>` (section 6b) the same pass writes a third CSV,
+`timeline_priced.csv`, **outside the identity**: per cell, the satoshis that
+had a price at creation and Σ value·price(create_height), the at-creation
+cost basis of the coins that ended in that cell, in the series' currency
+(the column's name says which). The meta records that file, its digest, the
+price table's digest and the series with their look-ahead: the same chain
+with another series is the same timeline with another third file, and the
+fingerprint does not move. A lock is an identical scriptPubKey, not a wallet
+and not a person; the bands say nothing about who holds what, only how
+balances distribute.
 
 Two other artifacts meet this one, and each meeting is stated rather than
 left for a confused evening. The windows' creation totals are the value
@@ -555,7 +564,8 @@ they read, time or explain something you already have.
 | `derived fee` | what a transaction paid | 6 |
 | `derived cospends` | what was spent together with an outpoint | 6 |
 | `derived supply` | coinbase <= subsidy + fees checked on every block; fees, subsidy and coinbase per epoch; `--price` adds them in a currency | 6 |
-| `derived timeline` | one pass over history.bin: balance bands per checkpoint, and outputs/sats/age weights per (creation, spend) window; `--price` adds the at-creation cost | 6 |
+| `derived timeline` | one pass over history.bin: balance bands per checkpoint, and outputs/sats/age weights per (creation, spend) window; `--price` writes the at-creation cost to a third CSV outside the identity | 6 |
+| `derived timeline-verify` | a sealed timeline against its meta; `--derived` confirms the parent, `--price` the block-price table | 5 |
 | `firstspend build` | when each lock was first spent from, ordered by time | 4 |
 | `firstspend rewind` | back to a height already covered | rewind |
 | `firstspend verify` | re-read it against its manifest, and confirm its parent | 5 |

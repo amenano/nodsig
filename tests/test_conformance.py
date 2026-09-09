@@ -256,14 +256,14 @@ DOCUMENTED_ELSEWHERE = {
     "reuse-scan-v2": "forward reference: same",
     "reuse-hits-v2": "forward reference: same",
     "reuse-stats-v2": "forward reference: same",
-    "derived-timeline-v2": "forward reference: same",
     "price-series-v2": "forward reference: same",
     "blockprice-v2": "forward reference: same",
     "block-stats-v3": "forward reference: same",
     "nodsig-statement-v2": "forward reference: same",
-    "derived-timeline-v1": "derivatives.TIMELINE_TAG: the sealed meta "
+    "derived-timeline-v2": "derivatives.TIMELINE_TAG: the sealed meta "
                            "`derived timeline` writes beside its two CSVs "
                            "(the module's FORMAT_TAG names the record files)",
+    "derived-timeline-v1": "historical: superseded by v2, named in the changelog",
 }
 
 

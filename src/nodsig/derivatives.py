@@ -182,7 +182,7 @@ from nodsig.genstore import GenStore, new_state_fields
 from nodsig.outpoint_index import ORD, OutpointError
 from nodsig.hashing import hash160
 from nodsig.recio import (IO_CHUNK, atomic_json, budgeted_slab, checked_name,
-                          read_json,
+                          read_json, sha_file,
                           durable_replace, read_fixed, read_slabs)
 from nodsig.recsort import SortedFile
 from nodsig.reuse_scan import SAT
@@ -1671,6 +1671,12 @@ def run_supply(derived_dir, index_dir, epoch_blocks=SUBSIDY_HALVING,
         print(f"  unclaimed  {tot['unclaimed'] / SAT:>20,.8f} BTC in "
               f"{tot['short']:,} block(s) that claimed less than "
               f"subsidy + fees", file=out)
+        print("  coinbase counts every output the coinbase transactions "
+              "created, both BIP30 instances (100 BTC) and unspendable "
+              "outputs included: it is not circulating supply; issued "
+              "supply is coinbase minus fees. subsidy is the schedule's "
+              "allowance; unclaimed cannot be split between subsidy and "
+              "fees, because a coinbase claims one sum", file=out)
         if violations:
             print(f"  VIOLATED in {len(violations):,} block(s): coinbase "
                   f"above subsidy + fees", file=out)
@@ -1776,16 +1782,41 @@ def run_supply(derived_dir, index_dir, epoch_blocks=SUBSIDY_HALVING,
 # tip row of the bands table — the two mechanics meet on one number,
 # so a defect in either fails the run instead of shipping a wrong CSV.
 
-TIMELINE_TAG = "derived-timeline-v1"
+TIMELINE_TAG = "derived-timeline-v2"
 TIMELINE_GRID = 10_000
 BANDS_CSV = "timeline_bands.csv"
 WINDOWS_CSV = "timeline_windows.csv"
+PRICED_CSV = "timeline_priced.csv"
 TIMELINE_META = "timeline.meta.json"
+TIMELINE_FILES = ("bands", "windows")           # the identity, in order
 
 BANDS_COLUMNS = ("checkpoint", "band_floor_sats", "locks", "sats")
 WINDOWS_COLUMNS = ("create_from", "spend_from", "outputs", "sats",
                    "sat_heights_created", "sat_heights_spent")
-WINDOWS_PRICE_COLUMNS = ("sats_priced", "cost_at_creation")
+# The third table, OUTSIDE the identity: the same chain with another
+# series is the same timeline with another third file. The currency is
+# in the last column's name, so the file says what it is expressed in.
+PRICED_COLUMNS = ("create_from", "spend_from", "sats_priced")
+
+# What the numbers rest on, written in the meta and not only in prose:
+# a reader who joins the bands with the windows, or either with the
+# reuse curve, needs the two semantics side by side (a checkpoint row
+# holds balances THROUGH its height; a window starts AT a checkpoint
+# and ends one height before the next).
+TIMELINE_CONVENTIONS = {
+    "checkpoint": "balances through the height, inclusive",
+    "window": "[from, from + grid)",
+    "unspent": ("one row per output ever created and not spent by the "
+                "coverage height; includes the two BIP30-overwritten "
+                "coinbases (100 BTC) and provably unspendable outputs, "
+                "which a node does not track (block-stats-v3 counts them "
+                "per block)"),
+}
+UNSPENT_SENTENCE = ("unspent counts every output ever created and not spent "
+                    "up to the watermark: it includes the two "
+                    "BIP30-overwritten coinbases (100 BTC) and provably "
+                    "unspendable outputs, which a node does not track; "
+                    "`blockstats build` counts those per block")
 
 # Decade edges for the balance bands: every positive balance consensus
 # can express falls below 10^16 (MAX_VALUE is 7.2e16 but the supply is
@@ -1836,6 +1867,30 @@ def _price_micro_by_height(table, index):
         if price is not None and i < len(micro):
             micro[i] = int(price * 1_000_000)
     return micro
+
+
+def _price_sentence(table):
+    """What the priced figures could not have known at the block, per
+    series, from the `lookahead_s` a blockprice-v2 table declares; and
+    the limit every fiat figure carries."""
+    parts = []
+    for series in table.meta["parents"]["series"]:
+        la = series.get("lookahead_s")
+        who = f"series {series['order']} ({series['publisher']})"
+        if la is None:
+            parts.append(f"{who} does not say when its observation was "
+                         "fixed within its period")
+        elif la == 0:
+            parts.append(f"{who} stamps its observation when it was fixed: "
+                         "a block's price was known at the block")
+        else:
+            parts.append(f"{who} stamps its observation at the start of "
+                         f"its period: a block's price may be a number "
+                         f"fixed up to {la / 3600:g} hours after the block")
+    parts.append("fiat figures depend on external series identified by "
+                 "digest; a series fetched later may differ where its "
+                 "publisher corrected the past")
+    return "; ".join(parts)
 
 
 def _write_csv(path, header, lines):
@@ -2031,28 +2086,52 @@ def run_timeline(derived_dir, index_dir, out_dir, grid=TIMELINE_GRID,
                 f"say {unspent_sats:,} unspent — the two mechanics MUST "
                 "meet; do not use this run")
 
+        if "spent_outputs" in totals and spent_rows != totals["spent_outputs"]:
+            raise OutpointError(
+                f"the pass walked {spent_rows:,} spent rows, the manifest "
+                f"declares {totals['spent_outputs']:,} spent outputs — the "
+                "two roads MUST meet; do not use this run")
+
         from decimal import Decimal
         windows_lines = []
+        priced_lines = []
         for (cw, sw), acc in sorted(windows.items()):
             spend_from = "" if sw < 0 else str(sw * grid)
-            line = (f"{cw * grid},{spend_from},{acc[0]},{acc[1]},"
-                    f"{acc[2]},{acc[3]}")
+            windows_lines.append(f"{cw * grid},{spend_from},{acc[0]},"
+                                 f"{acc[1]},{acc[2]},{acc[3]}")
             if price_micro is not None:
                 # Σ(sats * micro-units/BTC) → currency units: one
-                # Decimal division per CELL, after the pass.
+                # Decimal division per CELL, after the pass. One row
+                # per cell, in the windows' order, zeros where nothing
+                # had a price: the join is by key, not by position.
                 cost = Decimal(acc[5]) / (SAT * 1_000_000)
-                line += f",{acc[4]},{cost:.6f}"
-            windows_lines.append(line)
+                priced_lines.append(f"{cw * grid},{spend_from},{acc[4]},"
+                                    f"{cost:.6f}")
 
         os.makedirs(out_dir, exist_ok=True)
         clock = WallClock("build")
-        wcols = WINDOWS_COLUMNS + (WINDOWS_PRICE_COLUMNS
-                                   if price_micro is not None else ())
         bands_sha = _write_csv(os.path.join(out_dir, BANDS_CSV),
                                BANDS_COLUMNS, bands_lines)
         windows_sha = _write_csv(os.path.join(out_dir, WINDOWS_CSV),
-                                 wcols, windows_lines)
+                                 WINDOWS_COLUMNS, windows_lines)
+        price = None
+        if table is not None:
+            currency = table.currency.lower()
+            priced_sha = _write_csv(
+                os.path.join(out_dir, PRICED_CSV),
+                PRICED_COLUMNS + (f"cost_at_creation_{currency}",),
+                priced_lines)
+            price = {"file": PRICED_CSV, "sha256": priced_sha,
+                     "rows": len(priced_lines),
+                     "digest": table.meta["digest"],
+                     "currency": table.currency,
+                     "series": table.meta["parents"]["series"],
+                     "sentence": _price_sentence(table)}
 
+        # The identity: the two chain tables and nothing else. The same
+        # derivatives on the same grid seal the same name whether or
+        # not a price was given; the price is an external input beside
+        # the artifact, described in `build`.
         identity = make_identity(TIMELINE_TAG, 1, watermark,
                                  [("bands", bands_sha),
                                   ("windows", windows_sha)])
@@ -2067,14 +2146,19 @@ def run_timeline(derived_dir, index_dir, out_dir, grid=TIMELINE_GRID,
             "grid": grid,
             "checkpoints": ncp,
             "rows": rows,
+            "files": {"bands": {"file": BANDS_CSV, "sha256": bands_sha,
+                                "rows": len(bands_lines)},
+                      "windows": {"file": WINDOWS_CSV,
+                                  "sha256": windows_sha,
+                                  "rows": len(windows_lines)}},
+            "caches": {},
             "totals": {"distinct_locks": locks,
                        "spent_outputs": spent_rows,
+                       "unspent_outputs": rows - spent_rows,
                        "unspent_sats": unspent_sats,
                        "coinage_destroyed_sat_heights": coinage},
-            "price": (None if table is None else {
-                "digest": table.meta["digest"],
-                "currency": table.currency,
-                "series": table.meta["parents"]["series"]}),
+            "conventions": dict(TIMELINE_CONVENTIONS),
+            "price": price,
             "reconstruction": (
                 "one pass over history.bin; heights from the parent "
                 "index's block table; bands = locks and sats per "
@@ -2082,8 +2166,7 @@ def run_timeline(derived_dir, index_dir, out_dir, grid=TIMELINE_GRID,
                 "windows = outputs, sats, sum(value*create_height) and "
                 "sum(value*spend_height) per (creation window, spend "
                 "window | unspent), windows of `grid` heights keyed by "
-                "their first height; with a price table, sats_priced "
-                "and sum(value*price(create_height)) per cell"),
+                "their first height"),
         })
         meta_tmp = os.path.join(out_dir, TIMELINE_META + ".tmp")
         with open(meta_tmp, "w") as f:
@@ -2096,20 +2179,87 @@ def run_timeline(derived_dir, index_dir, out_dir, grid=TIMELINE_GRID,
               file=out)
         print(f"  unspent   {unspent_sats / SAT:>20,.8f} BTC in "
               f"{rows - spent_rows:,} outputs", file=out)
+        print(f"  {UNSPENT_SENTENCE}", file=out)
+        print(f"  a checkpoint row holds balances through its height; a "
+              f"window is [from, from + {grid:,})", file=out)
         print(f"  coin-age destroyed "
-              f"{coinage / SAT:>20,.0f} BTC-heights", file=out)
+              f"{coinage / SAT:>20,.0f} BTC-heights (one height is not a "
+              "fixed number of days: convert through the header times)",
+              file=out)
         if table is not None:
             priced_sats = sum(a[4] for a in windows.values())
-            print(f"  at-creation cost rests on an external input: "
-                  f"blockprice digest {table.meta['digest']}; "
+            print(f"  at-creation cost in {PRICED_CSV}, outside the "
+                  f"identity, rests on an external input: blockprice "
+                  f"digest {table.meta['digest']}; "
                   f"{priced_sats / SAT:,.8f} BTC of "
                   f"{(spent_sats + unspent_sats) / SAT:,.8f} had a "
                   "price at creation", file=out)
+            print(f"  {price['sentence']}", file=out)
         print(f"fingerprint: {meta['fingerprint']}", file=out)
         return meta["fingerprint"]
     finally:
         derived.close()
         index.close()
+
+
+def run_timeline_verify(timeline_dir, derived_dir=None, price_dir=None,
+                        out=None):
+    """The shared audit over a sealed timeline: the two chain tables
+    against the identity, the fingerprint recomputed; the parent
+    declared until the derivatives confront it; the priced table, when
+    there is one, against the digests `build.price` recorded, and the
+    block-price table against its digest when given."""
+    out = out or sys.stdout
+    meta = read_json(os.path.join(timeline_dir, TIMELINE_META), OutpointError)
+    if meta.get("format") != TIMELINE_TAG:
+        raise OutpointError(f"{TIMELINE_META} says {meta.get('format')!r}, "
+                            f"this build reads {TIMELINE_TAG!r}")
+    parent_confirmed = None
+    if derived_dir:
+        dman = read_json(os.path.join(derived_dir, MANIFEST_NAME),
+                         OutpointError)
+        declared = meta["build"]["parent"]
+        if dman.get("fingerprint") != declared["fingerprint"]:
+            raise OutpointError(
+                f"this timeline declares the derivatives "
+                f"{declared['fingerprint'][:16]}… and the ones given are "
+                f"{str(dman.get('fingerprint'))[:16]}…: not the same "
+                "artifact")
+        parent_confirmed = (f"ok parent {dman['format']} "
+                            f"{dman['fingerprint']}")
+    verify_sealed(timeline_dir, meta, TIMELINE_TAG, OutpointError,
+                  fp_order=list(TIMELINE_FILES),
+                  parent_confirmed=parent_confirmed)
+    price = meta["build"].get("price")
+    if price is None:
+        print("price: none (the timeline holds chain figures only)",
+              file=out)
+        return meta["fingerprint"]
+    path = os.path.join(timeline_dir, checked_name(price["file"],
+                                                   OutpointError))
+    if sha_file(path) != price["sha256"]:
+        raise OutpointError(f"{price['file']}: sha256 differs from the one "
+                            "the meta recorded: the priced table changed "
+                            "after the pass")
+    print(f"ok  {price['file']}: sha256 as recorded, {price['rows']:,} "
+          f"rows, {price['currency']}", file=out)
+    if price_dir:
+        from nodsig import blockprice as bpm
+        try:
+            table = bpm.BlockPrice(price_dir)
+        except bpm.BlockPriceError as e:
+            raise OutpointError(f"price table: {e}")
+        if table.meta["digest"] != price["digest"]:
+            raise OutpointError(
+                f"the priced table rests on blockprice {price['digest'][:16]}… "
+                f"and the table given is {table.meta['digest'][:16]}…: not "
+                "the same input")
+        print(f"ok  blockprice {price['digest']} confirmed", file=out)
+    else:
+        print(f"blockprice {price['digest']}: declared, not confirmed "
+              "(pass --price to confront it)", file=out)
+    print(f"  {price['sentence']}", file=out)
+    return meta["fingerprint"]
 
 
 def main(argv=None):
@@ -2202,9 +2352,22 @@ def main(argv=None):
                      help="heights per checkpoint and per window "
                           "(default 10,000; the tip is always included)")
     ptl.add_argument("--price", metavar="DIR",
-                     help="a blockprice table built on this index: adds "
-                          "the at-creation cost per window (an external "
-                          "input, digest declared in the meta)")
+                     help="a blockprice table built on this index: writes "
+                          "the at-creation cost per window to a third CSV "
+                          "outside the identity (an external input, digest "
+                          "declared in the meta)")
+
+    ptv = sub.add_parser("timeline-verify",
+                         help="audit a sealed timeline: the two chain "
+                              "tables against the meta, the parent and "
+                              "the price table when given")
+    ptv.add_argument("--timeline", required=True,
+                     help="the directory `derived timeline` wrote")
+    ptv.add_argument("--derived", help="the derivatives it declares, to "
+                                       "confirm the parent")
+    ptv.add_argument("--price", metavar="DIR",
+                     help="the blockprice table the priced figures rest "
+                          "on, to confirm its digest")
 
     args = p.parse_args(argv)
     try:
@@ -2233,6 +2396,9 @@ def main(argv=None):
                 p.error("--grid must be at least 1 block")
             run_timeline(args.derived, args.index, args.out,
                          grid=args.grid, price_dir=args.price)
+        elif args.cmd == "timeline-verify":
+            run_timeline_verify(args.timeline, derived_dir=args.derived,
+                                price_dir=args.price)
         else:
             run_cospends(args.derived, args.index, args.target)
     except OutpointError as e:

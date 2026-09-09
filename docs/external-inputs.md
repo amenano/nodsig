@@ -127,4 +127,7 @@ January 2009. That gap is a fact about the sources, and it stays visible.
 
 Every command and every column that rests on a price says so: *requires a
 price series*. Nothing in the artifacts, their fingerprints or their
-verification changes when a series is present or absent.
+verification changes when a series is present or absent: `derived timeline`
+is the example, sealing the same two chain tables under the same fingerprint
+with or without `--price`, and writing the priced figures to a third file it
+describes in `build`.

@@ -984,6 +984,41 @@ def test_timeline_matches_model(dbuilt):
             sha = hashlib.sha256(f.read()).hexdigest()
         check(declared[name] == sha,
               f"{name}: the meta's digest must be the file's")
+        check(meta["build"]["files"][name] == {"file": csv_name, "sha256": sha,
+                                               "rows": 6},
+              f"{name}: build.files carries the file, the digest, the rows")
+    check(meta["format"] == dv.TIMELINE_TAG == "derived-timeline-v2"
+          and meta["build"]["totals"]["spent_outputs"] == 5
+          and meta["build"]["totals"]["unspent_outputs"] == 5
+          and meta["build"]["price"] is None
+          and meta["build"]["conventions"]["window"] == "[from, from + grid)"
+          and "BIP30" in meta["build"]["conventions"]["unspent"],
+          f"the meta says what the numbers rest on: {meta['build']}")
+    check("BIP30" in buf.getvalue() and "through its height" in buf.getvalue(),
+          "the summary says what unspent contains and how a checkpoint reads")
+    # The shared audit, with and without the parent; a changed table
+    # is refused.
+    dv.run_timeline_verify(out_dir, out=io.StringIO())
+    log = io.StringIO()
+    dv.run_timeline_verify(out_dir, derived_dir=derived, out=log)
+    check("price: none" in log.getvalue(), "no price, and the audit says so")
+    with open(os.path.join(out_dir, dv.BANDS_CSV), "a") as f:
+        f.write("9,1,1,1\n")
+    try:
+        dv.run_timeline_verify(out_dir, out=io.StringIO())
+        fail("a changed bands table passed the audit")
+    except dv.OutpointError:
+        pass
+    dv.run_timeline(derived, index, out_dir, grid=2, out=io.StringIO())
+    other = os.path.join(tmp, "derived_other_for_tl")
+    os.makedirs(other)
+    with open(os.path.join(other, dv.MANIFEST_NAME), "w") as f:
+        json.dump({**dmanifest, "fingerprint": "0" * 64}, f)
+    try:
+        dv.run_timeline_verify(out_dir, derived_dir=other, out=io.StringIO())
+        fail("another derivatives directory was confirmed as parent")
+    except dv.OutpointError:
+        pass
     # The default grid on a five-block chain has one checkpoint: the
     # tip. Everything folds into window 0 and the totals must not move.
     tip_dir = os.path.join(tmp, "timeline_tip")
