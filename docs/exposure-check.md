@@ -318,9 +318,10 @@ answer in the whole tool: 1 MB read once, offline, for the whole list. It says
 whether the key behind an address is among those that signed **twice under one
 nonce** — the case where the private key follows by arithmetic anybody can do.
 
-Two things it says with the answer, every time: it works only for single-key
-addresses (a script hash hides its keys, a taproot input carries none beside
-the signature), and **absent does not mean clean** — it means "not among the
+Two things it says with the answer, every time: it answers for the keys the
+unlocking data or the spent output name (a `1…`/`bc1q…` key hash and a `bc1p…`
+output key; a bare script hash hides its keys), and **absent does not mean
+clean** — it means "not among the
 points the census resolved", which is a statement about that set and not about
 the chain. The strong version of the question is
 [`nonce-check.md`](nonce-check.md), and it costs 439 GB and a node.

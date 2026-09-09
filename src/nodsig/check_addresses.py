@@ -751,7 +751,7 @@ class WitnessNonceExposure:
 
     THE QUESTION AND ITS PRICE. Asked the strong way — `nodsig nonces
     address` — this needs the index, the derivatives and a node that
-    re-reads blocks: about 439 GB and hours. Asked here it is 1.03 MB
+    re-reads blocks: about 439 GB and hours. Asked here it is a few MB
     read once, offline, for the whole address list, because the witness
     table already holds the resolutions. The two questions are NOT the
     same, and the report says so: this one only sees the points the
@@ -760,23 +760,23 @@ class WitnessNonceExposure:
     THREE THINGS THAT TRAVEL WITH EVERY ANSWER, not in a footnote:
 
     1. the search is a LINEAR SCAN. The table is ordered by `r`, not by
-       key, so there is no index to bisect: 11,766 rows are walked once
+       key, so there is no index to bisect: the rows are walked once
        and grouped by key in memory. Calling it a lookup would promise
        a structure that is not there;
     2. ABSENT DOES NOT MEAN CLEAN. It means "not among the cases this
        table resolved", and the census hands the resolver only the
        points it could decide were repeated. A negative here is a
        negative about a set, not about the chain;
-    3. it answers for SINGLE-KEY addresses only. A p2sh/p2wsh hides
-       which keys are behind it until it spends, and a taproot input
-       carries no key beside the signature (the rows are flagged
-       key-absent). For those the answer is UNDETERMINED with the
-       reason, never a reassuring negative.
+    3. it answers for the keys the unlocking data or the spent output
+       NAME: a `1…`/`bc1q…` key hash, joined on the digest the row
+       derives (or the 65-byte digest it carries), and a `bc1p…` output
+       key, joined on `x`. A bare `3…`/32-byte `bc1q…` hides which keys
+       are behind it, and the answer is UNDETERMINED with the reason,
+       never a reassuring negative.
 
     THE FORMAT TAG IS CHECKED FROM THE FIRST COMMIT, and that is not
-    ceremony: the v3 package rebuilds this table from public code. If
-    the rebuild changed the tag or the row layout, this capability must
-    stop instead of reading bytes at the wrong offsets."""
+    ceremony: a rebuilt table with a different layout must stop this
+    capability instead of being read at the wrong offsets."""
 
     def __init__(self, witness_dir):
         # Both refuse a directory that is not a witness table, and
@@ -788,19 +788,26 @@ class WitnessNonceExposure:
                 f"witness manifest says {self.manifest.get('format')!r}, "
                 f"this build reads {wit.FORMAT_TAG!r}")
         self.dir = witness_dir
-        self._by_key = None
-        self._by_point = None
+        self._by_digest = None
+        self._by_x = None
+        self._by_r = None
 
     def _load(self):
-        """One pass over the whole table, for every address at once."""
-        if self._by_key is None:
-            by_key, by_point = {}, {}
+        """One pass over the whole table, for every address at once.
+        NONE rows carry no key and are never indexed by one."""
+        if self._by_r is None:
+            by_digest, by_x, by_r = {}, {}, {}
             for rec in wit.iter_records(self.dir):
-                by_point.setdefault(wit.rec_point(rec), []).append(rec)
-                if wit.has_key(rec):
-                    by_key.setdefault(wit.rec_key(rec), []).append(rec)
-            self._by_key, self._by_point = by_key, by_point
-        return self._by_key, self._by_point
+                r = wit.rec_r(rec)
+                by_r.setdefault(r, []).append(rec)
+                if not wit.has_key(rec):
+                    continue
+                by_digest.setdefault(wit.rec_key_canon(rec), set()).add(r)
+                if wit.rec_flags(rec) & wit.FLAG_UNCOMPRESSED:
+                    by_digest.setdefault(wit.rec_key_seen(rec), set()).add(r)
+                by_x.setdefault(wit.rec_x(rec), set()).add(r)
+            self._by_digest, self._by_x, self._by_r = by_digest, by_x, by_r
+        return self._by_digest, self._by_x, self._by_r
 
     def source(self):
         # NO WATERMARK, on purpose. A height here would print "confirmed
@@ -815,26 +822,33 @@ class WitnessNonceExposure:
         return self.source().describe("nonce-exposure")
 
     def query(self, address):
-        """→ Result whose value lists the resolved points this key
+        """→ Result whose value lists the resolved scalars this key
         appears in, or a definite negative when it appears in none."""
-        if address.category != "keys":
-            return Result.undetermined(self.source())
+        by_digest, by_x, by_r = self._load()
         if address.kind == "p2tr":
+            scalars = by_x.get(address.digest)
+            mine = lambda rec: wit.rec_x(rec) == address.digest
+        elif address.category == "keys":
+            scalars = by_digest.get(address.digest)
+            mine = lambda rec: (wit.rec_key_canon(rec) == address.digest
+                                or wit.rec_key_seen(rec) == address.digest)
+        else:
             return Result.undetermined(self.source())
-        by_key, by_point = self._load()
-        rows = by_key.get(address.digest)
-        if not rows:
+        if not scalars:
             return Result.ok(None, self.source())
 
         points = []
-        for point in sorted({wit.rec_point(r) for r in rows}):
-            resolution, exposed = wit.resolution_of(by_point[point])
-            heights = [wit.rec_height(r) for r in by_point[point]
-                       if wit.rec_key(r) == address.digest]
-            points.append({"point": point.hex(),
-                           "resolution": resolution,
-                           "exposes_this_key": address.digest in exposed,
-                           "first_height": min(heights)})
+        for r in sorted(scalars):
+            rows = by_r[r]
+            res = wit.resolution_of(rows)
+            own = [rec for rec in rows if wit.has_key(rec) and mine(rec)]
+            points.append({"r": r.hex(),
+                           "point": wit.rec_point(rows[0]).hex(),
+                           "resolution": res.kind,
+                           "exposes_this_key": any(wit.rec_x(rec) in res.exposed
+                                                   for rec in own),
+                           "first_height": min(wit.rec_height(rec)
+                                               for rec in own)})
         return Result.ok({"points": points,
                           "exposed": any(p["exposes_this_key"]
                                          for p in points)},
@@ -848,8 +862,9 @@ class WitnessNonceExposure:
     def render(self, value, status=Status.OK):
         if status != Status.OK:
             return ("nonce-exposure: UNDETERMINED — this table names the "
-                    "public key beside a signature, which a script hash "
-                    "or a taproot input does not give")
+                    "key the unlocking data or the spent output attributes "
+                    "a signature to, which a bare script hash does not "
+                    "give")
         if value is None:
             return ("nonce-exposure: not among the repeated-nonce cases "
                     "this table resolved — which is NOT 'no reuse': the "
@@ -898,7 +913,7 @@ def build_backends(sources, rpc_call=None):
         archive       a reveal-archive-v2 directory
         index         an outpoint-index-v3 directory
         derived       an outpoint-derived-v2 directory (needs `index`)
-        witness       a nonces-witness-v1 directory
+        witness       a nonces-witness-v2 directory
         rpc           a node URL, for the live balance
         cookie_file   where the node's credential is (never the value)
 

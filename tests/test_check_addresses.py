@@ -748,15 +748,21 @@ def test_report_with_index(pipeline, tmp):
 
 
 def build_witness(tmp):
-    """A real nonces-witness-v1 over the chain of
+    """A real nonces-witness-v2 over the chain of
     `test_nonces.address_chain`, whose four repeated points were built
     to give every resolution a case — including one key that really
-    does sign twice under one nonce."""
+    does sign twice under one nonce. The resolve reads the index too,
+    so the chain goes through the graph and the index build first."""
     import test_nonces as tn
+    import test_outpoint_index as toi
     from nodsig import nonces as nn
+    from nodsig import outpoint_index as oi
     from nodsig import witness as wt
 
     blocks, _ = tn.address_chain()
+    graph = toi.emit_graph(tmp, blocks, "wit_graph")
+    index = os.path.join(tmp, "wit_index")
+    oi.run_build(graph, index)
     census = os.path.join(tmp, "wit_census")
     server, url = trs.serve(blocks)
     try:
@@ -770,7 +776,7 @@ def build_witness(tmp):
     table = os.path.join(tmp, "wit_table")
     try:
         wt.run_resolve(census, table, trs.rs.RpcClient(url, "user:pass"),
-                       out=io.StringIO())
+                       index, out=io.StringIO())
     finally:
         server.shutdown()
     return table
@@ -800,15 +806,22 @@ def test_nonce_exposure(witness_table):
     hit = [p for p in got.value["points"] if p["exposes_this_key"]]
     check(len(hit) == 1 and hit[0]["resolution"] == wt.EXPOSED,
           f"the resolution must come from the table: {got.value}")
-    check(any(p["resolution"] == wt.COPIED for p in got.value["points"]),
-          "the same key also appears on points that expose nothing, and "
-          f"those must be reported as such: {got.value}")
     line = cap.render(got.value, got.status)
     check("EXPOSED" in line and "private key follows" in line,
           f"the exposed line must say what it means: {line}")
     check(got.source.watermark is None,
           "this table covers the points its census resolved, which is a "
           "SET: a height here would promise a perimeter it has not got")
+
+    # A key that appears only on a point resolved as one signature
+    # copied: present, exposing nothing, and the line says which.
+    copied = ca.decode_address(segwit_addr(rs.hash160(tn.PUB_COPY), 0))
+    got = cap.query(copied)
+    check(got.status == ca.Status.OK and not got.value["exposed"]
+          and [p["resolution"] for p in got.value["points"]] == [wt.COPIED],
+          f"a key on a copied-signature point exposes nothing: {got.value}")
+    check("none exposing this key" in cap.render(got.value, got.status),
+          "the line must say the key is present and not exposed")
 
     # A key the table has never seen. This is a definite negative about
     # the table's own set, and the line must refuse to sound like a
@@ -821,16 +834,26 @@ def test_nonce_exposure(witness_table):
     check("NOT 'no reuse'" in line and "census" in line,
           f"absence must not read as a clean answer: {line}")
 
-    # A script hash and a taproot output: the table names the key beside
-    # a signature, and neither of those gives one.
+    # A script hash: the table names the key the unlocking data or the
+    # spent output attributes a signature to, and a bare hash gives none.
     for text in (b58check_encode(0x05, bytes(range(20))),
-                 segwit_addr(bytes(range(32)), 1)):
+                 segwit_addr(bytes(range(32)), 0)):
         got = cap.query(ca.decode_address(text))
         check(got.status == ca.Status.UNDETERMINED,
               f"{text}: this kind cannot carry the question, and an "
               "UNDETERMINED is not a negative")
         check("UNDETERMINED" in cap.render(got.value, got.status),
               "the line must say so too")
+    # A taproot output IS its key: absent from this table, a definite
+    # negative about the set, not an UNDETERMINED.
+    got = cap.query(ca.decode_address(segwit_addr(bytes(range(100, 132)), 1)))
+    check(got.status == ca.Status.OK and got.value is None,
+          "a taproot key the table never attributed is a negative")
+    # And a taproot program equal to an attributed key's x IS that key
+    # up to sign: the join is on x, whatever form the chain showed.
+    got = cap.query(ca.decode_address(segwit_addr(tn.PUB[1:], 1)))
+    check(got.status == ca.Status.OK and got.value["exposed"],
+          "a taproot program that is an exposed key's x is that key")
     print("ok  nonce-exposure: exposed key found, absence stays honest, "
           "unanswerable kinds say so")
 

@@ -117,13 +117,16 @@ on this page that needs no caveat.
 
 ## What the answer means, and what it does not
 
-- **Single-key locks give a conclusive read; script locks do not.** For a
-  `1…` or a `bc1q…` 20-byte lock, the signature can only have come from the one
-  key, so a repeat is that key signing twice. A `3…` or a 32-byte `bc1q…` can be
-  opened by several keys, and pairing a signature with a cosigner means
-  *verifying* signatures, which this project deliberately does not do: it has no
-  curve arithmetic anywhere. The collision is reported; the conclusion is left
-  unmade.
+- **A conclusive read needs a named signer; script locks give one when the
+  script names it.** For a `1…` or a `bc1q…` 20-byte lock the key sits beside
+  the signature and hashes to the lock, so a repeat is that key signing twice.
+  For a `3…` or a 32-byte `bc1q…` the script decides: an m-of-m multisig and
+  the two tapscript templates name the signer of each slot by consensus, and
+  the report says which key; an m-of-n with m < n can be opened by several
+  keys, and pairing a signature with a cosigner would mean *verifying*
+  signatures, which this project deliberately does not do: it has no curve
+  arithmetic anywhere. There the collision is reported; the conclusion is
+  left unmade.
 - **Two different keys sharing a nonce hands neither one over.** With
   `s₁ = k⁻¹(z₁ + r·d₁)` and `s₂ = k⁻¹(z₂ + r·d₂)` there are three unknowns for
   two equations. It does show the point was not drawn at random, which is

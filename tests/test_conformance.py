@@ -242,7 +242,7 @@ DOCUMENTED_ELSEWHERE = {
                        "before the code",
     "reveal-archive-v2": "historical: the 1.x archive, read by the release "
                          "that wrote it",
-    "nonces-witness-v2": "forward reference: same",
+    "nonces-witness-v1": "historical: superseded by v2, named in the changelog",
     "firstreveal-v1": "historical: the 1.x table, read by the release that "
                       "wrote it",
     "locks-v2": "forward reference: same",

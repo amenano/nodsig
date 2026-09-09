@@ -166,23 +166,29 @@ Optional, from the graph:
 nodsig blockstats build <graph> --out block-stats.csv
 ```
 
-## 4b. Resolve the repeated nonce points (optional, needs the node)
+## 4b. Resolve the repeated nonce points (optional, needs the node and the index)
 
 ```sh
-nodsig nonces resolve --nonces <nonces> --witness <witness> \
+nodsig nonces resolve --nonces <nonces> --witness <witness> --index <index> \
                       --rpc <url> [--rest] [--cookie-file <path/.cookie>]
 ```
 
 Its own step rather than one of the seals in 3, because it is the only
-offline-side command that talks to the node again. `nonces groups` can say
+offline-side command that talks to the node again, and it comes after the
+index of 4: the index has to cover the census (the table refuses one that
+stops short), because it is what ties a key beside a signature to the lock
+the input spends and what names the key of a P2PK or taproot key-path spend. `nonces groups` can say
 which points repeat and never what a repeat means, because the meaning lives
 in `s` and a 16-byte census record does not hold it. This re-reads only the
-blocks those points name, and keeps, per (nonce point, public key) pair, the
-signatures that settle it.
+blocks those points name, and keeps, per (nonce point, key, attribution
+class), the signatures that settle it, with the key the unlocking data or the
+spent output names.
 
 Cost is proportional to the repeated points and not to the chain: over
-957,301 blocks that was **4,494 blocks re-read in about 36 minutes**, and a
-table of a few thousand rows. It declares the census it resolved as its
+957,301 blocks that was **4,494 blocks re-read in about an hour and a half**
+(the earlier format's pass; this one adds one index lookup per witness and
+one block read per spent output it has to see), and a table of a few
+thousand rows. It declares the census it resolved as its
 parent, so a table beside a different census is answering about something
 else, and `witness-verify --nonces` is what confirms that.
 
@@ -197,7 +203,7 @@ nodsig nonces  verify --nonces  <nonces>  [--deep]
 nodsig index   verify --index   <index>   [--graph <graph>]
 nodsig derived verify --derived <derived> [--index <index>]
 nodsig headers verify --headers <headers>
-nodsig nonces  witness-verify --witness <witness> [--nonces <nonces>] [--csv OUT]
+nodsig nonces  witness-verify --witness <witness> [--nonces <nonces>] [--csv OUT] [--keys-csv OUT]
 nodsig firstspend  verify --firstspend  <firstspend>  [--derived <derived>]
 nodsig firstreveal verify --firstreveal <firstreveal> [--archive <archive>]
 ```
@@ -522,7 +528,7 @@ they read, time or explain something you already have.
 | `nonces verify` | re-read it against its manifest; `--deep` reads every record | 5 |
 | `nonces rewind` | back to a height already covered | rewind |
 | `nonces groups` | the nonce points published more than once, and what the census can say about them | 6 |
-| `nonces resolve` | re-read the blocks those points name and keep the evidence that decides them (**needs the node**) | 4b |
+| `nonces resolve` | re-read the blocks those points name and keep the evidence that decides them (**needs the node and the index**) | 4b |
 | `nonces witness-verify` | audit that evidence, re-derive its resolutions, `--csv` to export them | 5 |
 | `nonces lookup` | was this nonce point published? | - |
 | `nonces address` | the same question for one of your addresses (**needs the node**) | 6 |

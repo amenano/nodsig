@@ -141,7 +141,7 @@ $ nodsig check --stdout 1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa
 # history: not configured (pluggable: outpoint-index derivatives (--index + --derived))
 # co-inputs: not configured (pluggable: outpoint-index derivatives (--index + --derived))
 # linkage: not configured (pluggable: outpoint-index derivatives (--index + --derived))
-# nonce-exposure: not configured (pluggable: nonces-witness-v1 (--witness))
+# nonce-exposure: not configured (pluggable: nonces-witness-v2 (--witness))
 
 overview (each line counts only what the capability naming it actually checked):
 - input: 1 address(es) checked of 1 given (1 p2pkh)
@@ -269,7 +269,7 @@ run on the same machine. Sizes are for that height:
 | `archive scan --nonces` | included in the 56 h above, which was measured with the census co-emitted | `<nonces>` ~60 GB |
 | `archive merge` | ~5 h | seals the archive in place |
 | `nonces merge` | ~3 h 20 | seals the census in place |
-| `nonces resolve` | ~36 min | ~1 MB: the evidence that resolves each repeated point (**needs the node**, optional) |
+| `nonces resolve` | ~1.5 h | a few MB: the evidence that resolves each repeated point (**needs the node and the index**, optional) |
 | `graph fingerprint` | ~1 h 25 | nothing: it re-reads and prints |
 | `archive derive` | ~4 h | the reuse table, and its `curve.csv` |
 | `archive curve` | ~2 h | `revelations.csv`: first revelations per window |

@@ -12,7 +12,7 @@ no `Result<T>` envelope.
   [OutpointDerived-v3](../formats/OutpointDerived-v3.md),
   [RevealArchive-v3](../formats/RevealArchive-v3.md),
   [Nonces-v3](../formats/Nonces-v3.md),
-  [Nonces-witness-v1](../formats/Nonces-witness-v1.md).
+  [Nonces-witness-v2](../formats/Nonces-witness-v2.md).
 - **Reference impl:** `build`/`verify`/`stats`/`rewind` of each tool, over three
   shared pieces: `artifact.canonical_identity` (one definition of what an
   artifact *is*, and therefore of its fingerprint), `artifact.verify_sealed`

@@ -1207,6 +1207,7 @@ def test_equal_records_are_legal(tmp):
 
 from nodsig import derivatives as dv
 from nodsig import outpoint_index as oi
+from nodsig.hashing import hash160
 import test_outpoint_index as toi
 
 _B58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
@@ -1227,12 +1228,18 @@ def b58check(version, payload):
     return "1" * (len(raw) - len(raw.lstrip(b"\x00"))) + out
 
 
-H_KEY = bytes(range(20))                       # hash160 of a single key
+# One key per single-key lock, and each lock IS its key's hash: the
+# attribution ties a key beside a signature to the lock it spends, so a
+# lock whose digest were arbitrary would read as a shape without a link.
+PUB_ONCE = b"\x02" + bytes(range(1, 33))
+PUB_COPY = b"\x02" + bytes(range(2, 34))
+PUB_NEG = b"\x02" + bytes(range(3, 35))
+H_KEY = hash160(PUB)                        # hash160 of a single key
 H_SCRIPT = bytes(range(20, 40))                # hash160 of a redeem script
-H_ONCE = bytes(range(40, 60))
+H_ONCE = hash160(PUB_ONCE)
 H_QUIET = bytes(range(60, 80))
-H_COPY = bytes(range(100, 120))
-H_NEG = bytes(range(120, 140))
+H_COPY = hash160(PUB_COPY)
+H_NEG = hash160(PUB_NEG)
 
 ADDR_KEY = b58check(0x00, H_KEY)
 ADDR_SCRIPT = b58check(0x05, H_SCRIPT)
@@ -1283,8 +1290,8 @@ def address_chain():
         prev = block_hash
         blocks[height] = (block_hash[::-1].hex(), raw.hex())
 
-    def p2pkh_sig(nonce, s):
-        return push(der(minimal(nonce), minimal(s))) + push(PUB)
+    def p2pkh_sig(nonce, s, pub=PUB):
+        return push(der(minimal(nonce), minimal(s))) + push(pub)
 
     cb1, cb1_id, _ = toi._coinbase(
         b"\x01a", [tbw.w_output(50, SPK_KEY), tbw.w_output(50, SPK_ONCE),
@@ -1316,12 +1323,12 @@ def address_chain():
         [tbw.w_output(15, SPK_QUIET)], 0)
     # The copied signature: built ONCE and spent into COPY again, so the
     # very same bytes appear in the next block.
-    copy_sig = p2pkh_sig(N_COPY, S1)
+    copy_sig = p2pkh_sig(N_COPY, S1, PUB_COPY)
     t3b, t3b_id, _ = tbw.w_tx(
         1, [tbw.w_input(cb1_id, 3, copy_sig, 0xFFFFFFFF)],
         [tbw.w_output(40, SPK_COPY)], 0)
     t3c, t3c_id, _ = tbw.w_tx(
-        1, [tbw.w_input(cb1_id, 4, p2pkh_sig(N_NEG, S1), 0xFFFFFFFF)],
+        1, [tbw.w_input(cb1_id, 4, p2pkh_sig(N_NEG, S1, PUB_NEG), 0xFFFFFFFF)],
         [tbw.w_output(40, SPK_NEG)], 0)
     add(4, [cb4, t3, t3b, t3c], [cb4_id, t3_id, t3b_id, t3c_id])
     txids["t3"] = t3_id
@@ -1329,13 +1336,15 @@ def address_chain():
 
     cb5, cb5_id, _ = toi._coinbase(b"\x01e", [tbw.w_output(50, SPK_QUIET)])
     t4, t4_id, _ = tbw.w_tx(
-        1, [tbw.w_input(cb1_id, 1, p2pkh_sig(N_REUSED, S1), 0xFFFFFFFF)],
+        1, [tbw.w_input(cb1_id, 1, p2pkh_sig(N_REUSED, S1, PUB_ONCE),
+                        0xFFFFFFFF)],
         [tbw.w_output(45, SPK_QUIET)], 0)
     t4b, t4b_id, _ = tbw.w_tx(
         1, [tbw.w_input(t3b_id, 0, copy_sig, 0xFFFFFFFF)],
         [tbw.w_output(35, SPK_QUIET)], 0)
     t4c, t4c_id, _ = tbw.w_tx(
-        1, [tbw.w_input(t3c_id, 0, p2pkh_sig(N_NEG, S_NEG), 0xFFFFFFFF)],
+        1, [tbw.w_input(t3c_id, 0, p2pkh_sig(N_NEG, S_NEG, PUB_NEG),
+                        0xFFFFFFFF)],
         [tbw.w_output(35, SPK_QUIET)], 0)
     add(5, [cb5, t4, t4b, t4c], [cb5_id, t4_id, t4b_id, t4c_id])
     txids["t4"] = t4_id

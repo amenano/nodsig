@@ -107,7 +107,7 @@ its three scalars were `0`, `1` and `82`. The validity filter below removes the
 version, which is the point of quoting it. A repeated point is a repeated
 nonce **for values the estimate covers**, and for the rest it is a candidate
 that the whole scalar settles: that is one of the things the witness table
-keeps (see [`Nonces-witness-v1`](Nonces-witness-v1.md)).
+keeps (see [`Nonces-witness-v2`](Nonces-witness-v2.md)).
 
 The general lesson, stated because it cost something to learn: a probability
 computed over an assumed distribution is not a measurement, and this format's
@@ -215,7 +215,7 @@ Note carefully which rule is legitimate and which is not.
 
 What still resolves a point the filters cannot decide is the witness table,
 which keeps the whole scalar (see
-[`Nonces-witness-v1`](Nonces-witness-v1.md)).
+[`Nonces-witness-v2`](Nonces-witness-v2.md)).
 
 ## The previous format (`nonces-v2`)
 

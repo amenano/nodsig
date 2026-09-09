@@ -20,7 +20,7 @@ placeholders: every one of them is a path you choose on the command line.
 | headers | `headers-v2` | — |
 | revelation archive | `reveal-archive-v3` | — |
 | nonce census | `nonces-v3` | `nonces-v2` |
-| nonce witness table | `nonces-witness-v1` | — |
+| nonce witness table | `nonces-witness-v2` | — |
 | outpoint index | `outpoint-index-v3` | `outpoint-index-v2` |
 | outpoint derivatives | `outpoint-derived-v3` | `outpoint-derived-v2` |
 | first-spend table | `firstspend-v1` | — |
@@ -75,7 +75,7 @@ the header chain that lets the pass's own checks be repeated later.
                           ├──► <nonces>/ ──► nonces merge (seal)
                           │         │
                           │         ├──► nonces groups ──► the repeated points
-                          │         ├──► nonces resolve ──► <witness>/  (needs the node)
+                          │         ├──► nonces resolve ──► <witness>/  (needs the node and the index)
                           │         │         └──► the resolution on each repeated point
                           │         └──► nonces lookup / verify / rewind
                           │
@@ -166,7 +166,7 @@ published with this project were produced: run once, agreed, reported.
 | `<nonces>/` | `nonces-v3` | Every signature nonce point ever published, with the height. Off by default, enabled with `--nonces` (~55-60 GB): the repeated ones are the candidates for a key recoverable from public data, which a block re-read confirms or rules out | `archive scan --nonces` | `nonces groups/lookup/verify/rewind`, `nonces address` (with the index and a node) |
 | ├ `nonces_gNNNN.bin` | records | One 16-byte record per signature: point, height, scheme, and the sighash mode it committed to | `archive scan --nonces` | as above |
 | └ `manifest.json` | `nonces-v3` | Fingerprint and coverage; no parent, it comes from the blocks | `nonces merge` | `nonces verify` |
-| `<witness>/` | `nonces-witness-v1` | The evidence that resolves each repeated point: per (nonce point, public key), the signatures that decide whether a key follows. Optional, built after the census (~36 min over the whole chain, a few MB) | `nonces resolve` (needs the node) | `nonces witness-verify` |
+| `<witness>/` | `nonces-witness-v2` | The evidence that resolves each repeated point: per (nonce point, key, attribution class), the signatures that decide whether a key follows, the key being the one the unlocking data or the spent output names (a key beside the signature that hashes to the lock, a position in an m-of-m script or a tapscript template, a P2PK or taproot key-path output). Optional, built after the census (~1.5 h over the whole chain plus the index lookups, a few MB) | `nonces resolve` (needs the node and the index) | `nonces witness-verify`, `check --witness` |
 | `<graph>/` | `graph-v2` | The raw transaction graph. Off by default, enabled with `--graph` | `archive scan --graph` | `graph`, `blockstats`, `index build` |
 | block-stats CSV | `block-stats-v2` | Per-block series (transactions, inputs, outputs, size, time) derived from the graph | `blockstats build` | `blockstats summary`, a human |
 | `<index>/` | `outpoint-index-v3` | The chain numbered once: a record per output, its spend already resolved | `index build` | `index lookup`, `derived build`, `check` |

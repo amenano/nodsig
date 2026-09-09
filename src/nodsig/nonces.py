@@ -1519,12 +1519,6 @@ def run_lookup(nonces_dir, values, out=sys.stdout):
 # even for a taproot key-path spend, whose public key is not in the input
 # at all.
 
-# Locks whose signature can only have come from one key. A script lock can
-# be opened by several, and attributing one signature to one cosigner means
-# verifying signatures, which this project does not do.
-SINGLE_KEY_KINDS = frozenset(("p2pkh", "p2wpkh"))
-
-
 def _spends_of(index, derived, lock):
     """Every confirmed spend of one lock, oldest first.
 
@@ -1539,27 +1533,30 @@ def _spends_of(index, derived, lock):
                txid, vout)
 
 
-def _signatures_of_spend(block, spender_txid, prev_txid, vout, stats):
-    """The nonce points of the one input that spends OUR outpoint.
-
-    Returns (points, details, key_path), with `details` a list of
-    `(full r, canonical s, raw s)` aligned to `points`, and `key_path` saying
-    the witness held a single item, i.e. a taproot key-path spend, whose
-    signature can only be the output key's.
+def _signatures_of_spend(block, spender_txid, prev_txid, vout, stats,
+                         lock, spk):
+    """The signatures of the one input that spends OUR outpoint, each
+    attributed to a key by the road the witness table uses
+    (`witness.signatures_of_input`): the lock is this address's own, so
+    a key beside the signature is tied to consensus for free, and the
+    spent scriptPubKey is known, so a key-path spend is settled at once.
 
     Refuses rather than guesses: if the transaction the index names is not
     in the block, or holds no input spending that outpoint, the two
     sources disagree and saying so is the only honest move.
     """
+    from nodsig import witness as wt
     for tx in block.transactions:
         if tx.txid != spender_txid:
             continue
         for tx_in in tx.inputs:
             if tx_in.prev_txid == prev_txid and tx_in.prev_vout == vout:
-                _slots, key_path = _taproot_slots(tx_in.witness)
-                details = []
-                points = extract_nonces(tx_in, stats, detail_out=details)
-                return points, details, key_path
+                found = wt.signatures_of_input(tx_in, None, stats,
+                                               lambda t, v: lock)
+                for sg in found:
+                    if sg.pending:
+                        wt.attribute_output(sg, spk)
+                return found
         raise NonceError(
             f"tx {blockparse.hash_hex(spender_txid)} does not spend "
             f"{blockparse.hash_hex(prev_txid)}:{vout}: the index and the "
@@ -1570,21 +1567,22 @@ def _signatures_of_spend(block, spender_txid, prev_txid, vout, stats):
 
 
 class _Sighting:
-    """One signature this lock published, and where."""
+    """One signature this lock published, where, and whose it is."""
 
-    __slots__ = ("height", "point", "flags", "spender", "single_key",
+    __slots__ = ("height", "point", "flags", "spender", "cls", "key",
                  "r_full", "s", "s_raw")
 
-    def __init__(self, height, point, flags, spender, single_key,
-                 r_full, s, s_raw):
+    def __init__(self, height, spender, sg):
         self.height = height
-        self.point = point
-        self.flags = flags
+        self.point = sg.r[:R_PREFIX]
+        self.flags = ((FLAG_SCHNORR if sg.schnorr else FLAG_ECDSA)
+                      | sighash_bits(sg.sighash))
         self.spender = spender
-        self.single_key = single_key
-        self.r_full = r_full          # the untruncated nonce point
-        self.s = s                    # canonical: s and n-s fold together
-        self.s_raw = s_raw            # as serialized, to name which case
+        self.cls = sg.cls             # the attribution class, or NONE
+        self.key = sg.key_canon       # the key's canonical digest, or None
+        self.r_full = sg.r            # the untruncated nonce point
+        self.s = sg.s                 # canonical: s and n-s fold together
+        self.s_raw = sg.s_raw         # as serialized, to name which case
 
 
 def _read_sightings(client, index, derived, address, lock, stats,
@@ -1606,7 +1604,8 @@ def _read_sightings(client, index, derived, address, lock, stats,
     # One window of blocks in memory at a time: the sightings are read
     # off each block as it arrives and the block is dropped, so the cap
     # above bounds the fetches and not the RAM.
-    single = address.kind in SINGLE_KEY_KINDS
+    from nodsig.check_addresses import script_pubkey
+    spk = script_pubkey(address)
     sightings = []
     for i in range(0, len(heights), 25):
         window = heights[i:i + 25]
@@ -1617,14 +1616,9 @@ def _read_sightings(client, index, derived, address, lock, stats,
                 raise NonceError(f"height {h}: block bytes do not hash to "
                                  "the requested block hash")
             for height, spender, prev_txid, vout in by_height[h]:
-                points, details, key_path = _signatures_of_spend(
-                    block, spender, prev_txid, vout, stats)
-                for (flags, point), (r_full, s, s_raw) in zip(points,
-                                                              details):
-                    sightings.append(_Sighting(
-                        height, point, flags, spender,
-                        single or (address.kind == "p2tr" and key_path),
-                        r_full, s, s_raw))
+                for sg in _signatures_of_spend(block, spender, prev_txid,
+                                               vout, stats, lock, spk):
+                    sightings.append(_Sighting(height, spender, sg))
     sightings.sort(key=lambda s: (s.height, s.spender))
     return sightings, len(heights)
 
@@ -1734,12 +1728,33 @@ def run_address(addresses, index_dir, derived_dir, client, nonces_dir=None,
                         p("    the signatures differ only as s and n-s, "
                           "which is ONE signature in its two legal forms "
                           "over one message. Nothing follows from it")
-                elif all(s.single_key for s in g):
-                    p("    this lock is opened by ONE key, and the "
-                      "signatures differ, so they signed different messages "
-                      "with the same key and the same nonce: the private "
-                      "key follows from the two of them, by arithmetic "
-                      "anybody can do")
+                elif all(s.key is not None for s in g) \
+                        and len({s.key for s in g}) == 1:
+                    # Attributed by the unlocking data or the spent
+                    # output (witness.py says how): the same key, twice.
+                    from nodsig import witness as wt
+                    if all(s.cls == wt.BESIDE for s in g):
+                        p("    this lock is opened by ONE key, and the "
+                          "signatures differ, so they signed different "
+                          "messages with the same key and the same nonce: "
+                          "the private key follows from the two of them, "
+                          "by arithmetic anybody can do")
+                    else:
+                        how = "+".join(sorted({wt.CLASS_NAMES[s.cls]
+                                               for s in g}))
+                        p(f"    the script or the spent output names the "
+                          f"signer ({how}): both signatures are by key "
+                          f"{g[0].key.hex()}, and they differ, so they "
+                          "signed different messages with the same key "
+                          "and the same nonce: the private key follows "
+                          "from the two of them, by arithmetic anybody "
+                          "can do")
+                elif all(s.key is not None for s in g):
+                    p("    the signatures are by DIFFERENT keys of this "
+                      "lock, named by the script: neither follows from "
+                      "the two of them, the keys are coupled (either "
+                      "private key gives the other), and the point was "
+                      "not drawn at random")
                 else:
                     p("    this lock can be opened by several keys, and "
                       "telling which cosigner signed needs verifying "
@@ -2115,6 +2130,11 @@ def main(argv=None):
     rs.add_argument("--nonces", required=True, help="the sealed census")
     rs.add_argument("--witness", required=True,
                     help="the witness table to build (a new directory)")
+    rs.add_argument("--index", required=True,
+                    help="a sealed outpoint index covering the census: "
+                         "ties a key beside a signature to the lock it "
+                         "spends, and names the key of a P2PK or "
+                         "taproot key-path spend")
     add_node_args(rs)
     rs.add_argument("--min-count", type=int, default=2,
                     help="resolve points sighted at least this many times "
@@ -2127,8 +2147,11 @@ def main(argv=None):
                     help="the census it declares as its parent, to confirm "
                          "the ancestry instead of trusting it")
     wv.add_argument("--csv", metavar="OUT",
-                    help="also write one row per point with its resolution, "
+                    help="also write one row per scalar with its resolution, "
                          "from what this audit just re-derived")
+    wv.add_argument("--keys-csv", metavar="OUT",
+                    help="also write one row per attributed key (canonical "
+                         "digest, 65-byte digest if seen, form, exposed)")
 
     b = sub.add_parser("bench", help="time the extraction over real blocks")
     add_node_args(b)
@@ -2168,12 +2191,12 @@ def main(argv=None):
         from nodsig import witness as wt
         from nodsig.reuse_scan import build_client
         client, _ = build_client(args.rpc, args.rest, args.cookie_file)
-        wt.run_resolve(args.nonces, args.witness, client,
+        wt.run_resolve(args.nonces, args.witness, client, args.index,
                        min_count=args.min_count)
     elif args.cmd == "witness-verify":
         from nodsig import witness as wt
         wt.run_verify(args.witness, nonces_dir=args.nonces,
-                      csv_path=args.csv)
+                      csv_path=args.csv, keys_csv=args.keys_csv)
     elif args.cmd == "bench":
         if args.count < 1 or args.stride < 1:
             raise SystemExit("--count and --stride must be positive")
