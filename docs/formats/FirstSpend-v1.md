@@ -75,8 +75,9 @@ value in this file and `verify` refuses a row carrying it.
 One row per lock ever spent from, at 25 bytes. On the chain through height
 957,301 that is **1,479,497,990 locks of 1,554,718,932 (95.2%)**, so
 **~37 GB**, measured rather than projected by counting the spent locks in the
-sealed derivatives. The 4.8% never spent from are the unspent balance of the
-chain at that height. A porter sizing a disk should scale by spent locks,
+sealed derivatives. The 4.8% never spent from are a count of locks, not a
+balance: a lock spent from once and funded again holds coins and is in the
+table, and a lock never spent from may hold dust. A porter sizing a disk should scale by spent locks,
 which the derivatives' manifest reports as it counts them.
 
 Dropping `spender_tx` into a per-block positional table would take the row
@@ -151,6 +152,8 @@ Passing `--derived` confronts the declared parent instead of trusting it.
 ## Notes for porters
 
 - everything is big-endian, including the 5-byte `spender_tx`;
+- the ladder samples one row every 2,048 (`FS_EVERY`), the step `verify`
+  requires;
 - the sort key is `spender_tx`; `lock` breaks ties but is not part of the
   ladder's search. The ladder entry point is the rightmost sample **strictly
   below** the key, because several locks can share one `spender_tx` (a

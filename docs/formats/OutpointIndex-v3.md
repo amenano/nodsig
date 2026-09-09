@@ -64,7 +64,7 @@ a spender when a later block spends it.
 | `spender_of.bin` | 5 | output ordinal | `spender_tx_ordinal:u40`, or one of the two sentinels above |
 | `spend_extra.bin` | 10 | — | `spent_output_ordinal:u40` \| `spender_tx_ordinal:u40`, sorted, holding **every** spender of each marked output. **Empty on any consensus-valid chain.** |
 
-**Why the sentinels are free.** Transaction ordinal `0` is the genesis coinbase,
+**Why the sentinels are free.** Transaction ordinal `0` is the coinbase of block 1 (genesis is excluded),
 and a coinbase spends nothing, so no real spender ever carries `0`. The marker
 is a single **reserved value**, not a threshold — a value is compared and
 verified, a threshold invites interpretation — and it sits far above any
@@ -145,7 +145,8 @@ with it, without it, or with another step, the records returned are identical
 For a duplicated coinbase txid the resolver keeps the **latest** instance (highest
 `first_out`, i.e. the record that sorts last → "keep the last of an equal-key run"
 = consensus). Positional files keep **both** instances honestly. The overwrite
-count is expected **exactly 2** on mainnet (built-in cross-check); marked slots
+count is expected **exactly 2** on mainnet (the build prints it; nothing checks
+it for you); marked slots
 in `spender_of.bin` are expected **0**.
 
 The two are the same doctrine seen twice: where a question admits one answer,

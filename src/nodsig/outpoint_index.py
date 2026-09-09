@@ -69,7 +69,7 @@ Positional files (record i = ordinal i; no keys stored):
                       increasing — every tx has ≥1 output — so it can
                       also be binary-searched by VALUE to answer
                       "which tx created output ordinal k?")
-    outputs.bin       28 B/output: value u64 | lock hash160 20 B
+    outputs.bin       27 B/output: value u56 | lock hash160 20 B
                       (the lock fingerprint is hash160 of the FULL
                       scriptPubKey — "address" here means identical
                       lock, the honest boundary: not a wallet, not

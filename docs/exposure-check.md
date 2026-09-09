@@ -21,14 +21,15 @@ not the graph, not the snapshot, not the locks. The archive is a sorted set of
 every digest the chain has ever revealed, in three partitions, and a lookup is
 a membership check inside one of them.
 
-Measured on the real artifact at height 957,301:
+Measured on the real 1.x artifact at height 957,301 (the 2.0.0 archive drops
+the records that were never scripts and is measured again after its run):
 
 | Partition | Records | Size | Consulted for |
 |---|---|---|---|
-| `archive_keys.bin` | 1,613,342,055 | 33.9 GB | `1…` (P2PKH) and 20-byte `bc1q…` (P2WPKH) |
-| `archive_scripts20.bin` | 976,147,552 | 20.5 GB | `3…` (P2SH) |
-| `archive_scripts32.bin` | 986,793,535 | 32.6 GB | 32-byte `bc1q…` (P2WSH) |
-| **whole archive** | **3.58 billion** | **86.9 GB** | |
+| `archive_keys.bin` | 1,613,342,055 | 38.7 GB | `1…` (P2PKH) and 20-byte `bc1q…` (P2WPKH) |
+| `archive_scripts20.bin` | 976,147,552 | 23.4 GB | `3…` (P2SH) |
+| `archive_scripts32.bin` | 986,793,535 | 35.5 GB | 32-byte `bc1q…` (P2WSH) |
+| **whole archive** | **3.58 billion** | **97.7 GB** | |
 
 **A public key is not an address, and `--key` says so.** Given a key
 (33/65-byte hex) or its bare hash160, `check --key` asks about the **point**:
@@ -51,7 +52,7 @@ partition answers with already cover that cosigner case at the key level.
 `check_addresses.KINDS`, and it has a consequence worth knowing before you size
 a disk: if the addresses you care about are single-key ones, which is what a
 modern wallet hands you, the file that answers them is `archive_keys.bin`
-alone, **33.9 GB** of the 86.9. A Taproot address (`bc1p…`) needs no file at
+alone, **38.7 GB** of the 97.7. A Taproot address (`bc1p…`) needs no file at
 all: the program *is* the key, so the answer is settled by the encoding.
 
 Keeping one partition instead of three costs you one thing, and it is worth
@@ -258,7 +259,7 @@ The book is JSON, and its shape is in
 
 ```json
 {"format": "address-book-v2",
- "groups": [{"label": "cold", "claim": "mine", "addresses": ["bc1q…", "1…"]},
+ "groups": [{"label": "cold", "claim": "separate", "addresses": ["bc1q…", "1…"]},
             {"label": "counterparty", "claim": "watching",
              "addresses": ["3…"]}]}
 ```
@@ -310,7 +311,7 @@ Three separate findings, deliberately never merged into one "linked" flag:
 - **payment** — one address's coins funded an output of another. Reported, and
   never counted as a merge: paying somebody is not being them.
 
-When two groups you claimed as `mine` are *not* tied, the report says so and
+When two groups you claimed as `separate` are *not* tied, the report says so and
 then says what bounded the search: the depth, how often the cap bit, how many
 hubs were left unexpanded. That matters because of an asymmetry worth keeping
 in mind: **a merge is permanent, a non-merge is perishable** — one future
@@ -329,13 +330,13 @@ output key; a bare script hash hides its keys), and **absent does not mean
 clean** — it means "not among the
 points the census resolved", which is a statement about that set and not about
 the chain. The strong version of the question is
-[`nonce-check.md`](nonce-check.md), and it costs 439 GB and a node.
+[`nonce-check.md`](nonce-check.md), and it costs ~415 GB and a node.
 
 ### Three files, one truth
 
 The text report is for a person, the CSV is a **lossy** projection of one row
 per address, and `--json` is the complete form
-([`formats/CheckReport-v2.md`](formats/CheckReport-v2.md)). All three are
+([`formats/CheckReport-v3.md`](formats/CheckReport-v3.md)). All three are
 renderings of one structure — none recomputes anything — and the JSON has no
 timestamp in it, so two runs over the same artifacts produce the same bytes:
 you can diff yesterday's report against today's and see only what moved on the
@@ -344,8 +345,8 @@ chain.
 ## If you also want the dates
 
 The yes/no needs the archive alone. Dates need the outpoint index and its
-derivatives, which is another 439 GB (248.5 + 190.5 at this height) and about
-64 hours of building. What they buy is the lock's story in order:
+derivatives, which is another 415 GB (229.6 + 185.3 at this height) and about
+37 hours of building. What they buy is the lock's story in order:
 
 ```console
 $ nodsig derived history --index <index-dir> --derived <derived-dir> \

@@ -11,9 +11,13 @@ no `Result<T>` envelope.
   [OutpointIndex-v3](../formats/OutpointIndex-v3.md),
   [OutpointDerived-v3](../formats/OutpointDerived-v3.md),
   [RevealArchive-v3](../formats/RevealArchive-v3.md),
+  [FirstSpend-v1](../formats/FirstSpend-v1.md),
+  [FirstReveal-v2](../formats/FirstReveal-v2.md),
+  [BlockStats-v3](../formats/BlockStats-v3.md),
   [Nonces-v3](../formats/Nonces-v3.md),
   [Nonces-witness-v2](../formats/Nonces-witness-v2.md).
-- **Reference impl:** `build`/`verify`/`stats`/`rewind` of each tool, over three
+- **Reference impl:** `build`/`verify`/`rewind` of each tool (`stats` where a tool has it:
+  `index` and `derived`), over three
   shared pieces: `artifact.canonical_identity` (one definition of what an
   artifact *is*, and therefore of its fingerprint), `artifact.verify_sealed`
   (one audit), and `genstore.GenStore` (one append-and-fuse store: runs, merged

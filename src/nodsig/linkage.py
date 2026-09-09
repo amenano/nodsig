@@ -387,7 +387,7 @@ def separations(classes, book, bounded, watermark):
     """The half of the report that needs a permission, and the
     permission is the user's claim.
 
-    Only groups claimed `mine` take part: "A and B are linked" needs
+    Only groups claimed `separate` take part: "A and B are linked" needs
     nothing from the author, while "A and B still look separate" says
     nothing at all unless somebody meant to keep them apart. A
     `watching` group is not second class — links towards it are

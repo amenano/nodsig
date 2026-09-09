@@ -405,3 +405,38 @@ def test_the_format_pages_pin_their_constants():
     assert _ticks(t["identity files"]) == list(fr.FP_ORDER)
     assert _ticks(t["identity tag"]) == [fr.FORMAT_TAG]
     assert _ticks(t["parent tag accepted"]) == [ra.FORMAT_TAG]
+
+
+def test_the_docs_claim_only_what_the_book_accepts():
+    """Every `"claim": "<word>"` and every "claimed as `<word>`" a page
+    prints must be a claim `address_book` accepts: the word the pages
+    used before (`mine`) was a claim of ownership the tool never made,
+    and a reader who copies the example must not be refused."""
+    import re
+    from nodsig.address_book import CLAIMS
+    pages = [os.path.join(ROOT, "README.md")] + [
+        os.path.join(ROOT, "docs", n) for n in os.listdir(
+            os.path.join(ROOT, "docs")) if n.endswith(".md")]
+    found = set()
+    for page in pages:
+        with open(page, encoding="utf-8") as f:
+            text = f.read()
+        found |= set(re.findall(r'"claim": "([a-z]+)"', text))
+        found |= set(re.findall(r"claimed as `([a-z]+)`", text))
+    assert found and found <= set(CLAIMS), found
+
+
+def test_the_fee_formula_for_porters_has_the_record_width():
+    """Two pages hand a porter the one-line read of `fees.bin`; the
+    stride and the width in it must be the record's, or a port reads
+    fees shifted over the whole file."""
+    import re
+    from nodsig import derivatives as dv
+    for page in ("contracts/FeeBackend.md", "formats/OutpointDerived-v3.md"):
+        with open(os.path.join(ROOT, "docs", page), encoding="utf-8") as f:
+            text = f.read()
+        m = re.search(r"u(\d+)_be\(fees\.bin\[tx_ordinal\*(\d+) : \+(\d+)\]\)",
+                      text)
+        assert m, page
+        assert [int(x) for x in m.groups()] == [dv.FEE_REC * 8, dv.FEE_REC,
+                                                dv.FEE_REC], page

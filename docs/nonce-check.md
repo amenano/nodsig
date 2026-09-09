@@ -22,7 +22,7 @@ door:
 
 | | exposure | a repeated nonce |
 |---|---|---|
-| artifacts | the archive alone (33.9 GB for single-key addresses) | the outpoint index **and** its derivatives (~415 GB) |
+| artifacts | the archive alone (38.7 GB for single-key addresses) | the outpoint index **and** its derivatives (~415 GB) |
 | a node | no | **yes** |
 | offline | yes | no |
 | optional extra | none | the census (~55-60 GB) for the chain-wide view |
@@ -111,9 +111,11 @@ Three other shapes of answer, from the same chain:
   so it has never signed
 ```
 
-That last one is worth stating positively: **an address that has never spent
-cannot have this problem**, because it has never signed. It is the one answer
-on this page that needs no caveat.
+That last one is worth stating positively, with its one caveat: **an address
+that has never spent cannot have this problem**, because it has never signed.
+The caveat is that the statement is about the address, not the key: the same
+key behind another lock (another face, or its uncompressed form) may have
+signed there, and `check --key` asks the question at the key's level.
 
 ## What the answer means, and what it does not
 

@@ -262,6 +262,27 @@ class TestTheRunnablePagesNameRealCommands(unittest.TestCase):
                                   "the closing list of build-and-query.md")
 
 
+class TestTheReadmeTableIsTheCommandMap(unittest.TestCase):
+    """The README's table of commands claims to be the map `nodsig`
+    prints: one row per group, no more and no fewer. A group added to
+    `cli.SUMMARY` without a row would leave the page describing a
+    smaller tool than the one shipped; a row without a group would
+    describe a command that does not exist."""
+
+    README = os.path.join(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))), "README.md")
+
+    def test_one_row_per_group(self):
+        import re
+        rows = set()
+        with open(self.README, encoding="utf-8") as f:
+            for line in f:
+                m = re.match(r"\| `nodsig ([a-z]+)` \|", line)
+                if m:
+                    rows.add(m.group(1))
+        self.assertEqual(rows, set(cli.SUMMARY))
+
+
 class TestModulePathStillWorks(unittest.TestCase):
     """The documented no-install path: reading the code while running
     it must keep working, or the repo stops being auditable the easy

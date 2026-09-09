@@ -183,6 +183,6 @@ on any machine.
   `outputs.bin`): per-lock statistical scans stay sequential. Either source is
   authoritative and they must agree.
 - `history` and `tx_inputs` are plain sorted fixed-width files; `fees` is pure
-  positional (`fee = u64_be(fees.bin[tx_ordinal*8 : +8])`).
+  positional (`fee = u56_be(fees.bin[tx_ordinal*7 : +7])`).
 - Heights are **not** here; a reader gets them from the parent index
   (`height_of_output`, `height_of_tx`).

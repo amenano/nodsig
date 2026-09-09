@@ -13,7 +13,7 @@ whole address list at once, without a node and without the index.
 
 > **This is the cheap half of a question with two answers.** Asked the strong
 > way (`nodsig nonces address`) the same question needs the index, the
-> derivatives and a node re-reading blocks: about 439 GB and hours. Asked here
+> derivatives and a node re-reading blocks: about 415 GB and hours. Asked here
 > it is **a few MB read once**, offline, for the whole list. The two are not the
 > same question and an implementation MUST NOT present them as one: this side
 > sees only the points its census reported as **repeated**.

@@ -7,7 +7,11 @@ NodSig answers questions about the Bitcoin blockchain out of your own node. It
 builds local artifacts once, and from then on every question is a lookup in a
 file: no block explorer, no third-party index, no network. Each answer names
 the artifact it came from, the height that artifact covers, and a fingerprint
-anyone else can recompute from the same chain.
+anyone else can recompute from the same chain. The artifacts are files: hand
+them to someone else and they check them by recomputing that fingerprint.
+Building every one of them costs about 110 hours and 950 GB at today's
+height; most questions need a fraction of that, and the table under
+*Building the artifacts* says which.
 
 ## Why it exists
 
@@ -36,7 +40,7 @@ none of this is worth building.
 ## What you can ask it
 
 - **Has this address's public key already appeared on the chain?** Spending
-  reveals a public key, so a lock that has been spent from is in a different
+  reveals a public key, so a [lock](docs/GLOSSARY.md#lock) that has been spent from is in a different
   position from one that never has. Services answer this question too; the
   point here is answering it without asking anyone, because a question about
   your own coins is a question you would rather not send to a stranger.
@@ -221,7 +225,7 @@ Five ideas, each of which shows up everywhere in the code.
 - **Economy of means.** The cheapest structure that answers the question, and
   not one byte more. One pass over the chain feeds both branches; one expensive
   derivative answers three questions instead of three separate indexes; an
-  outpoint is cited by a **5-byte ordinal** instead of the 36-byte pair, once
+  outpoint is cited by a **5-byte [ordinal](docs/GLOSSARY.md#ordinal-tx-ordinal-output-ordinal)** instead of the 36-byte pair, once
   and then billions of times; sorted streams meet in a merge-join instead of
   seeking at random over hundreds of GB; appending costs the new blocks rather
   than the chain again. It runs on a modest machine because it was written on
@@ -260,7 +264,10 @@ are wall times measured at height 957,301. Most rows come from one run,
 completed by 1.3.0 in August 2026 with every artifact on one local USB disk;
 the few steps that run did not repeat (`census`, `nonces resolve`, `archive
 curve`, the headers crosscheck) keep their measured times from the earlier
-run on the same machine. Sizes are for that height:
+run on the same machine. Sizes are for that height. The rows that 2.0.0
+rebuilds (the archive's scan and merge, `firstreveal build`, `nonces
+resolve`, the reuse table, the timeline) are the 1.x measurements until the
+2.0.0 run replaces them; the changelog gives the 2.0.0 estimates:
 
 | Step | Time | Writes |
 |---|---|---|
@@ -272,13 +279,13 @@ run on the same machine. Sizes are for that height:
 | `archive merge` | ~5 h | seals the archive in place |
 | `nonces merge` | ~3 h 20 | seals the census in place |
 | `nonces resolve` | ~1.5 h | a few MB: the evidence that resolves each repeated point (**needs the node and the index**, optional) |
-| `graph fingerprint` | ~1 h 25 | nothing: it re-reads and prints |
+| `graph fingerprint` | ~1 h 11 | nothing: it re-reads and prints |
 | `archive derive` | ~4 h | the reuse table, and its `curve.csv` |
 | `archive curve` | ~2 h | `revelations.csv`: first revelations per window |
 | `index build` | ~23 h | `<index>` ~230 GB |
 | `derived build` | ~15 h | `<derived>` ~185 GB |
-| `firstspend build` | ~2-3 h | `<firstspend>` ~37 GB: the first spend of every lock, ordered by time (optional, from `<derived>` alone) |
-| `firstreveal build` | ~1-2 h (projected: a 39 GB read of the archive's keys plus the fusion) | `<firstreveal>` ~37 GB: the first revelation of every key, ordered by time (optional, from the merged `<archive>` alone) |
+| `firstspend build` | ~3 h 15 | `<firstspend>` ~37 GB: the first spend of every lock, ordered by time (optional, from `<derived>` alone) |
+| `firstreveal build` | ~2 h 30 (measured: a 39 GB read of the archive's keys plus the fusion) | `<firstreveal>` ~37 GB: the first revelation of every key, ordered by time (optional, from the merged `<archive>` alone) |
 
 The audits are cheap next to the builds, and that is the point of them. From
 the same run: `archive verify --deep` ~1 h 20, `nonces verify --deep` ~1 h 10,
@@ -323,8 +330,8 @@ have built anything, `nodsig report` prints what **yours** cost beside what they
 are: it reads the durations out of the manifests the builders sealed, so the
 figures are the artifacts' own rather than a transcription.
 
-Composed honestly, with the shared pass counted once: **103 h of machine**
-(about four and a half days if run back to back) and **~874 GB** if you build
+Composed honestly, with the shared pass counted once: **~110 h of machine**
+(about four and a half days if run back to back) and **~950 GB** if you build
 all of it and keep everything. The section below on what to keep is worth
 reading before you size the disk, because the largest artifact is the one no
 query reads.
@@ -396,7 +403,7 @@ sealed with the moment it describes, and the first command that meets the
 snapshot's block checks the claim.
 
 Then **one pass over block history**. This is the only long step that talks to
-the node, and the two co-emission flags feed every other artifact from it, which
+the node, and the two [co-emission](docs/GLOSSARY.md#co-emission) flags feed every other artifact from it, which
 is why they are worth passing even if you came only for the exposure question:
 
 ```sh
@@ -427,7 +434,7 @@ earlier format is read with the release that wrote it (the CHANGELOG names
 it). `index build` refuses a `graph-v1` seal as a parent by name rather than
 sealing an ancestry nobody can rederive from these formats.
 
-`--nonces` costs about 55 GB and roughly 10% of this pass's CPU, measured rather
+`--nonces` costs about 60 GB and roughly 10% of this pass's CPU, measured rather
 than guessed, and records every signature's nonce point with the height that
 published it. Two signatures of one key over two different messages that share a
 nonce hand out that key to anyone who noticed, so what this sorts together are
@@ -482,12 +489,12 @@ nodsig check --archive <archive-dir> --index <index-dir> --derived <derived-dir>
 ```
 
 For a whole wallet rather than one address, `--address-book book.json` takes a
-list in named groups, each claimed as `mine` or `watching`, and the report then
+list in named groups, each claimed as `separate` or `watching`, and the report then
 also says which of your addresses the chain already ties together and whether
 the separations you meant to keep are still standing. `--json` writes the
 complete form of the same answer for a tool to read. Both formats are
 documented — [`AddressBook-v2`](docs/formats/AddressBook-v2.md),
-[`CheckReport-v2`](docs/formats/CheckReport-v2.md) — and the page that explains
+[`CheckReport-v3`](docs/formats/CheckReport-v3.md) — and the page that explains
 how to read a report with two perimeters in it is
 [`docs/exposure-check.md`](docs/exposure-check.md).
 
@@ -512,7 +519,7 @@ offline and take seconds:
 
 Run any of them with `-h` for the exact arguments. `index lookup` is the one to
 try first: it is the didactic window on the whole design, and shows in one
-screen what the ordinal coordinates buy.
+screen what the [ordinal](docs/GLOSSARY.md#ordinal-tx-ordinal-output-ordinal) coordinates buy.
 
 One table takes one more flag. `reuse stats`, the distribution of value
 across the exposed locks (median, Gini, the value bands), reads a checkpoint of
@@ -545,7 +552,7 @@ chain forward; delete it if this was a one-time question.
 
 The `<nonces>` census is a fourth, and its trade-off is its own. Its *answer* is
 small: `nonces groups` writes every repeated nonce point to a CSV, and that file
-outlives the 55 GB it came from. What deleting the census costs is not the
+outlives the 60 GB it came from. What deleting the census costs is not the
 answer but the future: a later append can no longer notice that a signature at
 the chain tip reuses a nonce from years ago, because the single sighting it
 would have matched is gone. Keep it if you intend to watch the chain forward,
@@ -591,6 +598,8 @@ One entry point, one verb per artifact:
 | `nodsig graph` | inspect a `graph-v2` artifact |
 | `nodsig index` | build and query the outpoint index |
 | `nodsig derived` | build and query history, fees and co-spends |
+| `nodsig firstspend` | when each lock was first spent from, ordered by time |
+| `nodsig firstreveal` | when each key was first revealed, ordered by time |
 | `nodsig blockstats` | per-block statistics derived from a graph |
 | `nodsig price` | an external price series, and one price per block from it (requires a price series) |
 | `nodsig curve` | read the reuse curve: deltas over time, real block dates |
@@ -628,7 +637,7 @@ of the same release are confronted by fingerprint.
 a major version the commands named above do not change, so text written
 elsewhere about how to run them stays true. That promise is the reason the
 version number exists, and it is what lets a printed manual keep describing a
-moving codebase. `nodsig --version` reports `1.0.0`.
+moving codebase. `nodsig --version` prints it.
 
 That number and the formats' numbers are **two different scales**, and the
 artifacts settle it rather than merely claiming it: every one of them carries
@@ -636,9 +645,9 @@ artifacts settle it rather than merely claiming it: every one of them carries
 package has never been at 3. A format tag answers *what does this artifact
 capture*, which is what lets a reader tell an absence from a blind spot; a
 release number answers *what does the command line promise until the next
-major*. They move for different reasons, so `reveal-archive-v2` inside a 1.0.0
-tool is not a discrepancy: the reveal archive really is at its second format,
-and the tool is at its first release. Internal module names carry no promise at
+major*. They move for different reasons, so `reveal-archive-v3` inside a 2.0.0
+tool is not a discrepancy: the reveal archive really is at its third format,
+and the tool at its second major. Internal module names carry no promise at
 all: they are free to move, and they have.
 
 **A worked application of one release.** A hands-on walkthrough of release
@@ -738,9 +747,11 @@ one day and are context, not a commitment.
 
 ## Status
 
-**First public release.** The artifacts named in this README and in
-[`docs/gallery.md`](docs/gallery.md) were built by this code, from the chain
-through height 957,301, and sealed with the fingerprints printed there. Rebuild
+**Public since 1.0.0.** The artifacts named in this README and in
+[`docs/gallery.md`](docs/gallery.md) were built by the 1.x releases, from the
+chain through height 957,301, and sealed with the fingerprints printed there;
+2.0.0 rebuilds the ones whose format moved (the changelog says which), and
+their figures here follow that run. Rebuild
 from the same chain to the same height and the same numbers come back: that is
 the only claim this project makes, and it is checkable rather than persuasive.
 
@@ -751,7 +762,7 @@ fingerprint, because the fingerprint is a function of the bytes and two honest
 builds of identical content must reach the same number whatever produced them.
 It is a declaration, and the manifest presents it as one.
 
-The test suite (253 tests) runs on synthetic chains built in-process: it covers
+The test suite runs on synthetic chains built in-process: it covers
 correctness, determinism, and the equality of append and rebuild, but by
 construction it cannot cover throughput, files of tens of GB, or a fusion
 across a network mount.

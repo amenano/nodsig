@@ -68,7 +68,7 @@ instead of "nobody asked it".
   "balance":  {"status": "OK", "id": "bitcoin-core-rpc scantxoutset",
                "watermark": 957412, "fingerprint": null, "live": true},
   "nonce-exposure": {"status": "UNSUPPORTED", "id": null,
-                     "pluggable": "nonces-witness-v1 (--witness)"}
+                     "pluggable": "nonces-witness-v2 (--witness)"}
 }
 ```
 
@@ -79,7 +79,7 @@ instead of "nobody asked it".
 | `watermark` | integer or null | highest confirmed height the source covers |
 | `fingerprint` | string or null | the canonical fingerprint of a **sealed** source. `null` when the source still holds unfused runs, which is queryable but unsealed and must be reported as such rather than dressed up as sealed |
 | `live` | boolean | true when the answer came from a node rather than a sealed artifact, and therefore moves between runs |
-| `pluggable` | string | present only on `UNSUPPORTED`: what would plug this capability in, with its flag |
+| `pluggable` | string or null | present on every status other than `OK`: what would plug this capability in, with its flag; `null` when nothing does |
 
 Fingerprints go in **whole**: the text truncates them because a person
 reads it, a tool wants the digest. `id` is a format tag or a role name,
@@ -166,6 +166,8 @@ from `input.by_kind` (`p2tr`).
   in those blocks still reads as protected while its balance is current.
   **Erring on the reassuring side has to be said out loud**;
   `alarming` is the other way round; `none` when the perimeters meet;
+  `unknown` when one of the two watermarks is missing, and then `gap_blocks`
+  is `null`;
 - `watermarks` is redundant with `sources` plus the `sources` block, and
   is allowed **here only**, because whoever reads this line must be able
   to judge it without climbing back up.
@@ -263,7 +265,7 @@ source once:
 |---|---|---|
 | `address` | string | as you wrote it, **verbatim** |
 | `kind` | string | `p2pkh` \| `p2sh` \| `p2wpkh` \| `p2wsh` \| `p2tr`. What the address decoded to, not what your `origin.script_type` claimed |
-| `group` | string or absent | the group label, when an address book was given |
+| `group` | string or null | the group label when an address book was given, `null` otherwise |
 | `error` | string | present **instead of every capability block** when the address did not decode |
 | `exposure.value` | string | `exposed_by_construction` \| `exposed_by_reuse` \| `protected` \| `undetermined` |
 | `balance.sats` | integer | satoshis at the balance source's watermark |

@@ -6,7 +6,7 @@ next generation of a merged file, and the state file is the only truth
 about what exists on disk.
 
 Two artifacts are built this way (outpoint-index-v3 and
-outpoint-derived-v2) and a third one, reveal-archive-v2, is the same
+outpoint-derived-v3) and a third one, reveal-archive-v3, is the same
 idea written earlier by hand. What they share is not a data format —
 their records differ in width, key and meaning — but a WAY OF GROWING,
 and that is what lives here.

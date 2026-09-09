@@ -8,8 +8,8 @@ extensions, and MAY be private instances of this public interface.
 
 - **Layer:** L1 extension seam. See [ARCHITECTURE](../ARCHITECTURE.md). Pairs with
   [LiveSource](./LiveSource.md).
-- **Reference impl:** a base matcher (membership of a transaction's spent outputs
-  against a watchlist); no novel heuristic shipped.
+- **Reference impl:** none shipped; interface only. A base matcher would be
+  membership of a transaction's spent outputs against a watchlist.
 - **Types:** `bytes` and the domain types of whatever it reports — see
   [types](../types.md).
 

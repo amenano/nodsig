@@ -39,7 +39,7 @@ private** (UDS/localhost/file); network only opt-in and authenticated (like the
 node's cookie-file).
 
 Key note: **the byte formats are already the deepest and fastest cross-language
-contract.** A reader in C/Java/Rust reads `outputs.bin` (28 B/record, big-endian)
+contract.** A reader in C/Java/Rust reads `outputs.bin` (27 B/record, big-endian)
 with a `pread` and zero dependencies: the layout IS the spec. Porting just the
 *readers* is the easiest and most verifiable cross-language activity (same
 fingerprint = same result).
@@ -70,13 +70,14 @@ the contract.
 `Headers-v2` (headers/coinbase/coinbase_off), `Graph-v2`, `OutpointIndex-v3`
 (blocks/txids/tx_first_out/txid_index/outputs/spends), `OutpointDerived-v3`
 (history/tx_inputs/fees), `RevealArchive-v3`, `Nonces-v3`,
-`Nonces-witness-v2`. Each:
+`Nonces-witness-v2`, `FirstSpend-v1`, `FirstReveal-v2`, `BlockStats-v3`,
+`ReuseScan-v2`. Each:
 record layout + ordering rule + canonical fingerprint + ancestry (every
 manifest names its parent).
 
 Four documents in that directory are **not artifacts** and say so in their
 first line: [`AddressBook-v2`](formats/AddressBook-v2.md), the input of
-`check`; [`CheckReport-v2`](formats/CheckReport-v2.md), its complete output;
+`check`; [`CheckReport-v3`](formats/CheckReport-v3.md), its complete output;
 [`PriceSeries-v2`](formats/PriceSeries-v2.md), a publisher's price series in
 one canonical shape; and [`BlockPrice-v2`](formats/BlockPrice-v2.md), one
 price per block derived from it and from the index. None is a function of the

@@ -7,8 +7,8 @@ neutral base source; concrete watchers plug in on top (and MAY be private).
 
 - **Layer:** L1 extension seam — **live, non-reproducible**. See
   [ARCHITECTURE](../ARCHITECTURE.md). Pairs with [Matcher](./Matcher.md).
-- **Reference impl:** a base source (ZMQ subscription / RPC polling over
-  [NodeClient](./NodeClient.md)); no concrete watcher shipped.
+- **Reference impl:** none shipped; interface only. A source would be a ZMQ
+  subscription or RPC polling over [NodeClient](./NodeClient.md).
 - **Types:** `bytes`, `u32` — see [types](../types.md).
 
 > **Not reproducible, and not in the fingerprinted world.** The mempool is not

@@ -13,7 +13,7 @@ property (they can be **repeated**, locally, forever), and it is what lets
   first link, and the link is the point.
 - **Defined over:** nothing. It comes from the blocks themselves, so it is where a
   ancestry starts.
-- **Size:** ~93 B/height fixed plus the coinbase scripts (~50 B on average, no
+- **Size:** ~93 B/height fixed plus the coinbase scripts (~60 B on average, no
   consensus bound below 100 B), so **under 150 MB** for a chain of ~1M blocks:
   a rounding error beside [Graph-v2](./Graph-v2.md)'s 300+ GB.
 

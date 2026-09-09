@@ -10,6 +10,9 @@ address string — no I/O, no artifact, no node.
   `Result<T>` envelope and no source; it either returns a value or raises
   `AddressError`. See [ARCHITECTURE](../ARCHITECTURE.md).
 - **Reference impl:** `decode_address` + `script_pubkey` (readable Python).
+  The operation names below are the contract's: the reference has no
+  function called `lock_of` (it is `hash160(script_pubkey(decode_address(text)))`)
+  nor `exposure_query` (it lives in `check_addresses.RevealArchiveExposure`).
 - **Kernel:** the `addr` kernel (base58check, bech32/bech32m, convertbits) — pure,
   highly reusable, a prime port target.
 - **Consumers:** [HistoryBackend](./HistoryBackend.md), [BalanceBackend](./BalanceBackend.md),

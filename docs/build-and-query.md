@@ -66,10 +66,10 @@ nodsig archive scan --rpc <url> --cookie-file <path/.cookie> \
 
 | flag | cost | without it |
 |---|---|---|
-| (none) | ~87 GB | you still get the revelation archive: the exposure question |
+| (none) | ~98 GB | you still get the revelation archive: the exposure question |
 | `--graph` | 300-400 GB | no index, no derivatives, no block statistics: they are all built from it |
 | `--headers` | ~150 MB | dates need the node, and the scan's integrity checks cannot be repeated offline |
-| `--nonces` | ~55 GB, ~10% CPU | the nonce census does not exist and no later pass can rebuild it |
+| `--nonces` | ~60 GB, ~10% CPU | the nonce census does not exist and no later pass can rebuild it |
 | `--rest` | none, saves ~half the bytes on the wire | JSON-RPC instead: correct, slower, needs a credential |
 
 `--graph-digest <graph>` replaces `--graph` when you already have one: it
@@ -164,7 +164,7 @@ nodsig index   build --graph <graph> --index <index> --end <H>
 nodsig derived build --index <index> --out <derived>
 ```
 
-`index build` needs a **sealed** graph to record a parent (rule 2). The
+`index build` needs a **sealed** graph to record a parent (rule 1). The
 derivatives reorder the same facts by lock, by transaction and by co-spend;
 both steps are resumable and seal themselves.
 
@@ -178,7 +178,7 @@ nodsig blockstats build <graph> --out block-stats.csv
 
 ```sh
 nodsig nonces resolve --nonces <nonces> --witness <witness> --index <index> \
-                      --rpc <url> [--rest] [--cookie-file <path/.cookie>]
+                      --rpc <url> --cookie-file <path/.cookie>   # or --rest: no credential
 ```
 
 Its own step rather than one of the seals in 3, because it is the only
@@ -267,7 +267,7 @@ nodsig derived timeline --derived <derived> --index <index> --out <dir> \
 nodsig archive lookup   --archive <archive> <digest>
 nodsig nonces  groups   --nonces  <nonces>
 nodsig nonces  address  --index <index> --derived <derived> --nonces <nonces> \
-                        --rpc <url> <address>            # needs the node
+                        --rpc <url> --cookie-file <path/.cookie> <address>   # needs the node
 nodsig curve   deltas   curve.csv
 nodsig curve   dates    --curve curve.csv --headers <headers>
 nodsig blockstats summary block-stats.csv
@@ -396,7 +396,8 @@ exactly what you used.
 ## The second road (optional, and a full extra pass)
 
 ```sh
-nodsig reuse scan --locks <locks> --rpc <url> --end <H> --checkpoint <cp>
+nodsig reuse scan --locks <locks> --rpc <url> --cookie-file <path/.cookie> \
+                  --end <H> --checkpoint <cp>
 nodsig archive crosscheck --archive <archive> --locks <locks> \
                           --reuse-state <cp>/state.json --curve <cp>/curve.csv
 nodsig reuse stats --locks <locks> --checkpoint <cp>
@@ -405,7 +406,7 @@ nodsig reuse stats --locks <locks> --checkpoint <cp>
 A second, separately written pipeline reaching the same reuse figure, which the
 cross-check then compares bit for bit. It buys confidence in the *method*, not
 a number you do not already have: a result to inherit rather than a step to
-repeat. Scan and cross-check must use the **same perimeter** (rule 3).
+repeat. Scan and cross-check must use the **same perimeter** (rule 2).
 
 ## Growing them, when the chain moves
 
@@ -433,7 +434,7 @@ parent has:
 
 ```sh
 # 1. the graph first: it is the root, and only a scan can extend it
-nodsig archive scan --rpc <url> --end <H2> --archive <archive> \
+nodsig archive scan --rpc <url> --cookie-file <path/.cookie> --end <H2> --archive <archive> \
                     --graph <graph> --headers <headers> --nonces <nonces>
 nodsig graph   fingerprint --graph <graph>       # re-seal: new bytes, new fingerprint
 nodsig archive merge  --archive <archive>

@@ -8,7 +8,8 @@ explicitly outside the offline, fingerprinted world.
 
 - **Layer:** L1, but a **live node** contract, not a reader over sealed
   artifacts. See [ARCHITECTURE](../ARCHITECTURE.md).
-- **Reference impl:** `CoreBalance` (a `scantxoutset` consumer), plus two block
+- **Reference impl:** `CoreBalance` (a `scantxoutset` consumer, the contract's
+  `live_balance`; `call` is the client's method), plus two block
   transports behind one method: `RpcClient` (JSON-RPC, batched) and
   `RestClient` (`/rest/*.bin`, one persistent connection per thread).
 - **Types:** `string`, `u32`, `u64`, `bool` — see [types](../types.md).

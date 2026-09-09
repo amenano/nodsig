@@ -44,17 +44,20 @@ get built.
 
 ## 3. What you actually keep
 
-The ~874 GB in the README is the case where you build everything and keep
+The ~950 GB in the README is the case where you build everything and keep
 everything. What a given question needs is smaller, sometimes zero:
 
 | To ask | Keep | Size at height 957,301 |
 |---|---|---|
 | A Taproot address (`bc1p…`) | nothing: the program is the key | **0** |
-| Exposure, single-key addresses (`1…`, 20-byte `bc1q…`) | `archive_keys.bin` | **33.9 GB** |
-| Exposure, any address kind | the whole archive | **86.9 GB** |
-| …plus dated history, fees, co-spends | the index and its derivatives | +439 GB |
+| Exposure, single-key addresses (`1…`, 20-byte `bc1q…`) | `archive_keys.bin` | **38.7 GB** |
+| Exposure, any address kind | the whole archive | **97.7 GB** |
+| …plus dated history, fees, co-spends | the index and its derivatives | +415 GB |
 | Which locks were first spent in a height window | `<firstspend>` (from the derivatives) | +37 GB |
 | Which keys were first revealed in a height window | `<firstreveal>` (from the archive) | +37 GB |
+
+The archive figures are the 1.x archive's; the 2.0.0 archive drops the
+records that were never scripts and is measured again after its run.
 
 The largest artifact, `<graph>` at ~301 GB, answers none of the questions above:
 it is the material the index is built from, read only by `blockstats` and by a
@@ -80,8 +83,8 @@ nodsig archive verify --archive <archive-dir>          # bytes, ladders, fingerp
 nodsig archive verify --archive <archive-dir> --deep   # …and every record
 ```
 
-So the cost is not necessarily "three days of scanning plus 87 GB". It can be
-"87 GB copied from removable media and verified locally". Determinism is what
+So the cost is not necessarily "three days of scanning plus 98 GB". It can be
+"98 GB copied from removable media and verified locally". Determinism is what
 makes accepting a file from a stranger safe: you do not trust the sender, you
 recompute the fingerprint.
 

@@ -7,7 +7,7 @@ from confirmed history only — **no node is asked**.
 - **Layer:** L1 (in-process). See [ARCHITECTURE](../ARCHITECTURE.md).
 - **Reads format:** [OutpointDerived-v3](../formats/OutpointDerived-v3.md)
   (`history.bin`).
-- **Reference impl:** `Derived.balance` (and the summary line of the `history`
+- **Reference impl:** `Derived.balance`, the contract's `balance_at`, (and the summary line of the `history`
   window).
 - **Relation:** a reduction over the same scan as
   [HistoryBackend](./HistoryBackend.md); an implementation MAY compute both from

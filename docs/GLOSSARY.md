@@ -39,6 +39,22 @@ The `hash160` of the **full** scriptPubKey. It identifies an **identical lock** 
 one exact locking script — **not** a wallet, and **not** a key seen under its
 other script faces. History / balance / co-spend are all keyed by the lock.
 
+### faces (of a key)
+The ways one public key shows up on the chain: its serializations (33 bytes
+compressed, 65 uncompressed or hybrid, 32 x-only) and the script forms that
+wrap each of them (P2PK, P2PKH, P2WPKH, P2SH-P2WPKH, a P2TR program). They
+hash to different digests, so the archive keys a point by its compressed
+form and marks a record seen under another serialization `OTHER_FACE`, and
+`check --key` asks under every face. `--no-faces` records only the
+serialization the chain showed.
+
+### co-emission
+One pass over the blocks writing several artifacts at once: `archive scan`
+emits the archive and, with `--graph`, `--headers` and `--nonces`, the graph,
+the header archive and the nonce census, so the chain is read from the node
+once. A co-emitted artifact is the same bytes it would be alone: its
+fingerprint does not depend on what was emitted beside it.
+
 ### the two digest systems (do not conflate)
 One address produces **two unrelated digests**:
 - the **lock** = `hash160(scriptPubKey)` — used by history / balance / co-spend;

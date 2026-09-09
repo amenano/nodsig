@@ -72,7 +72,7 @@ fingerprint.
 
 ## Notes for porters
 
-- `fees.bin` is purely positional: `fee_sats = u64_be(fees.bin[tx_ordinal*8 : +8])`.
+- `fees.bin` is purely positional: `fee_sats = u56_be(fees.bin[tx_ordinal*7 : +7])`.
   No search, no ladder.
 - Telling coinbase from non-coinbase requires the spend side (`tx_inputs.bin` /
   `inputs_of`), i.e. the same derived artifact; the value 0 in `fees.bin` alone is

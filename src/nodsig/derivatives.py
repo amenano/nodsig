@@ -13,14 +13,14 @@ speaks ordinal coordinates, each answer is a small projection of it,
 built with streams and at most one external sort per side, and
 readable afterwards with one targeted bucket read.
 
-FROZEN FORMAT — outpoint-derived-v2
+FROZEN FORMAT — outpoint-derived-v3
 ===================================
 A derivatives directory holds three record files (all integers
 big-endian, same rule and same reason as the index: byte order IS
 numeric order, so sorting and searching never decode a field):
 
-    history.bin    38 B, sorted by (lock, out_ord):
-                       lock 20 | out_ord u40 | spender_tx u40 | value u64
+    history.bin    37 B, sorted by (lock, out_ord):
+                       lock 20 | out_ord u40 | spender_tx u40 | value u56
                    One row per output EVER created: who received it
                    (the lock, hash160 of the full scriptPubKey), when
                    (the ordinal, which is chain time), whether and by
@@ -38,8 +38,8 @@ numeric order, so sorting and searching never decode a field):
                    co-spend reader — outputs consumed together by one
                    transaction, the common-input hint — and the
                    inverse of the index's spender_of.bin.
-    fees.bin        8 B per transaction, POSITIONAL by tx ordinal:
-                       fee u64 (satoshis)
+    fees.bin        7 B per transaction, POSITIONAL by tx ordinal:
+                       fee u56 (satoshis)
                    fee = sum of input values − sum of output values;
                    0 for a transaction with no inputs (a coinbase —
                    under consensus the only no-input case). The join

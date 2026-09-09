@@ -7,7 +7,8 @@ disk, with **where** a key was seen and **when** it was first seen.
 
 - **Layer:** L1 (in-process). See [ARCHITECTURE](../ARCHITECTURE.md).
 - **Reads format:** [RevealArchive-v3](../formats/RevealArchive-v3.md).
-- **Reference impl:** `RevealArchiveExposure.query` + the `lookup` command.
+- **Reference impl:** `RevealArchiveExposure.query` (the contract's `exposure`) +
+  the `lookup` command.
 - **Independent of** the outpoint index/derivatives: this reads the reveal
   archive only.
 - **Backs:** the exposure line of the pocket-knife answer (which adds

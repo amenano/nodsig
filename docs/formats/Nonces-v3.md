@@ -91,8 +91,8 @@ scheme each sighting used.
 
 The point is truncated, not hashed: the top bytes, so the order of the truncated
 key is the order of the full one. For **drawn** nonces the shortening is free:
-with 3.4 billion signatures over 96 bits the expected number of accidental
-collisions is about **7e-11**. Twelve bytes rather than eight is a deliberate
+with 3.7 billion signatures over 96 bits the expected number of accidental
+collisions is about **9e-11**. Twelve bytes rather than eight is a deliberate
 margin: eight would put the expectation near 0.3, which is small but no longer
 negligible, and the saving (3 bytes a record) is not worth spending certainty
 on.
@@ -309,7 +309,7 @@ by a wrong rule is caught rather than compared with itself.
 ## Verifying a sealed archive
 
 ```
-nonces verify <dir>          # digests, ladder rebuilt, fingerprint, coverage floor
+nonces verify <dir>          # digests, ladder rebuilt, fingerprint
 nonces verify <dir> --deep   # and one pass over every record
 ```
 

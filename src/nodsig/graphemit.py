@@ -84,7 +84,7 @@ the canonical fingerprint is defined over these exact bytes, and
 compression is the filesystem's business, not the format's.
 
 Canonical fingerprint: the shared identity block of every artifact
-here (format tag, covered heights, parent, and the digests of the
+here (format tag, covered heights, and the digests of the
 logical files in a fixed order, length-prefixed), where the graph
 declares ONE logical file, `stream`, whose digest is the sha256 of the
 whole record stream in height order with no tag of its own. Same chain
