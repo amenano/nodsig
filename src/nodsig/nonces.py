@@ -1568,9 +1568,10 @@ class _Sighting:
     """One signature this lock published, where, and whose it is."""
 
     __slots__ = ("height", "point", "flags", "spender", "cls", "key",
-                 "r_full", "s", "s_raw")
+                 "r_full", "s", "s_raw", "face")
 
-    def __init__(self, height, spender, sg):
+    def __init__(self, height, spender, sg, face=None):
+        self.face = face              # the _Face it was read under
         self.height = height
         self.point = sg.r[:R_PREFIX]
         self.flags = ((FLAG_SCHNORR if sg.schnorr else FLAG_ECDSA)
@@ -1583,27 +1584,44 @@ class _Sighting:
         self.s_raw = sg.s_raw         # as serialized, to name which case
 
 
-def _read_sightings(client, index, derived, address, lock, stats,
-                    max_blocks, out):
-    """Fetch the blocks this lock signed in, and read its signatures."""
-    spends = sorted(_spends_of(index, derived, lock))
-    if not spends:
-        return [], 0
+class _Face:
+    """One lock a subject can sign under: an address form of the key
+    digest (check_addresses.Face) with the lock and scriptPubKey the
+    derivatives and the attribution need."""
+
+    __slots__ = ("kind", "text", "lock", "spk", "derived_by", "signed")
+
+    def __init__(self, face):
+        from nodsig.check_addresses import script_pubkey
+        from nodsig.hashing import hash160
+        self.kind = face.kind
+        self.text = face.address.text
+        self.spk = script_pubkey(face.address)
+        self.lock = hash160(self.spk)
+        self.derived_by = face.derived_by
+        self.signed = 0
+
+
+def _read_sightings(client, index, derived, faces, stats, max_blocks, out):
+    """Fetch the blocks these faces signed in, once each, and read the
+    signatures of every face's spends. The faces are one key's, so one
+    block may hold spends of two of them; it is fetched once."""
     by_height = {}
-    for spend in spends:
-        by_height.setdefault(spend[0], []).append(spend)
+    for face in faces:
+        for spend in sorted(_spends_of(index, derived, face.lock)):
+            by_height.setdefault(spend[0], []).append((face, spend))
+    if not by_height:
+        return [], 0
     heights = sorted(by_height)
     if len(heights) > max_blocks:
         raise NonceError(
-            f"this lock was spent in {len(heights):,} different blocks, and "
-            f"reading them all is {len(heights):,} block fetches. Raise "
+            f"these locks were spent in {len(heights):,} different blocks, "
+            f"and reading them all is {len(heights):,} block fetches. Raise "
             f"--max-blocks if that is what you want")
 
     # One window of blocks in memory at a time: the sightings are read
     # off each block as it arrives and the block is dropped, so the cap
     # above bounds the fetches and not the RAM.
-    from nodsig.check_addresses import script_pubkey
-    spk = script_pubkey(address)
     sightings = []
     for i in range(0, len(heights), 25):
         window = heights[i:i + 25]
@@ -1613,16 +1631,18 @@ def _read_sightings(client, index, derived, address, lock, stats,
             if block.header.hash != want:
                 raise NonceError(f"height {h}: block bytes do not hash to "
                                  "the requested block hash")
-            for height, spender, prev_txid, vout in by_height[h]:
+            for face, (height, spender, prev_txid, vout) in by_height[h]:
                 for sg in _signatures_of_spend(block, spender, prev_txid,
-                                               vout, stats, lock, spk):
-                    sightings.append(_Sighting(height, spender, sg))
+                                               vout, stats, face.lock,
+                                               face.spk):
+                    sightings.append(_Sighting(height, spender, sg, face))
+                    face.signed += 1
     sightings.sort(key=lambda s: (s.height, s.spender))
     return sightings, len(heights)
 
 
 def run_address(addresses, index_dir, derived_dir, client, nonces_dir=None,
-                max_blocks=200, out=sys.stdout):
+                max_blocks=200, out=sys.stdout, keys=()):
     """Did this address's own key ever repeat a nonce?
 
     Three sources, joined on the outpoint: the derivatives say which of
@@ -1631,14 +1651,22 @@ def run_address(addresses, index_dir, derived_dir, client, nonces_dir=None,
     so the signatures can be read. The census is optional and answers a
     different half: whether the same point was also published by somebody
     else, which is a broken generator rather than a key recovery.
+
+    The question is asked of the KEY, under every face the input names:
+    a p2pkh or p2wpkh address carries a hash160, so its three locks
+    (p2pkh, p2sh-p2wpkh, p2wpkh) are read together, and a repeat between
+    two faces is a repeat of the key. A script hash or a taproot program
+    is one lock, its own. `keys` are serialized keys or hash160s typed
+    as `--key`: both serializations, each behind its faces, the 65-byte
+    one named by one square root mod p, said so on the page.
     """
     # Imported here, not at module scope: check_addresses reaches the
     # reveal archive, which reaches this module, so a top-level import
     # would close a cycle.
     from nodsig import derivatives as dvm
     from nodsig import outpoint_index as oi
-    from nodsig.check_addresses import KINDS, decode_address, script_pubkey
-    from nodsig.hashing import hash160
+    from nodsig.check_addresses import (KINDS, ROOT_SENTENCE, address_faces,
+                                        decode_address, key_faces)
 
     index = oi.Index(index_dir)
     derived = dvm.Derived(derived_dir, index)
@@ -1651,38 +1679,65 @@ def run_address(addresses, index_dir, derived_dir, client, nonces_dir=None,
     p = lambda *a: print(*a, file=out)
     findings = 0
 
+    # (title, second line, faces, note) per subject, addresses first.
+    subjects = []
+    for text in addresses:
+        address = decode_address(text)
+        subjects.append((address.text, KINDS[address.kind][1],
+                         address_faces(address), None))
+    for text in keys:
+        given_as, faces, note = key_faces(text)
+        subjects.append((f"key {text}", f"given as {given_as}", faces, note))
+
     try:
-        for text in addresses:
-            address = decode_address(text)
-            lock = hash160(script_pubkey(address))
-            p(f"\n{address.text}")
-            p(f"  {KINDS[address.kind][1]}")
-            p(f"  lock {lock.hex()}, index through height "
-              f"{index.watermark:,}"
+        for title, second, faces, note in subjects:
+            faces = [_Face(f) for f in faces]
+            p(f"\n{title}")
+            p(f"  {second}")
+            if note:
+                p(f"  {note}")
+            p(f"  index through height {index.watermark:,}"
               + (f", census through height {census_to:,}"
                  if census_to is not None else ""))
 
             sightings, n_blocks = _read_sightings(
-                client, index, derived, address, lock, stats, max_blocks, out)
+                client, index, derived, faces, stats, max_blocks, out)
+            for f in faces:
+                how = (f" (serialization named by {f.derived_by})"
+                       if f.derived_by else "")
+                p(f"  {f.kind:<12} {f.text}  lock {f.lock.hex()}{how}: "
+                  + (f"signed {f.signed} time(s)" if f.signed
+                     else "never signed"))
+            if any(f.derived_by for f in faces):
+                p(f"  {ROOT_SENTENCE}")
             if not sightings:
-                p("  no signature to examine: this lock has no confirmed "
-                  "spend up to that height, so it has never signed")
+                if len(faces) == 1:
+                    p("  no signature to examine: this lock has no confirmed "
+                      "spend up to that height, so it has never signed")
+                else:
+                    p("  no signature to examine: none of these faces has a "
+                      "confirmed spend up to that height, so this key has "
+                      "never signed under any of the faces read here")
                 continue
 
+            whose = "this lock's" if len(faces) == 1 else "this key's"
             p(f"  {len(sightings)} signature(s) read from {n_blocks} "
               f"block(s):")
             for s in sightings:
+                under = f" under {s.face.kind}" if len(faces) > 1 else ""
                 p(f"    height {s.height:>9,}  {s.point.hex()}  "
                   f"{_schemes(s.flags):<8} "
                   f"{SIGHASH_NAMES[rec_sighash(s.flags)]:<11} in "
-                  f"{blockparse.hash_hex(s.spender)[:16]}…")
+                  f"{blockparse.hash_hex(s.spender)[:16]}…{under}")
 
             # Grouped by the FULL nonce point, not by the 12-byte one the
             # census stores: the truncation is a storage decision, and two
             # scalars sharing a prefix are two nonces, not a repeat. The
             # blocks are already in hand here, so the untruncated value
             # costs nothing and keeps the strongest claim on this page
-            # from resting on a prefix.
+            # from resting on a prefix. Grouped ACROSS the faces: the key
+            # behind them is one, so a point repeated between two faces
+            # is the key repeating its nonce.
             groups = {}
             for s in sightings:
                 groups.setdefault(s.r_full, []).append(s)
@@ -1693,7 +1748,7 @@ def run_address(addresses, index_dir, derived_dir, client, nonces_dir=None,
                     p("  one signature only: a nonce cannot repeat with "
                       "itself, so there is nothing here to find")
                 else:
-                    p(f"  no repeated nonce among this lock's own "
+                    p(f"  no repeated nonce among {whose} own "
                       f"{len(sightings)} signatures")
             for pt, g in repeated.items():
                 findings += 1
@@ -1703,6 +1758,10 @@ def run_address(addresses, index_dir, derived_dir, client, nonces_dir=None,
                 # above used the full one.
                 p(f"  REPEATED NONCE {pt[:R_PREFIX].hex()} at heights "
                   f"{heights}")
+                if len({s.face.kind for s in g}) > 1:
+                    kinds = " and ".join(sorted({s.face.kind for s in g}))
+                    p(f"    the repeat is BETWEEN faces ({kinds}): two locks, "
+                      "one key behind them, and the nonce is the key's")
                 if len({s.s for s in g}) == 1:
                     # The point repeats because the SIGNATURE repeats, not
                     # because a generator did. One `s` means one `z` (with
@@ -1787,7 +1846,7 @@ def run_address(addresses, index_dir, derived_dir, client, nonces_dir=None,
                         p(f"  census: {pt.hex()} was also published "
                           f"{elsewhere} time(s) through height "
                           f"{horizon:,} by signatures that are not "
-                          f"this lock's. Two DIFFERENT keys sharing a nonce "
+                          f"{whose}. Two DIFFERENT keys sharing a nonce "
                           f"does not hand either one over; it does show the "
                           f"point was not drawn at random, though not whether "
                           f"that was a fault or a choice")
@@ -2110,7 +2169,11 @@ def main(argv=None):
 
     a = sub.add_parser("address", help="did this address's own key ever "
                                        "repeat a nonce?")
-    a.add_argument("addresses", nargs="+", help="mainnet address(es)")
+    a.add_argument("addresses", nargs="*", help="mainnet address(es)")
+    a.add_argument("--key", action="append", default=[], metavar="HEX",
+                   help="a public key (33 or 65 bytes) or a hash160 (20): "
+                        "the question asked of the point, under every "
+                        "address form it can stand behind; may repeat")
     a.add_argument("--index", required=True,
                    help="outpoint index: which heights to read")
     a.add_argument("--derived", required=True,
@@ -2182,9 +2245,12 @@ def main(argv=None):
         run_lookup(args.nonces, args.points)
     elif args.cmd == "address":
         from nodsig.reuse_scan import build_client
+        if not args.addresses and not args.key:
+            p.error("address: give at least one address or one --key")
         client, _ = build_client(args.rpc, args.rest, args.cookie_file)
         run_address(args.addresses, args.index, args.derived, client,
-                    nonces_dir=args.nonces, max_blocks=args.max_blocks)
+                    nonces_dir=args.nonces, max_blocks=args.max_blocks,
+                    keys=args.key)
     elif args.cmd == "resolve":
         from nodsig import witness as wt
         from nodsig.reuse_scan import build_client

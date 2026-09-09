@@ -1563,3 +1563,153 @@ def test_an_address_this_chain_never_saw_is_answered_not_guessed(
     assert nn.run_address([stranger], index, derived, client,
                           out=sink) == 0
     assert "has never signed" in sink.getvalue()
+
+
+# ---------------------------------------------------------------------------
+# nonces address: the question is asked of the KEY, under its faces
+# ---------------------------------------------------------------------------
+# One key, two locks: its p2pkh address and its native segwit address
+# hash the same 20 bytes, and the chain below spends each once with the
+# SAME nonce. Asked about either address, the tool reads both locks and
+# finds the repeat, because the key behind the two faces is one key;
+# asked about the key itself (`--key`), it reads the 65-byte
+# serialization's face too and says how that face was named.
+
+PUB_FACE = b"\x02" + bytes(range(4, 36))
+H_FACE = hash160(PUB_FACE)
+SPK_FACE_PKH = b"\x76\xa9\x14" + H_FACE + b"\x88\xac"
+SPK_FACE_WPKH = b"\x00\x14" + H_FACE
+SPK_FACE_SH = b"\xa9\x14" + hash160(SPK_FACE_WPKH) + b"\x87"
+ADDR_FACE = b58check(0x00, H_FACE)
+N_FACE = 0x4c3d2e1f00112233445566778899aabbccddeeff0123456789abcdef01234567
+
+
+def faces_chain():
+    """h1  cb1 pays the key's p2pkh, p2wpkh and p2sh-p2wpkh faces, and
+            a script lock that never spends
+       h2  t1 spends the p2pkh face (nonce N_FACE, s S1)
+       h3  t2 spends the p2wpkh face by witness (nonce N_FACE, s S2)"""
+    blocks, txids = {}, {}
+    prev = bytes(32)
+
+    def add(height, raw_txs, ids):
+        nonlocal prev
+        raw, block_hash = tbw.w_block(4, prev, 1_700_000_000 + height,
+                                      0x1700_0000, height, raw_txs, ids)
+        prev = block_hash
+        blocks[height] = (block_hash[::-1].hex(), raw.hex())
+
+    cb1, cb1_id, _ = toi._coinbase(
+        b"\x01a", [tbw.w_output(50, SPK_FACE_PKH),
+                   tbw.w_output(50, SPK_FACE_WPKH),
+                   tbw.w_output(50, SPK_FACE_SH),
+                   tbw.w_output(50, SPK_SCRIPT)])
+    add(1, [cb1], [cb1_id])
+
+    cb2, cb2_id, _ = toi._coinbase(b"\x01b", [tbw.w_output(50, SPK_QUIET)])
+    sig = push(der(minimal(N_FACE), minimal(S1))) + push(PUB_FACE)
+    t1, t1_id, _ = tbw.w_tx(
+        1, [tbw.w_input(cb1_id, 0, sig, 0xFFFFFFFF)],
+        [tbw.w_output(45, SPK_QUIET)], 0)
+    add(2, [cb2, t1], [cb2_id, t1_id])
+    txids["t1"] = t1_id
+
+    t2, t2_id, t2_wid = tbw.w_tx(
+        1, [tbw.w_input(cb1_id, 1, b"", 0xFFFFFFFF)],
+        [tbw.w_output(45, SPK_QUIET)], 0,
+        witnesses=[[der(minimal(N_FACE), minimal(S2)), PUB_FACE]])
+    cb3, cb3_id, _ = tbw.w_tx(
+        1, [tbw.w_input(bytes(32), 0xFFFFFFFF, b"\x01c", 0xFFFFFFFF)],
+        [tbw.w_output(50, SPK_QUIET),
+         tbw.w_output(0, tbw.w_commitment_spk([t2_wid], bytes(32)))],
+        0, witnesses=[[bytes(32)]])
+    add(3, [cb3, t2], [cb3_id, t2_id])
+    txids["t2"] = t2_id
+    return blocks, txids
+
+
+@pytest.fixture
+def faces_setup(tmp):
+    blocks, _txids = faces_chain()
+    graph = toi.emit_graph(tmp, blocks, "faces_graph")
+    index = os.path.join(tmp, "faces_index")
+    oi.run_build(graph, index)
+    derived = os.path.join(tmp, "faces_derived")
+    dv.run_build(index, derived)
+    server, url = trs.serve(blocks)
+    client = trs.rs.RpcClient(url, "user:pass")
+    yield index, derived, client
+    server.shutdown()
+
+
+def _ask_faces(faces_setup, addresses=(), keys=()):
+    index, derived, client = faces_setup
+    sink = io.StringIO()
+    findings = nn.run_address(list(addresses), index, derived, client,
+                              out=sink, keys=list(keys))
+    return sink.getvalue(), findings
+
+
+def test_a_nonce_repeated_between_two_faces_is_the_key_repeating(faces_setup):
+    """Asked about the p2pkh address, the tool reads the segwit face of
+    the same digest as well, and the repeat between the two is found
+    and named as a repeat between faces."""
+    text, findings = _ask_faces(faces_setup, [ADDR_FACE])
+    assert findings == 1
+    assert "2 signature(s) read from 2 block(s)" in text
+    assert "under p2pkh" in text and "under p2wpkh" in text
+    assert "BETWEEN faces (p2pkh and p2wpkh)" in text
+    assert "opened by ONE key" in text and "the private key follows" in text
+    # One line per face, each with its own lock and its own count.
+    faces = [ln for ln in text.splitlines() if "  lock " in ln]
+    assert len(faces) == 3
+    counts = {ln.split()[0]: ln.rsplit(": ", 1)[1] for ln in faces}
+    assert counts == {"p2pkh": "signed 1 time(s)",
+                      "p2sh-p2wpkh": "never signed",
+                      "p2wpkh": "signed 1 time(s)"}
+    assert hash160(SPK_FACE_PKH).hex() in text
+    assert hash160(SPK_FACE_WPKH).hex() in text
+
+
+def test_the_segwit_address_reads_the_same_three_faces(faces_setup):
+    from nodsig.check_addresses import _bech32_encode
+    text, findings = _ask_faces(faces_setup, [_bech32_encode("bc", 0, H_FACE)])
+    assert findings == 1
+    assert "BETWEEN faces (p2pkh and p2wpkh)" in text
+
+
+def test_a_key_typed_is_asked_under_both_serializations(faces_setup):
+    """`--key` with the compressed form: the four faces, the 65-byte one
+    named by a square root and said so; the repeat is found."""
+    text, findings = _ask_faces(faces_setup, keys=[PUB_FACE.hex()])
+    assert findings == 1
+    assert f"key {PUB_FACE.hex()}" in text and "given as compressed" in text
+    faces = [ln for ln in text.splitlines() if "  lock " in ln]
+    assert len(faces) == 4
+    assert sum("named by one square root mod p" in ln for ln in faces) == 1
+    assert "one modular square root per key given" in text
+    assert "BETWEEN faces (p2pkh and p2wpkh)" in text
+
+
+def test_a_hash160_typed_reads_its_own_faces_only(faces_setup):
+    text, findings = _ask_faces(faces_setup, keys=[H_FACE.hex()])
+    assert findings == 1
+    assert "given as hash160" in text
+    assert "not derivable from a digest" in text
+    assert len([ln for ln in text.splitlines() if "  lock " in ln]) == 3
+    assert "square root" not in text.split("not derivable")[1]
+
+
+def test_a_script_hash_is_one_face_and_its_own(faces_setup):
+    text, findings = _ask_faces(faces_setup, [ADDR_SCRIPT])
+    assert findings == 0
+    assert len([ln for ln in text.splitlines() if "  lock " in ln]) == 1
+    assert "this lock has no confirmed spend" in text
+    assert "has never signed" in text
+
+
+def test_address_needs_an_address_or_a_key(faces_setup):
+    index, derived, _client = faces_setup
+    with pytest.raises(SystemExit):
+        nn.main(["address", "--index", index, "--derived", derived,
+                 "--rpc", "http://127.0.0.1:1"])

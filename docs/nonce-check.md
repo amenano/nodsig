@@ -50,6 +50,8 @@ for spends whose blocks it has discarded, and the answer is bounded by the
 # the owner's question: did THIS address's key ever repeat a nonce with itself?
 nodsig nonces address <address> --index <index-dir> --derived <derived-dir> \
        --rpc <url> --cookie-file <path/.cookie> [--nonces <nonces-dir>]
+# the same question of the key itself, under every address form it can stand behind
+nodsig nonces address --key <hex> --index <index-dir> --derived <derived-dir> --rpc <url>
 
 # the chain's question: which nonce points repeat, anywhere?
 nodsig nonces groups --nonces <nonces-dir>
@@ -68,29 +70,44 @@ transaction**, so nothing guesses which signature belongs to the address being
 asked about. That exactness is also why it works for a taproot key-path spend,
 whose public key is not in the spending input at all.
 
+The question is asked of the **key**, not of the one lock the address names.
+A `1…` or `bc1q…` address carries a hash160, and the same twenty bytes stand
+behind three locks (p2pkh, p2sh-p2wpkh, p2wpkh): all three are read, one line
+each says how many times that face signed, and the nonce points are compared
+across them, because a point repeated between two faces is the one key
+repeating its nonce. A `3…` script hash or a `bc1p…` program is one lock, its
+own: a hash does not give back what it wraps. `--key <hex>` takes the key
+itself (33 or 65 bytes, or a hash160) and adds the other serialization's
+face, the 65-byte one named from the 33-byte one by a single square root mod
+p, which the output says wherever it was used: it names a serialization,
+multiplies no point, verifies nothing.
+
 Everything below is real output, printed by the code over the **synthetic
 five-block chain of the test suite** (`tests/test_nonces.py`). The heights of 2
 and 3 give it away. It is shown instead of chain output for the reason stated at
 the end of this page.
 
 ```console
-$ nodsig nonces address 112D2adLM3UKy4Z4giRbReR6gjWuvHUqB \
+$ nodsig nonces address 18C637tQaVZY4FCW2KVZ6tBUEFjxPCwRSH \
       --index <index-dir> --derived <derived-dir> --nonces <nonces-dir> --rpc <url>
 
-112D2adLM3UKy4Z4giRbReR6gjWuvHUqB
+18C637tQaVZY4FCW2KVZ6tBUEFjxPCwRSH
   pay-to-pubkey-hash (1…)
-  lock 81a232dfed271986129033be5d67100ff354bb86, index through height 5
+  index through height 5, census through height 5
+  p2pkh        18C637tQaVZY4FCW2KVZ6tBUEFjxPCwRSH  lock 0f04a2aff6aae9b58096c891960db85f70a34c71: signed 2 time(s)
+  p2sh-p2wpkh  3KLTd5M3bogabCuGxPGhEkKqMjitFiQqFs  lock 5e8b2910e1982a9725f2871795343c778105d210: never signed
+  p2wpkh       bc1qfms6jr92rp625lwjuqqn5md9e4uyftk94x5v0h  lock c18efb30a7cfd350d9db49b16ec5b801ebf66df3: never signed
   2 signature(s) read from 2 block(s):
-    height         2  66f1c4b0e5d3a27681f0c5d4  ecdsa    all         in 31bbc4a04c1bc490…
-    height         3  66f1c4b0e5d3a27681f0c5d4  ecdsa    all         in 6a7fb21513cc240b…
+    height         2  66f1c4b0e5d3a27681f0c5d4  ecdsa    all         in b0ff7113a082bece… under p2pkh
+    height         3  66f1c4b0e5d3a27681f0c5d4  ecdsa    all         in e8c160e783439d80… under p2pkh
   REPEATED NONCE 66f1c4b0e5d3a27681f0c5d4 at heights 2, 3
     this lock is opened by ONE key, and the signatures differ, so they signed
     different messages with the same key and the same nonce: the private key
     follows from the two of them, by arithmetic anybody can do
-  census: 66f1c4b0e5d3a27681f0c5d4 was also published 1 time(s) by signatures
-  that are not this lock's. Two DIFFERENT keys sharing a nonce does not hand
-  either one over; it does show the point was not drawn at random, though not
-  whether that was a fault or a choice
+  census: 66f1c4b0e5d3a27681f0c5d4 was also published 1 time(s) through height 5
+  by signatures that are not this key's. Two DIFFERENT keys sharing a nonce does
+  not hand either one over; it does show the point was not drawn at random,
+  though not whether that was a fault or a choice
 ```
 
 Three other shapes of answer, from the same chain:
@@ -111,11 +128,12 @@ Three other shapes of answer, from the same chain:
   so it has never signed
 ```
 
-That last one is worth stating positively, with its one caveat: **an address
-that has never spent cannot have this problem**, because it has never signed.
-The caveat is that the statement is about the address, not the key: the same
-key behind another lock (another face, or its uncompressed form) may have
-signed there, and `check --key` asks the question at the key's level.
+That last one is worth stating positively, with its one caveat: **a key that
+has never signed, under any of the faces read here, cannot have this
+problem**. The caveat is the perimeter of "read here": for an address the
+faces are the three of its digest, so the other serialization of the same
+key (which hashes to another digest) is not among them; `--key` adds it, and
+`check --key` asks the exposure question at the same level.
 
 ## What the answer means, and what it does not
 

@@ -1216,9 +1216,12 @@ def _face_addresses(d20, form, derived_by=None, wrapped=True):
     return faces
 
 
-def key_entry(text, backends):
-    """→ KeyEntry: the key's digests, the faces, and one answer per
-    face, with the point's own revelation deciding the faces."""
+def key_digests(text):
+    """A `--key` as typed → (given_as, digests, note): the hash160s the
+    point can stand behind, each with the serialization it hashes and
+    how that serialization was obtained (None when it was given). One
+    parser for every command that takes a key: `check --key` and
+    `nonces address --key` ask different questions of the same faces."""
     try:
         raw = bytes.fromhex(text)
     except ValueError:
@@ -1247,6 +1250,36 @@ def key_entry(text, backends):
         raise AddressError(
             f"{len(raw)} bytes is neither a serialized public key "
             "(33 starting 02/03, 65 starting 04/06/07) nor a hash160 (20)")
+    return given_as, digests, note
+
+
+def key_faces(text):
+    """A `--key` as typed → (given_as, faces, note), the faces being
+    every address form the point can stand behind (`_face_addresses`
+    per digest; the 65-byte form has no segwit face)."""
+    given_as, digests, note = key_digests(text)
+    faces = []
+    for d20, form, derived_by in digests:
+        faces.extend(_face_addresses(d20, form, derived_by,
+                                     wrapped=form != "uncompressed"))
+    return given_as, faces, note
+
+
+def address_faces(address):
+    """An address → the faces of the key digest it carries. A p2pkh or
+    p2wpkh address names a hash160 of one serialization, so its three
+    faces (p2pkh, p2sh-p2wpkh, p2wpkh) are readable from the digest
+    alone; a script hash or a taproot program is one face, its own,
+    because a hash does not give back what it wraps."""
+    if address.kind in ("p2pkh", "p2wpkh"):
+        return _face_addresses(address.digest, "hash160")
+    return [Face(address, address.kind, None)]
+
+
+def key_entry(text, backends):
+    """→ KeyEntry: the key's digests, the faces, and one answer per
+    face, with the point's own revelation deciding the faces."""
+    given_as, digests, note = key_digests(text)
 
     # The point's own revelation: the keys partition under each digest.
     exp = backends.get("exposure")

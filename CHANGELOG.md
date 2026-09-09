@@ -45,7 +45,11 @@ with `v1.9.0`.
   table uses (a key beside the signature that links to the lock, a position
   in an m-of-m script or a tapscript template, the spent output) instead of
   by kind of address; an m-of-m multisig and a P2SH-P2WPKH input now get a
-  conclusion.
+  conclusion. It asks the question of the key: a p2pkh or p2wpkh address is
+  read under the three faces of its digest, with one "signed N times" line
+  per face, and a nonce repeated between two faces is reported as the key's
+  repeat; `--key <hex>` asks about a serialized key or a hash160 directly,
+  the 65-byte face named by one square root mod p and said so.
 - **`check --key`** asks about the point: both serializations, each behind
   its address forms, one entry per key with the faces under it, and the one
   square root the project takes named beside every derived face. The report
