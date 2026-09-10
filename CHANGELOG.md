@@ -21,10 +21,11 @@ contract, the **CLI** is convenience, and `reveal-archive-v2` inside a tool
 numbered 1.3.0 is not a discrepancy. Artifacts are identified by their
 fingerprint, never by a tag.
 
-## 2.0.1 — a witness commitment before SegWit is not a stripped block
+## 2.1.0 — the key under its faces, three readers that seek less, and a scan that reaches the end
 
-A fix, and one a scan of the chain cannot do without: **2.0.0 stops at
-mainnet block 434,499** and cannot get past it.
+The release 2.0.0 should have been: it carries the fix without which a scan
+of the chain does not finish. **2.0.0 stops at mainnet block 434,499** and
+cannot get past it.
 
 2.0.0 added a check that a block carrying a witness commitment must carry the
 witness data the commitment covers, because stripping the witnesses leaves
@@ -49,7 +50,26 @@ it.
 
 ### Command line
 
-Nothing changed.
+- **`nonces address` asks the question of the key, not of the one lock the
+  address names.** A `1…` or `bc1q…` address carries a hash160, and the same
+  twenty bytes stand behind three locks: all three are read, one "signed N
+  times / never signed" line each, every block fetched once, and the nonce
+  points compared across them, so a point repeated between two faces is
+  reported as the key repeating its nonce. A script hash or a taproot
+  program stays one lock, its own.
+- **`nonces address --key <hex>`**, new: a serialized public key or a
+  hash160 instead of an address, asked under every address form the point
+  can stand behind, the 65-byte face named from the 33-byte one by a single
+  square root mod p and said so wherever it was used.
+- **Three readers seek less, same bytes out.** `derived history` keeps only
+  the events it will print (the last `--limit` by height and ordinal) while
+  the rows stream, names those alone, and takes the balance from the same
+  pass instead of a second scan. `derived supply` walks the coinbases with
+  a forward cursor over three files (one read per chunk, not three seeks
+  per block); its CSV is unchanged. `check`'s payment-arc walk stops at the
+  same cap as the co-spend walk, and the report's `payment_arc` block
+  carries `bounded_by.arc_caps_hit`, so a list of arcs that is a floor
+  says so — the shape the CheckReport-v3 page already declared.
 
 ### Formats
 
@@ -57,15 +77,22 @@ Nothing changed. `reveal-archive-v3` and every other tag are the 2.0.0 ones.
 
 ### Do your artifacts still work?
 
-Yes, and nothing needs rebuilding **because of this**: the fix changes which
-blocks a scan accepts, never what it extracts from a block it accepted. An
-archive interrupted by this refusal resumes from its checkpoint with no loss.
-An artifact built by 2.0.0 up to a height below 434,499 is byte-identical to
-what 2.0.1 writes.
+Yes, and nothing here needs rebuilding. The fix changes which blocks a scan
+accepts, never what it extracts from a block it accepted, so an archive
+interrupted by that refusal resumes from its checkpoint with no loss and an
+artifact built by 2.0.0 below height 434,499 is byte-identical to what this
+release writes. The rest of the release reads artifacts; it does not write
+them.
 
 ### Documentation
 
-The parser's docstring names block 434,499 and states the rule.
+The parser's docstring names block 434,499 and states the rule. The second
+road (`reuse scan` and the cross-check) is described on its real terms: the
+maintainer's audit of the archive's road, run at every release that changes
+the extraction and published beside the figures, sharing the archive's
+classifier of revelations since 2.0.0, taking no new features. The
+`LinkageBackend` contract carries the arc walk's cap, and `nonce-check.md`
+asks its question at the key's level.
 
 ## 2.0.0 — one format per artifact, and the point as the identity of a key
 
@@ -91,11 +118,7 @@ with `v1.9.0`.
   table uses (a key beside the signature that links to the lock, a position
   in an m-of-m script or a tapscript template, the spent output) instead of
   by kind of address; an m-of-m multisig and a P2SH-P2WPKH input now get a
-  conclusion. It asks the question of the key: a p2pkh or p2wpkh address is
-  read under the three faces of its digest, with one "signed N times" line
-  per face, and a nonce repeated between two faces is reported as the key's
-  repeat; `--key <hex>` asks about a serialized key or a hash160 directly,
-  the 65-byte face named by one square root mod p and said so.
+  conclusion.
 - **`check --key`** asks about the point: both serializations, each behind
   its address forms, one entry per key with the faces under it, and the one
   square root the project takes named beside every derived face. The report
@@ -117,15 +140,6 @@ with `v1.9.0`.
   next interval, and reads its sidecar when there is one; its rankings are
   worded as what they are (locks and value still unspent at the snapshot, by
   era of their revelation).
-- **Three readers seek less, same bytes out.** `derived history` keeps only
-  the events it will print (the last `--limit` by height and ordinal) while
-  the rows stream, names those alone, and takes the balance from the same
-  pass instead of a second scan. `derived supply` walks the coinbases with
-  a forward cursor over three files (one read per chunk, not three seeks
-  per block); its CSV is unchanged. `check`'s payment-arc walk stops at the
-  same cap as the co-spend walk, and the report's `payment_arc` block
-  carries `bounded_by.arc_caps_hit`, so a list of arcs that is a floor
-  says so.
 - Removed: `graph fingerprint --reseal`, and every reader of an earlier
   format (below).
 
@@ -182,11 +196,7 @@ format per major; the reuse curve is described everywhere as what it is, a
 survivorship series over one snapshot; the archive is said to date every
 revelation; the doctrine reads "no point arithmetic; one field square root,
 in `check --key`". `docs/contracts/Artifact.md` carries the second statement
-and the re-seal; `NonceExposureBackend.md` the v2 join. The second road
-(`reuse scan` and the cross-check) is described on its real terms: the
-maintainer's audit of the archive's road, run at every release that changes
-the extraction and published beside the figures, sharing the archive's
-classifier of revelations since this release, taking no new features.
+and the re-seal; `NonceExposureBackend.md` the v2 join.
 
 ## 1.9.0 — the timeline: the scan history.bin was laid out for
 

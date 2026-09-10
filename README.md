@@ -192,8 +192,10 @@ The same seven, with what the answer contains and where its edges are.
   different messages with the same nonce hands the private key to anyone who
   noticed, which is why the census records every signature's nonce point,
   ECDSA and schnorr alike. `nonces address` asks the question about one of
-  your addresses, from your own node; `nonces groups` asks it of the whole
-  chain at once. The census is careful about what a repetition means: a
+  your addresses, from your own node, at the level of the KEY: the three
+  locks the address's digest stands behind are read together, so a nonce
+  repeated between two of them is reported as the key's, and `--key` takes
+  the key itself. `nonces groups` asks it of the whole chain at once. The census is careful about what a repetition means: a
   repeated point is not yet a reused nonce (the same signature copied twice
   shares the point and exposes nothing), and where the evidence cannot
   settle the difference, the output says undecided instead of guessing.
