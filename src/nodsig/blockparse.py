@@ -578,8 +578,22 @@ def _verify_witness_commitment(transactions):
     none to verify and pass it, with every witness-borne key and
     signature silently gone. The commitment output sits UNDER the Merkle
     root and cannot be stripped, so it is looked for first, and where it
-    is, the coinbase witness must be there and must verify — Core's own
-    rule (bad-witness-nonce-size, bad-witness-merkle-match).
+    is, the witness data must verify against it — Core's own rule
+    (bad-witness-nonce-size, bad-witness-merkle-match).
+
+    A commitment with no witness byte anywhere in the block is two
+    different things, and they are told apart by the commitment itself
+    rather than by a height. Mining software put the template's
+    commitment in the coinbase well before SegWit activated: those
+    blocks have no SegWit transaction to commit to and no coinbase
+    witness to carry a reserved value, so what the commitment covers is
+    the all-legacy wtxids under the canonical reserved value of 32 zero
+    bytes, and it verifies. Mainnet block 434,499 is one of them, and
+    refusing it would stop a scan of the chain in October 2016. A block
+    that HAD witnesses and lost them in transit also arrives with a
+    commitment and no witness byte, but that commitment covers wtxids
+    the delivered bytes no longer hold, so it cannot verify. Hence: no
+    height, no consensus opinion, just the commitment, verified.
     """
     coinbase = transactions[0]
     commitment = None
@@ -598,16 +612,27 @@ def _verify_witness_commitment(transactions):
         raise ParseError("block with witness data but no witness "
                          "commitment in the coinbase")
 
+    witness_root = merkle_root([bytes(32)]
+                               + [tx.wtxid for tx in transactions[1:]])
+    if not has_witness:
+        # No transaction is SegWit-serialized, the coinbase included
+        # (a coinbase carrying a witness would be one), so there is no
+        # reserved value to read: the canonical 32 zero bytes are the
+        # only candidate, and whether they answer decides which of the
+        # two blocks above this is.
+        if sha256d(witness_root + bytes(32)) == commitment:
+            return
+        raise ParseError(
+            "the coinbase commits to witness data this block does not "
+            "carry, and the commitment does not cover the transactions "
+            "as delivered: the witnesses were stripped in transit (the "
+            "commitment is under the Merkle root and survives; they are "
+            "not)")
+
     witness = coinbase.inputs[0].witness
     if len(witness) != 1 or len(witness[0]) != 32:
         raise ParseError("coinbase witness is not the single 32-byte "
-                         "reserved value required by BIP 141"
-                         + ("" if has_witness else
-                            " (a block carrying a witness commitment "
-                            "was delivered without its witnesses)"))
-
-    witness_root = merkle_root([bytes(32)]
-                               + [tx.wtxid for tx in transactions[1:]])
+                         "reserved value required by BIP 141")
     if sha256d(witness_root + witness[0]) != commitment:
         raise ParseError("witness commitment mismatch: the witness bytes "
                          "do not match the coinbase (corrupted bytes?)")

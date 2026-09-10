@@ -21,6 +21,52 @@ contract, the **CLI** is convenience, and `reveal-archive-v2` inside a tool
 numbered 1.3.0 is not a discrepancy. Artifacts are identified by their
 fingerprint, never by a tag.
 
+## 2.0.1 — a witness commitment before SegWit is not a stripped block
+
+A fix, and one a scan of the chain cannot do without: **2.0.0 stops at
+mainnet block 434,499** and cannot get past it.
+
+2.0.0 added a check that a block carrying a witness commitment must carry the
+witness data the commitment covers, because stripping the witnesses leaves
+every txid, the Merkle root and the block hash intact, and the four integrity
+checks passed such a block with every witness-borne key silently gone. The
+check demanded the coinbase's reserved value wherever it saw a commitment.
+Mining software, however, emitted the template's commitment long before the
+rules that give it meaning: block 434,499 (October 2016) has 2,712
+transactions, not one of them SegWit-serialized, no witness byte anywhere,
+and a commitment in its coinbase. It is a legal block, 1.x archived it, and
+2.0.0 refuses it.
+
+The commitment now decides, instead of its mere presence. Where a block
+carries a commitment and no witness byte at all, the commitment is verified
+against the canonical reserved value of 32 zero bytes: a pre-activation
+block's commitment covers exactly the all-legacy wtxids under that value and
+verifies, while a block whose witnesses were stripped in transit carries a
+commitment over wtxids the delivered bytes no longer hold, and cannot. No
+height and no activation rule enter the parser, and the protection 2.0.0
+added is unchanged — the test that strips a real SegWit block still refuses
+it.
+
+### Command line
+
+Nothing changed.
+
+### Formats
+
+Nothing changed. `reveal-archive-v3` and every other tag are the 2.0.0 ones.
+
+### Do your artifacts still work?
+
+Yes, and nothing needs rebuilding **because of this**: the fix changes which
+blocks a scan accepts, never what it extracts from a block it accepted. An
+archive interrupted by this refusal resumes from its checkpoint with no loss.
+An artifact built by 2.0.0 up to a height below 434,499 is byte-identical to
+what 2.0.1 writes.
+
+### Documentation
+
+The parser's docstring names block 434,499 and states the rule.
+
 ## 2.0.0 — one format per artifact, and the point as the identity of a key
 
 The first major after the repository went public, and the one that trades

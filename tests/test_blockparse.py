@@ -346,6 +346,61 @@ def test_failure_paths():
           "malformed push")
 
 
+def build_pre_activation(good=True):
+    """A block as they were mined in October 2016: every transaction
+    legacy, no witness byte anywhere, and a coinbase carrying the
+    template's witness commitment all the same — computed, as mining
+    software computes it, over the all-legacy wtxids with the canonical
+    reserved value of 32 zero bytes.
+
+    `good=False` corrupts the commitment by one byte, which is what a
+    block that HAD witnesses and lost them in transit looks like from
+    here: a commitment that does not cover the delivered transactions.
+    """
+    raw1, txid1, wtxid1 = w_tx(
+        1, [w_input(b"\xAA" * 32, 0, b"\x51", 0xFFFFFFFF)],
+        [w_output(10, P2PKH_SPK)], 0)
+    commit = w_sha256d(w_merkle([bytes(32), wtxid1]) + bytes(32))
+    if not good:
+        commit = bytes([commit[0] ^ 0xFF]) + commit[1:]
+    raw0, txid0, _ = w_tx(
+        1, [w_input(bytes(32), 0xFFFFFFFF, b"\x03abc", 0xFFFFFFFF)],
+        [w_output(50 * 100_000_000, P2PKH_SPK),
+         w_output(0, b"\x6a\x24\xaa\x21\xa9\xed" + commit)], 0)
+    raw, block_hash = w_block(4, bytes(32), 1_475_000_000, 0x1800_0000,
+                              7, [raw0, raw1], [txid0, txid1])
+    return raw, block_hash
+
+
+def test_a_commitment_before_activation_verifies_against_zero():
+    """Mainnet block 434,499 (October 2016) carries the commitment
+    `6a24aa21a9ed7727…` in a coinbase with no witness, in a block with
+    no SegWit transaction: legal, and the chain has many like it, since
+    mining software emitted the template's commitment long before the
+    rules that give it meaning. A parser that demanded the coinbase
+    witness wherever it saw a commitment stopped a scan of the chain
+    there. What tells that block from one whose witnesses were stripped
+    is the commitment itself: over the all-legacy wtxids and 32 zero
+    bytes, the real one verifies."""
+    raw, block_hash = build_pre_activation()
+    block = bp.parse_block(raw)
+    check(block.header.hash == block_hash, "the block must parse whole")
+    check(not any(tx.is_segwit for tx in block.transactions),
+          "no transaction here is SegWit-serialized")
+    check(block.transactions[0].inputs[0].witness == [],
+          "and the coinbase carries no witness at all")
+
+    bad, _ = build_pre_activation(good=False)
+    try:
+        bp.parse_block(bad)
+        fail("a commitment that covers other transactions was accepted")
+    except bp.ParseError as e:
+        check("stripped in transit" in str(e),
+              f"the refusal must name what it suspects: {e}")
+    print("ok  pre-activation: a template commitment with no witness "
+          "verifies against 32 zero bytes; one that does not is refused")
+
+
 def test_a_block_delivered_without_its_witnesses_is_refused():
     """Stripping the witnesses changes no txid, so the Merkle root and
     the block hash still match: the four integrity checks used to pass
