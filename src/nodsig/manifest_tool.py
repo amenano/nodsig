@@ -21,15 +21,23 @@ class ManifestError(RuntimeError):
 
 
 def main(argv=None):
+    # No subparser here, and that is the convention rather than a
+    # shortcut: `cli._resolve` has already eaten both the group and the
+    # subcommand for a grouped module, so a parser that asked for
+    # `reseal` again would be handed the directory in its place and
+    # refuse every real invocation. Every other grouped module
+    # (`curve_deltas`, `block_dates`, …) parses its own arguments
+    # directly, and this one did not, so `nodsig manifest reseal <dir>`
+    # was unusable while the surface tests still counted the command as
+    # present.
     p = argparse.ArgumentParser(
-        prog="nodsig manifest",
-        description="re-seal a manifest under this release's statement "
-                    "(the artifact's bytes and fingerprint do not move)")
-    sub = p.add_subparsers(dest="cmd", required=True)
-    r = sub.add_parser("reseal", help="recompute the statement, and give "
-                                      "the declared parent its coverage")
-    r.add_argument("directory", help="the artifact directory")
-    r.add_argument("--parent", help="the parent artifact's directory, when "
+        prog="nodsig manifest reseal",
+        description="recompute the statement of a sealed manifest under "
+                    "this release's recipe, and give the declared parent "
+                    "its coverage (the artifact's bytes and fingerprint "
+                    "do not move)")
+    p.add_argument("directory", help="the artifact directory")
+    p.add_argument("--parent", help="the parent artifact's directory, when "
                                     "the manifest declares one without "
                                     "its coverage")
     args = p.parse_args(argv)

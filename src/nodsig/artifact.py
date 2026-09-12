@@ -226,7 +226,7 @@ def statement_digest(manifest):
     return hashlib.sha256(canonical_statement(manifest)).hexdigest()
 
 
-def reseal(directory, error, parent_dir=None, out=sys.stdout,
+def reseal(directory, error, parent_dir=None, out=None,
            manifest_name="manifest.json"):
     """Re-seal a manifest under this release's statement without touching
     a byte of the artifact: the identity and the fingerprint stay, the
@@ -236,6 +236,10 @@ def reseal(directory, error, parent_dir=None, out=sys.stdout,
     `manifest.nodsig-statement-v1.json`, so a re-seal adds a statement
     and destroys none. For the artifacts 2.0.0 does not rebuild.
     """
+    # Bound here and not in the signature: a default evaluated at
+    # definition holds the stream of that moment, so a caller that
+    # redirects stdout (a test, a tee) would never see this line.
+    out = out or sys.stdout
     path = os.path.join(directory, manifest_name)
     if not os.path.exists(path):
         raise error(f"no {manifest_name} in {directory}: nothing to re-seal")

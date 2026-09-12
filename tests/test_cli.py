@@ -344,3 +344,71 @@ class TestCredentialsNeverOnTheCommandLine(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_every_grouped_subcommand_is_reachable_with_its_own_arguments(tmp_path):
+    """The dispatch, exercised rather than enumerated.
+
+    `cli._resolve` eats the group AND the subcommand before handing the
+    rest to the module, so a module that declares a subparser of its own
+    receives the first real argument where it expects the subcommand's
+    name and refuses. `nodsig manifest reseal <dir>` shipped that way in
+    2.1.0: the surface tests above counted the command as present, the
+    documentation named it, and nobody had run it.
+
+    This runs each grouped subcommand with a plausible argument and
+    accepts anything except the one failure that dispatch causes:
+    argparse rejecting that argument as an invalid subcommand choice."""
+    import contextlib
+    import io as _io
+    from nodsig import cli
+    for group, subs in cli.GROUPS.items():
+        if not isinstance(subs, dict):
+            continue
+        for sub in subs:
+            err = _io.StringIO()
+            with contextlib.redirect_stderr(err), \
+                    contextlib.suppress(SystemExit, Exception):
+                cli.main([group, sub, str(tmp_path)])
+            text = err.getvalue()
+            assert "invalid choice" not in text, (
+                f"`nodsig {group} {sub} <arg>` never reaches its tool: "
+                f"the module parses the subcommand again ({text.strip()})")
+
+
+def test_manifest_reseal_runs_through_the_command_line(tmp_path):
+    """End to end, on a real sealed manifest: the command the docs name
+    must recompute the statement and say so."""
+    import json
+    import contextlib
+    import io as _io
+    from nodsig import cli
+    from nodsig.artifact import make_identity, seal_manifest
+
+    parent = tmp_path / "parent"
+    child = tmp_path / "child"
+    parent.mkdir()
+    child.mkdir()
+    fp = "b" * 64
+    pman = seal_manifest("parent-v2",
+                         make_identity("parent-v2", 1, 4, [("only", fp)]), {})
+    pman["fingerprint"] = fp
+    (parent / "manifest.json").write_text(json.dumps(pman))
+
+    cman = seal_manifest("child-v1",
+                         make_identity("child-v1", 1, 4, [("only", "a" * 64)]),
+                         {"parent": {"format": "parent-v2", "fingerprint": fp,
+                                     "coverage": {"from": 1, "to": 4}}})
+    before = cman["statement"]
+    del cman["build"]["parent"]["coverage"]
+    cman["statement"] = "00" * 32
+    (child / "manifest.json").write_text(json.dumps(cman))
+
+    out = _io.StringIO()
+    with contextlib.redirect_stdout(out):
+        cli.main(["manifest", "reseal", str(child), "--parent", str(parent)])
+    after = json.loads((child / "manifest.json").read_text())
+    assert after["statement"] == before, "the statement must be recomputed"
+    assert after["build"]["parent"]["coverage"] == {"from": 1, "to": 4}
+    assert (child / "manifest.nodsig-statement-v1.json").exists()
+    assert "re-sealed" in out.getvalue()
