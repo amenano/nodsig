@@ -98,7 +98,7 @@ from nodsig.sightings import (FLAG_INNER_SIG, FLAG_INNER_WIT, FLAG_OUT,
                               FLAG_SIG, FLAG_WIT, burns_for, candidate_shape,
                               is_control_block, key_records, leaf_xonly_keys,
                               new_filter_stats, output_keys, script_records,
-                              taproot_body)
+                              taproot_body, witness_key_records)
 from nodsig.blockparse import ParseError, script_pushes
 
 # The hash primitives (sha256d / ripemd160 / hash160) live in their own
@@ -655,10 +655,11 @@ def extract_reveals(tx_in, faces, cosigners, stats):
     unlocking data plausibly reveals and lets the lock set decide. The
     WALK is this road's own, written apart from the archive's on
     purpose: every key-shaped scriptSig push, every key-shaped witness
-    item outside the taproot signature slots, the last scriptSig push
-    and the last witness item as candidate scripts, the keys inside a
-    kept candidate, the internal key and the leaf keys of a taproot
-    script path. What a key looks like, which candidate can be a
+    item wherever it sits, the last scriptSig push and the last witness
+    item as candidate scripts, the keys inside a kept candidate, the
+    internal key and the leaf keys of a taproot script path. No
+    position is excluded: see `sightings.witness_key_records` for why
+    excluding one cost 804 keys. What a key looks like, which candidate can be a
     script, and what each sighting burns under `faces`/`cosigners` are
     `sightings`' rules, shared with the archive so the cross-check
     compares the walks and not two copies of one rule.
@@ -682,9 +683,7 @@ def extract_reveals(tx_in, faces, cosigners, stats):
 
     witness = list(tx_in.witness)
     slots, key_path = nonces_taproot_slots(witness)
-    for item in witness:
-        if not any(item is slot for slot in slots):
-            key_records(found, item, FLAG_WIT)
+    witness_key_records(found, witness)
 
     if sig_pushes:
         last = sig_pushes[-1]

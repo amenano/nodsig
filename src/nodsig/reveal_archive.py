@@ -126,7 +126,7 @@ from nodsig.sightings import (FLAG_INNER_SIG, FLAG_INNER_WIT, FLAG_OTHER_FACE,
                               MAX_INNER_KEYS, burns_for, candidate_shape,
                               is_control_block, key_records, leaf_xonly_keys,
                               new_filter_stats, output_keys, script_records,
-                              taproot_body)
+                              taproot_body, witness_key_records)
 from nodsig.progress import Pace
 from nodsig.artifact import (WallClock, declared_parent, make_identity, producer,
                              seal_manifest, verify_sealed)
@@ -290,9 +290,7 @@ def extract_revelations(tx_in, stats, sig_pushes=None):
 
     witness = tx_in.witness
     slots, key_path = nonces._taproot_slots(witness)
-    for item in witness:
-        if not any(item is slot for slot in slots):
-            key_records(out, item, FLAG_WIT)
+    witness_key_records(out, witness)
 
     # (candidate script, category, inner-key flag, sits in a slot)
     candidates = []

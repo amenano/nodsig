@@ -1525,3 +1525,86 @@ def test_the_scan_records_its_seconds_in_every_artifact_it_emits(tmp, blocks):
         server.shutdown()
     print("ok  scan seconds: recorded in all four artifacts, and they "
           "accumulate across a resume")
+
+
+# ---------------------------------------------------------------------------
+# The rule with no exceptions: exclude only on proof
+# ---------------------------------------------------------------------------
+
+def _witness_shapes(key33, key65):
+    """Witness layouts that between them put a key in every position a
+    real spend does, including the ones a taproot slot rule calls
+    "somewhere a signature could sit"."""
+    sig71 = b"\x30" * 71
+    script97 = b"\x63" + b"\x51" * 96          # OP_IF …: a conditional script
+    return {
+        "p2wpkh": [sig71, key33],
+        # A Lightning HTLC on the chain: signature, KEY, preimage,
+        # branch, script. The key is the second item of five.
+        "htlc": [sig71, key33, b"\xAB" * 32, b"\x01", script97],
+        "p2wsh multisig": [b"", sig71, sig71, key33, script97],
+        "uncompressed in the middle": [sig71, key65, b"\x01", script97],
+    }
+
+
+def test_the_archive_excludes_a_key_only_on_proof_never_on_position():
+    """The invariant, not a list of cases: wherever a key-shaped item
+    sits in a witness, the archive holds its digest.
+
+    A false positive here is a record that can only match its own
+    preimage, so it is inert; a false negative makes the archive answer
+    "protected" about something the chain published. 2.0.0 excluded by
+    position and lost 804 keys on the real chain."""
+    from nodsig.blockparse import TxIn
+    from nodsig.keyforms import canonical_key
+    key33 = b"\x02" + bytes(range(1, 33))
+    key65 = b"\x04" + bytes(range(1, 65))
+    for name, wit in _witness_shapes(key33, key65).items():
+        txin = TxIn(bytes(32), 0, b"", 0xFFFFFFFF, list(wit))
+        got = ra.extract_revelations(txin, ra.new_filter_stats())
+        keys = {d for cat, d, _f in got if cat == "keys"}
+        for item in wit:
+            ck = canonical_key(item)
+            if ck is None:
+                continue
+            canon, seen, _form = ck
+            with_ = f"{name}: the key at that position is missing"
+            check(canon in keys, with_)
+            if seen is not None:
+                check(seen in keys, with_ + " (form seen)")
+    print("ok  keys: no position is excluded, in any witness shape")
+
+
+def test_what_the_archive_does_exclude_is_proved_impossible():
+    """The other half of the same rule. A control block and an annex
+    cannot be scripts — their first byte executes and fails — so they
+    are kept out of the script partitions, and that exclusion is a
+    proof rather than a shape."""
+    from nodsig.sightings import candidate_shape, is_control_block
+    stats = ra.new_filter_stats()
+    control = b"\xc0" + b"\x11" * 32
+    check(is_control_block(control), "the fixture must be a control block")
+    check(candidate_shape(control, stats, witness_len=2) == "control_or_annex",
+          "a control block must be excluded from the script partitions")
+    annex = b"\x50" + b"\x22" * 10
+    check(candidate_shape(annex, stats, witness_len=2) == "control_or_annex",
+          "an annex must be excluded too")
+
+
+def test_the_two_roads_read_a_witness_the_same_way():
+    """The loop lived twice, in `reveal_archive` and in `reuse_scan`,
+    which is how both roads came to share the defect instead of the
+    cross-check catching it. One function now, and this pins it."""
+    from nodsig.blockparse import TxIn
+    key33 = b"\x03" + bytes(range(2, 34))
+    key65 = b"\x04" + bytes(range(2, 66))
+    for name, wit in _witness_shapes(key33, key65).items():
+        txin = TxIn(bytes(32), 0, b"", 0xFFFFFFFF, list(wit))
+        recs = ra.extract_revelations(txin, ra.new_filter_stats())
+        from nodsig.sightings import burns_for
+        a = set()
+        for cat, digest, flags in recs:
+            a.update(burns_for(cat, digest, flags, True, True))
+        b = set(rs.extract_reveals(txin, True, True, rs.new_filter_stats()))
+        check(a == b, f"{name}: the two roads disagree: {a ^ b}")
+    print("ok  the two roads extract the same records from a witness")

@@ -81,6 +81,36 @@ def key_records(out, item, provenance, xonly=False):
     return True
 
 
+def witness_key_records(out, witness):
+    """Every key-shaped item of a witness, archived as a key.
+
+    No position is excluded, and that is the rule rather than an
+    oversight. The archive's principle, stated where keys are
+    recognised: over-collect, never under-collect. A false positive is
+    a record of twenty-four bytes that can only ever match its own
+    preimage, so it is inert; a false negative makes the archive answer
+    "protected" about something the chain published, which is a lie.
+
+    2.0.0 skipped the items a taproot spend could put a Schnorr
+    signature in, to stop a 65-byte signature with lead 04/06/07 from
+    being archived as an uncompressed key. That false positive is the
+    harmless kind, and the exclusion bought nothing for it: on the
+    chain through 957,301 it dropped 804 key digests and with them
+    1,615 locks that 1.9.0 reported as exposed, because a P2WSH spend
+    of a conditional script ([signature, key, preimage, branch,
+    script]) puts a genuine key exactly there. Position is not proof.
+    `_taproot_slots` stays where it was written for, the nonce census,
+    where a false positive invents a point and therefore a repetition
+    that never happened.
+
+    One function for both scans: the same loop written twice in two
+    files is how the cross-check came to share a defect instead of
+    catching it.
+    """
+    for item in witness:
+        key_records(out, item, FLAG_WIT)
+
+
 def is_control_block(item):
     return (len(item) >= 33 and (len(item) - 33) % 32 == 0
             and item[0] & 0xfe == 0xc0)
