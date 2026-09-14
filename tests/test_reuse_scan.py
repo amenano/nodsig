@@ -400,7 +400,8 @@ def test_extraction():
 def build_chain():
     """Four linked blocks whose spends hit exactly EXPECT_FULL:
 
-    height 2: legacy [sig, PUB1]        → p2pkh H1 + p2wpkh H1 (face)
+    height 2: legacy [sig, PUB1]        → p2pkh H1 + p2wpkh H1 (face);
+              its outputs create the P2SH H2 and P2WSH S1 locks
     height 3: SegWit [sig, PUB3]        → p2sh WRAP3 (wrapped face)
               SegWit [sig, WSCRIPT]     → p2wsh S1
     height 4: legacy P2SH redeem spend  → p2sh H2 + p2pkh(PUB2) (cosigner)
@@ -429,12 +430,17 @@ def build_chain():
     cb, cbid, _ = coinbase(b"\x01h1")
     add(1, [cb], [cbid])
 
-    # height 2: the P2PKH spend of PUB1.
+    # height 2: the P2PKH spend of PUB1. Its outputs CREATE the P2SH lock
+    # of REDEEM and the P2WSH lock of WSCRIPT that heights 3 and 4 open:
+    # a lock in the snapshot is an output the chain made, and the archive
+    # keeps a script only when the chain shows its program was created.
     cb, cbid, _ = coinbase(b"\x01h2")
     spend = bytes([71]) + FAKE_SIG + bytes([33]) + PUB1
     tx, txid, _ = tbw.w_tx(
         2, [tbw.w_input(b"\xA1" * 32, 0, spend, 0xFFFFFFFF)],
-        [tbw.w_output(10, tbw.P2PKH_SPK)], 0)
+        [tbw.w_output(10, tbw.P2PKH_SPK),
+         tbw.w_output(700, b"\xa9\x14" + H2 + b"\x87"),
+         tbw.w_output(1500, b"\x00\x20" + S1)], 0)
     add(2, [cb, tx], [cbid, txid])
 
     # height 3: SegWit spends (P2WPKH of PUB3, P2WSH of WSCRIPT); the
