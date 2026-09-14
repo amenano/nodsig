@@ -21,6 +21,58 @@ contract, the **CLI** is convenience, and `reveal-archive-v2` inside a tool
 numbered 1.3.0 is not a discrepancy. Artifacts are identified by their
 fingerprint, never by a tag.
 
+## 3.0.2 (the fusion sorts the runs instead of merging them)
+
+A release of speed and nothing else, like 3.0.1: the same bytes, the same
+fingerprints, faster where 3.0.1 did not look.
+
+The first fusion of a scan has no previous generation to gallop over: a few
+thousand sorted runs of random digests, every record the runs' turn, so the
+shared fusion paid Python's per-record price three times (the run's
+generator, the heap's step, the writer's loop): 3.25 microseconds per record
+read on the real pile, and the 2 h 19 min the 2.1.0 fusion took was that,
+not the disk (8 MB/s read). Now the runs come in by slabs and a k-way stage
+gathers, round by round, every record below a key all sources are known to
+have reached, sorts them in one list (timsort finds the runs and merges
+them in C) and finds the equal keys by column instead of by record; the
+proof joins the candidates with the programs as a set operation and cuts
+each blob around the few it proves. The previous generation, when there is
+one, still gallops over the result.
+
+On 16 real runs per category, read from a running scan's pile (34 million
+keys, 25 million script candidates, 4.6 million programs), with the same
+sha256 of every file written under both releases:
+
+| fusion | 3.0.1 | 3.0.2 |
+|---|---|---|
+| keys | 3.25 µs/record | 1.26 |
+| programs | 3.85 | 1.51 |
+| proof of the candidates | 2.72 per candidate | 1.49 |
+
+Projected on the pile of a full scan, the first `archive merge` goes from
+about four to five hours to about two. The index's, the derivatives', the
+nonces' and the first-spend fusions take the same road, unmeasured.
+
+### Command line
+
+Nothing changed.
+
+### Formats
+
+Nothing changed, and no artifact byte moves.
+
+### Do your artifacts still work?
+
+Yes, all of them, with the same fingerprints. A scan started under 3.0.0 or
+3.0.1 can be fused under 3.0.2: the fusion reads the same runs and writes
+the same bytes whichever release wrote them.
+
+### Documentation
+
+`docs/ARCHITECTURE.md` no longer says the archive keeps a fusion of its
+own: it has shared `genstore.merge_to_file` since 3.0.0, and the paragraph
+now describes the one function, its three rules and its two roads.
+
 ## 3.0.1 (the scan does each piece of work once)
 
 A release of speed and nothing else: the same bytes, the same
