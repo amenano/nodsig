@@ -179,13 +179,16 @@ something else. An audit finds what it looks for; a test looks every time.
 
 **Deliberately not merged, or pending:**
 
-- The k-way **merge** stays format-specialised, not one function: the archive
-  OR-dedups a `(digest, flag)` stream, while the index/derived merges sample
-  ladders and keep-last. Only the pieces below them (`read_fixed`, `write_run`,
-  the budget) are shared. The archive keeps its own fusion for the same reason
-  — but it now follows `genstore`'s **commit discipline** (write generation
-  N+1 beside N, commit the manifest, then delete), which is invariant 10 and
-  not a detail either implementation gets to choose.
+- The k-way **merge** is one function (`genstore.merge_to_file`) with three
+  rules for equal keys — keep-last (the index), keep-both-and-count (the
+  spends), reduce (the archive ORs its flags and keeps the lowest height) —
+  and two roads that the suite pins to the same bytes: the previous
+  generation gallops (stretches nothing interleaves move whole), the runs go
+  through a sort-based k-way stage by slabs. The archive keeps its own
+  orchestration around it (the proof's join, its two manifests), and follows
+  `genstore`'s **commit discipline** (write generation N+1 beside N, commit
+  the manifest, then delete), which is invariant 10 and not a detail either
+  implementation gets to choose.
 - **`records`** (per-format `.bin` field codecs) and **`addr`** (base58check,
   bech32, `decode_address`, `script_pubkey` — today single-source in
   `check_addresses`) are candidates, extracted on demand, not before.

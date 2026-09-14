@@ -438,10 +438,12 @@ def reference(streams, rec, key_len, dedup_len, every, dedup, combine=None):
 
 
 def fuse_one_way(tmp, gallop, base_rows, runs_rows, rec, key_len,
-                 dedup_len, every, dedup, slab, want_log, combine=None):
+                 dedup_len, every, dedup, slab, want_log, combine=None,
+                 runs_as="streams"):
     """One fusion, with the previous generation as a cursor (the gallop)
-    or as one more stream (the plain road). Returns everything the
-    fusion is answerable for."""
+    or as one more stream (the plain road), and the runs as record
+    streams or, with `runs_as="cursors"`, as slab cursors through the
+    k-way stage. Returns everything the fusion is answerable for."""
     d = os.path.join(tmp, "gallop")
     os.makedirs(d, exist_ok=True)
     files = []
@@ -457,11 +459,16 @@ def fuse_one_way(tmp, gallop, base_rows, runs_rows, rec, key_len,
         p, sha = files[0]
         base = _BaseCursor(p, rec, sha, slab, StoreError)
         todo = files[1:]
-    sources = [read_fixed(p, rec, sha, slab) for p, sha in todo]
+    sources, cursors = [], ()
+    if runs_as == "cursors":
+        cursors = [_BaseCursor(p, rec, sha, slab, StoreError)
+                   for p, sha in todo]
+    else:
+        sources = [read_fixed(p, rec, sha, slab) for p, sha in todo]
     log = [] if want_log else None
     records, sha, lad_sha, dups = merge_to_file(
         sources, out, rec, key_len, lad, every, dedup, dedup_len,
-        dup_log=log, base=base, combine=combine)
+        dup_log=log, base=base, combine=combine, cursors=cursors)
 
     with open(out, "rb") as f:
         body = f.read()
@@ -765,3 +772,129 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+def test_bulk_stage_answers_exactly_as_the_per_record_roads(tmp):
+    """The k-way stage by slabs (`_BulkFusion`): runs handed in as
+    cursors must fuse to the reference's bytes, ladder, count and log,
+    with and without a base to gallop over, under every rule. The
+    slabs are tiny on purpose: a threshold then falls inside almost
+    every slab, keys straddle slab ends and are carried by `refill`,
+    and a round often holds one record or none. The narrow alphabets
+    make equal keys the rule, so groups of three and more are reduced
+    in one blob; the wide one makes the mask inexact and settles the
+    candidates the slow way. The stage is counted, so a matrix that
+    never entered it cannot pass."""
+    rng = random.Random(20260914)
+    rounds = []
+    real = genstore._BulkFusion._round
+
+    def counting(self):
+        got = real(self)
+        if got:
+            rounds.append(len(got))
+        return got
+
+    genstore._BulkFusion._round = counting
+    try:
+        for case in range(200):
+            rec = rng.choice((4, 6, 12, 24, 33))
+            key_len = rng.randint(1, rec)
+            dedup_len = rng.randint(key_len, rec)
+            every = rng.choice((1, 2, 4, 16, 1024))
+            rule = rng.choice(("last", None, "combine"))
+            span = rng.choice((2, 3, 5, 256))
+            slab = rng.choice((rec, rec * 2, rec * 7, rec * 64, 8 << 20))
+            want_log = rng.random() < 0.5
+            with_base = rng.random() < 0.5
+
+            def rows(n):
+                out = []
+                for _ in range(n):
+                    key = bytes(rng.randrange(span) for _ in range(key_len))
+                    tail = bytes(rng.randrange(256)
+                                 for _ in range(rec - key_len))
+                    out.append(key + tail)
+                return sorted(out)
+
+            base_rows = rows(rng.choice((0, 1, 5, 40, 300))) if with_base \
+                else []
+            runs_rows = [rows(rng.choice((0, 1, 3, 30, 200)))
+                         for _ in range(rng.randint(0, 12))]
+            if rule == "combine":
+                dedup, combine = None, _archive_like
+                # No caller logs pairs under `combine`, and the two
+                # roads log the running reduction where the reference
+                # logs the rows: not asked for, as the gallop's test
+                # does not ask for it.
+                want_log = False
+                # The archive's combine slices at fixed offsets: give
+                # it the shape it expects when the rule is in play.
+                rec, key_len, dedup_len = 8, 4, 4
+                base_rows = [r[:4] + r[4:5] + r[5:8] for r in
+                             (rows(len(base_rows)) if base_rows else [])]
+                runs_rows = [rows(len(rr)) for rr in runs_rows]
+            else:
+                dedup, combine = rule, None
+            want = reference([base_rows] + runs_rows, rec, key_len,
+                             dedup_len, every, dedup, combine=combine)
+            for road in ("streams", "cursors"):
+                got = fuse_one_way(tmp, with_base, base_rows, runs_rows,
+                                   rec, key_len, dedup_len, every, dedup,
+                                   slab, want_log, combine=combine,
+                                   runs_as=road)
+                names = ("bytes", "ladder", "dups", "dup_log")
+                for name, a, b in zip(names, want, got):
+                    if b is None:
+                        continue
+                    check(a == b,
+                          f"case {case} ({road}, base={with_base} rec={rec} "
+                          f"key={key_len} dedup_len={dedup_len} "
+                          f"every={every} rule={rule} span={span} "
+                          f"slab={slab} log={want_log}): {name} differs\n"
+                          f"   want {a!r}\n   got  {b!r}")
+    finally:
+        genstore._BulkFusion._round = real
+    check(len(rounds) > 500 and max(rounds) > 3,
+          f"the k-way stage ran {len(rounds)} rounds, widest {max(rounds or [0])}"
+          ": a matrix that never reaches it proves nothing about it")
+    print(f"ok  bulk stage: 200 randomized fusions match the reference "
+          f"({len(rounds)} rounds, up to {max(rounds)} sources in one)")
+
+
+def test_ladder_writer_samples_a_blob_as_it_samples_records(tmp):
+    """`LadderWriter.add_blob` is arithmetic on a stretch; `add` is a
+    test per record. Interleaving the two in every shape must leave
+    the ladder, the sha and the count the per-record writer leaves."""
+    rng = random.Random(7)
+    for case in range(60):
+        rec = rng.choice((3, 8, 24))
+        key_len = rng.randint(1, rec)
+        every = rng.choice((1, 2, 3, 16))
+        rows = [bytes(rng.randrange(256) for _ in range(rec))
+                for _ in range(rng.randint(0, 120))]
+        rows.sort()
+        want_ladder = b"".join(r[:key_len] for k, r in enumerate(rows)
+                               if k % every == 0)
+        path = os.path.join(tmp, f"lw{case}.bin")
+        w = genstore.LadderWriter(path, rec, key_len, path + ".lad", every)
+        i = 0
+        while i < len(rows):
+            if rng.random() < 0.5:
+                w.add(rows[i])
+                i += 1
+            else:
+                n = rng.randint(0, 9)
+                w.add_blob(b"".join(rows[i:i + n]))
+                i += n
+        records, sha, lad_sha = w.close()
+        with open(path, "rb") as f:
+            body = f.read()
+        with open(path + ".lad", "rb") as f:
+            ladder = f.read()
+        check(records == len(rows) and body == b"".join(rows)
+              and sha == hashlib.sha256(body).hexdigest()
+              and ladder == want_ladder
+              and lad_sha == hashlib.sha256(ladder).hexdigest(),
+              f"case {case}: the blob road and the record road disagree")
+    print("ok  ladder writer: blobs and records sample the same ladder")

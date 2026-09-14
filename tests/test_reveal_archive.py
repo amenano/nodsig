@@ -2027,3 +2027,84 @@ def test_deep_verify_refuses_a_script_the_chain_never_proved(tmp):
         check("never proved" in str(e), f"unexpected: {e}")
     print("ok  proof: the deep audit refuses a re-sealed archive holding a "
           "candidate the chain never proved")
+
+
+def test_the_proof_by_blobs_is_the_proof_by_records(tmp):
+    """`_proven_blobs` is the fusion's road, `_proven` the readers':
+    the same rule written twice, so the suite ties them. Random
+    candidates and programs over a narrow alphabet (so most candidates
+    have a program, and many programs no candidate), blobs cut at
+    arbitrary places, program slabs so small that a candidate's
+    programs straddle several: the proven stream, the pile, its ladder
+    and the settled sha must be what the record road gives."""
+    import random
+    from nodsig.genstore import LadderWriter, _BaseCursor
+    from nodsig.recsort import write_run
+    rng = random.Random(20260915)
+    d = os.path.join(tmp, "proof_roads")
+    os.makedirs(d, exist_ok=True)
+    for case in range(80):
+        cat = rng.choice(("scripts20", "scripts32"))
+        rec, key_len = ra.rec_width(cat), ra.CATEGORIES[cat]
+        span = rng.choice((1, 2, 4, 40))
+
+        def rows(n, byte):
+            seen = {}
+            for _ in range(n):
+                key = bytes([0] * (key_len - 2)
+                            + [rng.randrange(span), rng.randrange(span)])
+                seen[key] = key + bytes([byte]) + rng.randrange(1, 900) \
+                    .to_bytes(3, "big")
+            return [seen[k] for k in sorted(seen)]
+
+        cands = rows(rng.choice((0, 1, 7, 60, 400)), 2)
+        progs = rows(rng.choice((0, 1, 5, 50, 300)), 1)
+        prog_path = os.path.join(d, f"prog{case}.bin")
+        _, prog_sha = write_run(prog_path, list(progs))
+        slab = rng.choice((rec, rec * 3, rec * 16, 8 << 20))
+
+        # The record road.
+        want_pile = []
+        want_kept = list(ra._proven(
+            iter(cands), ra.read_fixed(prog_path, rec, expect_sha=prog_sha,
+                                       slab_bytes=slab, error=ra.ScanError),
+            key_len, type("P", (), {"add": want_pile.append})()))
+
+        # The blob road: the candidates cut into blobs anywhere.
+        blobs, i = [], 0
+        while i < len(cands):
+            n = rng.randint(1, 9)
+            blobs.append(b"".join(cands[i:i + n]))
+            i += n
+        pile_path = os.path.join(d, f"pile{case}.bin")
+        pile = LadderWriter(pile_path, rec, key_len, pile_path + ".lad", 4)
+        cursor = _BaseCursor(prog_path, rec, prog_sha, slab, ra.ScanError)
+        got_kept = b"".join(ra._proven_blobs(iter(blobs), cursor, rec,
+                                             key_len, pile))
+        n_pile, pile_sha, _ = pile.close()
+        with open(pile_path, "rb") as f:
+            pile_bytes = f.read()
+        check(got_kept == b"".join(want_kept),
+              f"case {case} ({cat}, span {span}, slab {slab}): the proven "
+              "records differ between the two roads")
+        check(pile_bytes == b"".join(want_pile) and n_pile == len(want_pile)
+              and pile_sha == hashlib.sha256(pile_bytes).hexdigest(),
+              f"case {case}: the pile differs between the two roads")
+        check(cursor.peek() is None and cursor.eof,
+              f"case {case}: the programs were not read to their end")
+    # A corrupted programs file is refused by the blob road too: the
+    # sealed sha is settled when the cursor is drained.
+    prog_path = os.path.join(d, "bad.bin")
+    _, sha = write_run(prog_path, [bytes(24)])
+    with open(prog_path, "r+b") as f:
+        f.write(b"\x01")
+    pile = LadderWriter(os.path.join(d, "badpile.bin"), 24, 20,
+                        os.path.join(d, "badpile.lad"), 4)
+    try:
+        list(ra._proven_blobs(iter([bytes(24)]),
+                              _BaseCursor(prog_path, 24, sha, 24, ra.ScanError),
+                              24, 20, pile))
+        fail("a programs file whose sha does not match was accepted")
+    except ra.ScanError:
+        pass
+    print("ok  proof: the blob road and the record road agree on 80 cases")

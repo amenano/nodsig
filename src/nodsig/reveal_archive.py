@@ -148,6 +148,7 @@ ours anywhere: the archive holds hashes of PUBLIC chain data only.
 """
 
 import argparse
+import bisect
 import hashlib
 import heapq
 import json
@@ -174,7 +175,8 @@ from nodsig.blockparse import ParseError, script_pushes, scriptsig_pushes
 # Slab I/O for the fixed-width record files (runs, merged archive): the
 # read/write budget, the sha-verifying reader, atomic writes — shared with
 # the outpoint index, one implementation of the mechanics for both.
-from nodsig.genstore import _BaseCursor, merge_to_file
+from nodsig.genstore import (LadderWriter, _BaseCursor, _BulkFusion,
+                             _split, merge_to_file)
 from nodsig.recio import (IO_CHUNK, atomic_json, budgeted_slab, checked_name,
                           read_json,
                           durable_replace, locked, preflight_space,
@@ -563,47 +565,57 @@ def _proven(candidates, programs, key_len, pile=None):
         pass
 
 
-class _RecordWriter:
-    """A sorted file written record by record, with its sha256 and its
-    ladder taken on the way by the rules `merge_to_file` and
-    `artifact.sha_and_ladder` use. It exists for the one output of a
-    fusion that is not a merge: the pile of candidates the proof sets
-    aside, which is produced as a side effect of the join feeding the
-    merge of the scripts, so both leave in one pass."""
+def _proven_blobs(candidates, programs, rec, key_len, pile):
+    """THE PROOF by blobs, for the fusion: `_proven`'s rule (a
+    candidate whose digest is among the programs is a revealed script;
+    any other goes to the pile) applied to sorted reduced BLOBS of
+    candidates against a `_BaseCursor` over the sealed programs.
 
-    def __init__(self, path, key_len, ladder_path, every):
-        self.path = path
-        self.key_len = key_len
-        self.ladder_path = ladder_path
-        self.every = every
-        self.digest = hashlib.sha256()
-        self.ladder = bytearray()
-        self.buf = bytearray()
-        self.records = 0
-        self.f = open(path + ".tmp", "wb")
-
-    def add(self, r):
-        if self.records % self.every == 0:
-            self.ladder.extend(r[:self.key_len])
-        self.buf.extend(r)
-        self.records += 1
-        if len(self.buf) >= IO_CHUNK:
-            self.f.write(self.buf)
-            self.digest.update(self.buf)
-            self.buf.clear()
-
-    def close(self):
-        """Returns (records, sha256, ladder sha256)."""
-        if self.buf:
-            self.f.write(self.buf)
-            self.digest.update(self.buf)
-        self.f.close()
-        durable_replace(self.path + ".tmp", self.path)
-        with open(self.ladder_path + ".tmp", "wb") as f:
-            f.write(self.ladder)
-        durable_replace(self.ladder_path + ".tmp", self.ladder_path)
-        return (self.records, self.digest.hexdigest(),
-                hashlib.sha256(self.ladder).hexdigest())
+    Each blob covers a key range no later blob revisits, so the programs
+    up to its last key are gathered once, as a set of digests, and the
+    blob is split by membership in one pass; the cursor never turns
+    back. Yields the blobs of proven candidates; the pile receives the
+    others through `pile.add_blob`. The programs are read to their end
+    after the last candidate, so the cursor settles the sealed sha256
+    instead of stopping short. The suite pins this road to `_proven`."""
+    unit = f"{key_len}s{rec - key_len}x"      # the digest alone
+    for blob in candidates:
+        n = len(blob) // rec
+        last = blob[-rec:-rec + key_len]
+        # Every program with a digest <= last: strictly below the
+        # digest one past it, and every remaining one past the top.
+        above = None
+        if last != b"\xff" * key_len:
+            above = (int.from_bytes(last, "big") + 1).to_bytes(key_len, "big")
+        digests = set()
+        while programs.peek() is not None:
+            m = programs.below(above, key_len)
+            if m:
+                piece = programs.slab[programs.off:programs.off + m * rec]
+                programs.off += m * rec
+                digests.update(_split(piece, rec, m, unit))
+            if programs.off < programs.end:
+                break                    # the next program is above
+        # The hits, as a set operation in C; a blob without one goes to
+        # the pile whole, and one with hits is cut around them — the
+        # proven candidates are the rare ones, so the per-record work is
+        # spent on those alone.
+        keys = _split(blob, rec, n, unit)
+        hits = digests.intersection(keys)
+        if not hits:
+            pile.add_blob(blob, n)
+            continue
+        kept, unproven, start = [], [], 0
+        for i in sorted(bisect.bisect_left(keys, k) for k in hits):
+            unproven.append(blob[start * rec:i * rec])
+            kept.append(blob[i * rec:(i + 1) * rec])
+            start = i + 1
+        unproven.append(blob[start * rec:])
+        if n > len(hits):
+            pile.add_blob(b"".join(unproven), n - len(hits))
+        yield b"".join(kept)
+    while programs.peek() is not None:
+        programs.off = programs.end
 
 
 def _load_state(archive_dir, required=True):
@@ -1067,10 +1079,13 @@ def run_scan(rpc_url, auth, end_height, archive_dir,
 # merge — the periodic fusion
 # ---------------------------------------------------------------------------
 
-def _fuse(directory, prefix, cat, generation, sources, base_manifest, slab):
+def _fuse(directory, prefix, cat, generation, sources, base_manifest, slab,
+          cursors=(), blobs=None):
     """One merged file of the next generation: the previous one (named by
     `base_manifest`, when there is one) as the gallop's cursor, `sources`
-    as the sorted runs, the category's own reduction on equal digests.
+    as sorted record streams, `cursors` as the runs by slabs (the k-way
+    stage) or `blobs` as a stream that stage already produced (the
+    proof's), the category's own reduction on equal digests.
     Returns (build.files entry, build.caches entry, sha256).
 
     The shared fusion, with the previous generation as a cursor: an
@@ -1088,7 +1103,8 @@ def _fuse(directory, prefix, cat, generation, sources, base_manifest, slab):
     records, sha, lad_sha, _dups = merge_to_file(
         sources, os.path.join(directory, stem + ".bin"), rec,
         CATEGORIES[cat], os.path.join(directory, stem + ".lad"),
-        ARCHIVE_LADDER_EVERY, None, base=cursor, combine=_combiner(cat))
+        ARCHIVE_LADDER_EVERY, None, base=cursor, combine=_combiner(cat),
+        cursors=cursors, blobs=blobs)
     return ({"file": stem + ".bin", "records": records},
             {"file": stem + ".lad", "every": ARCHIVE_LADDER_EVERY,
              "sha256": lad_sha},
@@ -1193,16 +1209,16 @@ def run_merge(archive_dir):
         return [(_run_path(archive_dir, run["name"]), run["sha256"])
                 for run in state["runs"] if run["category"] == cat]
 
-    def readers(todo, rec, slab):
-        return [read_fixed(path, rec, expect_sha=sha, slab_bytes=slab,
-                           error=ScanError) for path, sha in todo]
+    def cursors(todo, rec, slab):
+        return [_BaseCursor(path, rec, sha, slab, ScanError)
+                for path, sha in todo]
 
     runs = runs_of("keys")
     slab = budgeted_slab(len(runs) + 1)
     (build["files"]["keys"], build["caches"]["keys"],
      digests["keys"]) = _fuse(archive_dir, "archive_", "keys", generation,
-                              readers(runs, rec_width("keys"), slab),
-                              manifest, slab)
+                              [], manifest, slab,
+                              cursors=cursors(runs, rec_width("keys"), slab))
     print(f"{'keys':<10} {build['files']['keys']['records']:>14,} records")
 
     for cat in ("scripts20", "scripts32"):
@@ -1213,8 +1229,8 @@ def run_merge(archive_dir):
         runs = runs_of(prog_cat)
         slab = budgeted_slab(len(runs) + 1)
         entry, cache, prog_sha = _fuse(proof_dir, "proof_", prog_cat,
-                                       generation, readers(runs, rec, slab),
-                                       proof, slab)
+                                       generation, [], proof, slab,
+                                       cursors=cursors(runs, rec, slab))
         proof_build["files"][prog_cat] = entry
         proof_build["caches"][prog_cat] = cache
         proof_digests[prog_cat] = prog_sha
@@ -1225,20 +1241,22 @@ def run_merge(archive_dir):
                                          _cat_file(proof, pile_cat)),
                             _cat_sha(proof, pile_cat)))
         slab = budgeted_slab(len(todo) + 2)
-        candidates = _reduced(heapq.merge(*readers(todo, rec, slab)), cat)
-        programs = read_fixed(os.path.join(proof_dir, checked_name(
-                                  entry["file"], ScanError)), rec,
-                              expect_sha=prog_sha, slab_bytes=slab,
-                              error=ScanError)
+        # The candidates: the pile and the runs through the k-way stage,
+        # as sorted reduced blobs; the programs just sealed, as a cursor.
+        candidates = _BulkFusion(cursors(todo, rec, slab), rec, key_len,
+                                 None, _combiner(cat), None).blobs()
+        programs = _BaseCursor(os.path.join(proof_dir, checked_name(
+                                   entry["file"], ScanError)), rec,
+                               prog_sha, slab, ScanError)
         stem = f"proof_{pile_cat}_g{generation:04d}"
-        pile_writer = _RecordWriter(os.path.join(proof_dir, stem + ".bin"),
-                                    key_len,
-                                    os.path.join(proof_dir, stem + ".lad"),
-                                    ARCHIVE_LADDER_EVERY)
-        kept = _proven(candidates, programs, key_len, pile_writer)
+        pile_writer = LadderWriter(os.path.join(proof_dir, stem + ".bin"),
+                                   rec, key_len,
+                                   os.path.join(proof_dir, stem + ".lad"),
+                                   ARCHIVE_LADDER_EVERY)
+        kept = _proven_blobs(candidates, programs, rec, key_len, pile_writer)
         (build["files"][cat], build["caches"][cat],
          digests[cat]) = _fuse(archive_dir, "archive_", cat, generation,
-                               [kept], manifest, slab)
+                               [], manifest, slab, blobs=kept)
         n, pile_sha, pile_lad = pile_writer.close()
         proof_build["files"][pile_cat] = {"file": stem + ".bin",
                                           "records": n}

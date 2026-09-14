@@ -55,6 +55,21 @@ stream, and whenever its next stretch is entirely below the next
 pending record of the runs, that stretch is settled in one piece. The
 rules do not change with the road: see `merge_to_file`.
 
+WHY THE RUNS ARE SORTED, NOT MERGED
+===================================
+The gallop has nothing to bite on in the FIRST fusion of a scan: no
+previous generation, a few thousand runs of random digests, every
+record the runs' turn. There the per-record price was paid three times
+over (the run's generator, the heap's step, the writer's loop). So the
+runs come in as slab cursors too, and a k-way stage (`_BulkFusion`)
+gathers, round by round, every record below a key all sources are
+known to have reached, sorts them in one list (timsort finds the runs
+and merges them in C) and reduces the equal keys by column instead of
+by record. The stage yields sorted, reduced blobs: the output itself
+when nothing else is fused, one more source for the loop when a base
+gallops over them. Same rules, same bytes, same ladder, same count,
+which the suite pins against a reference written the obvious way.
+
 WHY THE COMMIT ORDER IS WHAT IT IS
 ==================================
 A fusion writes generation N+1 beside generation N and only then
@@ -70,6 +85,7 @@ import hashlib
 import heapq
 import os
 import re
+import struct
 import sys
 
 from nodsig.recio import (IO_CHUNK, atomic_json, budgeted_slab, checked_name,
@@ -105,16 +121,12 @@ def new_state_fields():
     return {"runs": [], "files": {}, "caches": {}, "generation": 0}
 
 
-def _adjacent_equal(slab, off, count, rec, dedup_len):
-    """How many of the `count` records at `slab[off:]` share their
-    dedup prefix with the record BEFORE them — i.e. how many duplicate
-    pairs a stretch of already-sorted records contains.
-
-    This is the one thing a bulk copy must not skip: the fusion's dup
-    count is an OUTPUT, checked against a second road (the nonces
-    archive compares it with a full pass over the file it wrote), so a
-    faster path that copied bytes without counting would return a
-    different number for the same input.
+def _pair_mask(slab, off, count, rec, dedup_len):
+    """For the `count` records at `slab[off:]`, one byte per ADJACENT
+    PAIR: zero where the pair may share its dedup prefix, non-zero
+    where it certainly does not. Returns (mask, exact): with `exact`
+    the zeros ARE the equal pairs; without it they are candidates a
+    caller settles by comparing the whole prefix.
 
     Counted a COLUMN at a time instead of a record at a time. The j-th
     byte of every record is one strided slice, so one XOR of two such
@@ -123,12 +135,11 @@ def _adjacent_equal(slab, off, count, rec, dedup_len):
     column. Columns are OR-ed from the LAST byte of the prefix
     backwards — the byte that differs first in a dense key like an
     ordinal — until the surviving candidates are rare enough to be
-    worth checking one by one, and those few are then compared in full.
-    The narrowing is a heuristic; the answer is not, because every
-    candidate is settled by comparing the whole prefix.
-    """
-    if count < 2:
-        return 0
+    worth checking one by one, or until every column has spoken, at
+    which point the mask is exact. The narrowing is a heuristic; the
+    answer is not, because every candidate is settled either by the
+    whole prefix having been compared here or by the caller comparing
+    it."""
     span = (count - 1) * rec
     acc = None
     j = dedup_len - 1
@@ -140,8 +151,27 @@ def _adjacent_equal(slab, off, count, rec, dedup_len):
         mask = acc.to_bytes(count - 1, "big")
         candidates = mask.count(0)
         if candidates == 0 or j == 0 or candidates * 64 <= count:
-            break
+            return mask, j == 0 or candidates == 0
         j -= 1
+
+
+def _adjacent_equal(slab, off, count, rec, dedup_len):
+    """How many of the `count` records at `slab[off:]` share their
+    dedup prefix with the record BEFORE them — i.e. how many duplicate
+    pairs a stretch of already-sorted records contains.
+
+    This is the one thing a bulk copy must not skip: the fusion's dup
+    count is an OUTPUT, checked against a second road (the nonces
+    archive compares it with a full pass over the file it wrote), so a
+    faster path that copied bytes without counting would return a
+    different number for the same input. The pairs are found by
+    column (`_pair_mask`); the candidates it leaves unsettled are
+    compared in full here."""
+    if count < 2:
+        return 0
+    mask, exact = _pair_mask(slab, off, count, rec, dedup_len)
+    if exact:
+        return mask.count(0)
     found = 0
     i = mask.find(0)
     while i >= 0:
@@ -150,6 +180,69 @@ def _adjacent_equal(slab, off, count, rec, dedup_len):
             found += 1
         i = mask.find(0, i + 1)
     return found
+
+
+class LadderWriter:
+    """A sorted record file written with its sha256 and its ladder taken
+    on the way, by record or by whole sorted blob. The one writer every
+    fusion output goes through, so the ladder's sampling rule (every
+    `every`-th record, counted from the first) and the slab writing are
+    stated once: a blob of n records sampled by arithmetic must land on
+    the same ladder n records added one at a time would, and the suite
+    pins that. Atomic like every writer here: tmp file + rename, ladder
+    beside it; `close` returns (records, sha256, ladder sha256)."""
+
+    def __init__(self, path, rec, key_len, ladder_path, every):
+        self.path = path
+        self.rec = rec
+        self.key_len = key_len
+        self.ladder_path = ladder_path
+        self.every = every
+        self.digest = hashlib.sha256()
+        self.ladder = bytearray()
+        self.buf = bytearray()
+        self.records = 0
+        self.f = open(path + ".tmp", "wb")
+
+    def add(self, r):
+        if self.records % self.every == 0:
+            self.ladder.extend(r[:self.key_len])
+        self.buf.extend(r)
+        self.records += 1
+        if len(self.buf) >= IO_CHUNK:
+            self._flush()
+
+    def add_blob(self, blob, n=None):
+        """`n` whole sorted records at once (n defaults to the blob's
+        length): sampled into the ladder by position, appended whole."""
+        rec, key_len = self.rec, self.key_len
+        if n is None:
+            n = len(blob) // rec
+        step = (-self.records) % self.every
+        for j in range(step, n, self.every):
+            o = j * rec
+            self.ladder.extend(blob[o:o + key_len])
+        self.buf.extend(blob)
+        self.records += n
+        if len(self.buf) >= IO_CHUNK:
+            self._flush()
+
+    def _flush(self):
+        self.f.write(self.buf)
+        self.digest.update(self.buf)
+        self.buf.clear()
+
+    def close(self):
+        """Returns (records, sha256, ladder sha256)."""
+        if self.buf:
+            self._flush()
+        self.f.close()
+        durable_replace(self.path + ".tmp", self.path)
+        ladder_sha = hashlib.sha256(self.ladder).hexdigest()
+        with open(self.ladder_path + ".tmp", "wb") as f:
+            f.write(self.ladder)
+        durable_replace(self.ladder_path + ".tmp", self.ladder_path)
+        return self.records, self.digest.hexdigest(), ladder_sha
 
 
 # The one shape a merged generation or its ladder can have; see
@@ -246,10 +339,241 @@ class _BaseCursor:
                 hi = mid
         return hi
 
+    @property
+    def eof(self):
+        """True once the file has no slab left to give: what is still
+        in `slab` (a tail kept by `refill`) is all there is."""
+        return self._eof
+
+    def last_key(self, dedup_len):
+        """The dedup prefix of the LAST record of the current slab: the
+        key up to which every record of this source is in memory."""
+        return self.slab[self.end - self.rec:self.end - self.rec + dedup_len]
+
+    def refill(self):
+        """The next slab, with the unconsumed tail of this one kept in
+        front of it. The k-way stage consumes each slab up to a
+        threshold that is strictly below its last key, so the records
+        it leaves behind (those equal to that key, one as a rule) must
+        meet their equals in the next slab: they are carried, not
+        re-read. At end of file the tail alone stays, and `eof` says so."""
+        tail = self.slab[self.off:self.end]
+        if self._fill():
+            if tail:
+                self.slab = tail + self.slab
+                self.end = len(self.slab)
+        elif tail:
+            self.slab, self.off, self.end = tail, 0, len(tail)
+
+    def records(self):
+        """The per-record road over the same slabs, sha settled at the
+        end exactly as `read_fixed` settles it."""
+        rec = self.rec
+        while True:
+            r = self.peek()
+            if r is None:
+                return
+            slab, off, end = self.slab, self.off, self.end
+            self.off = end
+            for i in range(off, end, rec):
+                yield slab[i:i + rec]
+
+# Records leave a blob as bytes objects through struct, by chunks of a
+# fixed count: one compiled format per (record shape, count) is cheaper
+# than slicing by hand (0.14 against 0.36 µs per record, measured), and
+# a fixed chunk keeps the cache of formats bounded whatever lengths the
+# pieces of a round happen to have.
+_SPLIT_CHUNK = 4096
+_unpackers = {}
+
+
+def _split(blob, rec, n=None, unit=None):
+    """The `n` fixed-width records of `blob` (n defaults to its whole
+    length), as a list, in C. `unit` is the struct format of ONE
+    record, default the whole record as bytes; a caller wanting only
+    a prefix passes e.g. "20s4x"."""
+    if n is None:
+        n = len(blob) // rec
+    if unit is None:
+        unit = f"{rec}s"
+    out = []
+    full, tail = divmod(n, _SPLIT_CHUNK)
+    if full:
+        u = _unpacker(unit, _SPLIT_CHUNK)
+        step = _SPLIT_CHUNK * rec
+        for i in range(full):
+            out += u(blob, i * step)
+    if tail:
+        out += _unpacker(unit, tail)(blob, full * _SPLIT_CHUNK * rec)
+    return out
+
+
+def _unpacker(unit, count):
+    u = _unpackers.get((unit, count))
+    if u is None:
+        u = _unpackers[(unit, count)] = struct.Struct(unit * count).unpack_from
+    return u
+
+
+class _BulkFusion:
+    """The k-way stage of a fusion, by slabs: every run comes in as a
+    cursor, and the records leave as SORTED, REDUCED BLOBS, one per
+    round, in key order and with no key straddling two of them.
+
+    WHY NOT heapq.merge
+    -------------------
+    The first fusion of a scan is the one with no previous generation
+    to gallop over: a few thousand runs of random digests, every record
+    the runs' turn, so the gallop's insight (a stretch nothing
+    interleaves moves whole) has nothing to bite on. What is left is a
+    k-way merge that pays Python per record three times — the source's
+    generator, the heap's step, the writer's loop — 3.25 µs a record on
+    the real pile, measured. Sorting does better: timsort finds the
+    runs on its own and merges them in C, and the equal keys of a
+    sorted blob are found by column (`_pair_mask`) rather than by
+    record. So each round gathers, from every source, the records below
+    a threshold every source is known to have reached, sorts them in
+    one list, reduces the equal keys by the fusion's rule, and yields
+    one blob.
+
+    THE THRESHOLD is the smallest last key among the sources that
+    still have a slab to read: every record below it, from every
+    source, is in memory (a source's slab reaches at least that key,
+    or the source has no more slabs). Strictly below, so a key shared
+    by a slab's last records and its successor's first is never split
+    across rounds: what a source keeps is carried into its next slab
+    by `refill`. A round therefore holds every record of every key it
+    emits, which is what lets it reduce them.
+
+    THE RULES are `merge_to_file`'s, applied once per equal-key group:
+    `combine` folds the group left to right (the fold is associative
+    and commutative, so the order two equal records meet in still does
+    not matter), "last" keeps its last record, None keeps every record
+    and counts the pairs, and `dup_log` receives (kept so far, next)
+    per pair as the per-record road logs it. `dups` is the number of
+    reductions, readable once the blobs are exhausted."""
+
+    def __init__(self, cursors, rec, dedup_len, dedup, combine, dup_log):
+        self.cursors = list(cursors)
+        self.rec = rec
+        self.dedup_len = dedup_len
+        self.keep_last = dedup == "last"
+        self.combine = combine
+        self.dup_log = dup_log
+        self.dups = 0
+
+    def _round(self):
+        """(pieces, threshold) for the next round, or None when every
+        source is spent; the cursors that reached the threshold are
+        refilled here, so the caller only sorts."""
+        rec, dl = self.rec, self.dedup_len
+        active = [c for c in self.cursors if c.peek() is not None]
+        if not active:
+            return None
+        threshold = None
+        for c in active:
+            if not c.eof:
+                k = c.last_key(dl)
+                if threshold is None or k < threshold:
+                    threshold = k
+        pieces = []
+        for c in active:
+            n = c.below(threshold, dl)
+            if n:
+                pieces.append(c.slab[c.off:c.off + n * rec])
+                c.off += n * rec
+            if threshold is not None and not c.eof and c.last_key(dl) == threshold:
+                c.refill()
+        return pieces
+
+    def blobs(self):
+        rec, dl = self.rec, self.dedup_len
+        combine, keep_last, log = self.combine, self.keep_last, self.dup_log
+        while True:
+            pieces = self._round()
+            if pieces is None:
+                return
+            if not pieces:
+                continue
+            if len(pieces) == 1:
+                records = _split(pieces[0], rec)
+            else:
+                records = []
+                for piece in pieces:
+                    records += _split(piece, rec)
+                records.sort()
+            n = len(records)
+            if n < 2:
+                if n:
+                    yield records[0]
+                continue
+            blob = b"".join(records)
+            mask, exact = _pair_mask(blob, 0, n, rec, dl)
+            if not mask.count(0):
+                yield blob
+                continue
+            # The groups: maximal runs of zero bytes in the mask, each
+            # a stretch of records sharing the prefix (settled here when
+            # the mask is not exact). The output is the blob with each
+            # group replaced by what the rule keeps of it.
+            out = []
+            start = 0
+            view = memoryview(blob)
+            for m in re.finditer(rb"\x00+", mask):
+                first, last = m.start(), m.end()   # records first..last
+                if not exact:
+                    # Settle pair by pair; a false candidate splits the
+                    # group, so walk it as sub-groups.
+                    i = first
+                    while i < last:
+                        if records[i][:dl] != records[i + 1][:dl]:
+                            i += 1
+                            continue
+                        j = i + 1
+                        while j < last and records[j][:dl] == records[j + 1][:dl]:
+                            j += 1
+                        start = self._reduce(records, i, j, view, out, start)
+                        i = j + 1
+                    continue
+                start = self._reduce(records, first, last, view, out, start)
+            out.append(view[start * rec:])
+            yield b"".join(out)
+
+    def _reduce(self, records, i, j, view, out, start):
+        """Records i..j (inclusive) share the prefix: append what comes
+        before them and what the rule keeps of them; return the index
+        the untouched stretch resumes from."""
+        rec = self.rec
+        n_pairs = j - i
+        self.dups += n_pairs
+        if self.combine is None and not self.keep_last:
+            if self.dup_log is not None:
+                for k in range(i, j):
+                    if len(self.dup_log) >= DUP_LOG_CAP:
+                        break
+                    self.dup_log.append((bytes(records[k]),
+                                         bytes(records[k + 1])))
+            return start                    # nothing dropped: counted only
+        out.append(view[start * rec:i * rec])
+        kept = records[i]
+        for k in range(i + 1, j + 1):
+            r = records[k]
+            if self.dup_log is not None and len(self.dup_log) < DUP_LOG_CAP:
+                self.dup_log.append((bytes(kept), bytes(r)))
+            kept = self.combine(kept, r) if self.combine is not None else r
+        out.append(kept)
+        return j + 1
+
+    def records(self):
+        """The blobs as records, for the road that must walk them."""
+        rec = self.rec
+        for blob in self.blobs():
+            yield from _split(blob, rec)
+
 
 def merge_to_file(sources, out_path, rec, key_len, ladder_path,
                   ladder_every, dedup, dedup_len=None, dup_log=None,
-                  base=None, combine=None):
+                  base=None, combine=None, cursors=(), blobs=None):
     """Fuse sorted record streams into one file, sampling the ladder
     while writing — the cache costs no extra pass.
 
@@ -297,128 +621,133 @@ def merge_to_file(sources, out_path, rec, key_len, ladder_path,
     back to the per-record road, like `dedup="last"` does: a stretch
     moved whole can neither drop nor reduce.
 
+    `cursors` are the runs as `_BaseCursor`s instead of record streams:
+    they go through the k-way stage by slabs (`_BulkFusion`), which
+    sorts and reduces them into blobs. `blobs`, alternatively, is such
+    a stream already made (a caller that joined or filtered it on the
+    way, like the archive's proof). With no `base` and no `sources`
+    the blobs are the output and are written whole; otherwise they join
+    the per-record loop as one more sorted source, so the base still
+    gallops over them. The log of pairs is the same on either road
+    when the runs are all there is (their order is total); with a base
+    or other streams beside them a logged pair could meet in another
+    order, so a caller who asked for the log keeps the runs on the
+    per-record road there.
+
     Returns (records, sha256, ladder_sha256, dup_count)."""
     if dedup_len is None:
         dedup_len = key_len
     if combine is not None and dedup is not None:
         raise ValueError("combine replaces dedup: pass dedup=None with it")
+    if cursors and blobs is not None:
+        raise ValueError("cursors and blobs are two forms of one stage")
     if dedup_len > rec:
         dedup_len = rec      # a prefix longer than the record IS the
                              # record, and saying so once keeps the
                              # per-column scan and the slicing agreed
     keep_last = dedup == "last"
-    digest = hashlib.sha256()
-    ladder = bytearray()
-    buf = bytearray()
-    records = 0
+    sources = list(sources)
+    bulk = None
+    if cursors:
+        if dup_log is not None and (base is not None or sources):
+            sources += [c.records() for c in cursors]
+        else:
+            bulk = _BulkFusion(cursors, rec, dedup_len, dedup, combine,
+                               dup_log)
+            blobs = bulk.blobs()
+    writer = LadderWriter(out_path, rec, key_len, ladder_path, ladder_every)
     dups = 0
 
-    def emit(r):
-        nonlocal records
-        if records % ladder_every == 0:
-            ladder.extend(r[:key_len])
-        buf.extend(r)
-        records += 1
+    if blobs is not None and base is None and not sources:
+        for blob in blobs:
+            writer.add_blob(blob)
+        records, sha, ladder_sha = writer.close()
+        return records, sha, ladder_sha, (bulk.dups if bulk else 0)
+    if blobs is not None:
+        sources.append(_records_of(blobs, rec))
 
-    tmp = out_path + ".tmp"
-    with open(tmp, "wb") as f:
-        runs = heapq.merge(*sources)
-        nxt = next(runs, None)
-        head = base.peek() if base is not None else None
-        pending = None
-        streak = 0
-        while True:
-            if head is not None and (nxt is None or head <= nxt):
-                # The base's turn — ties go to it, as they did when it
-                # was heapq.merge's first source.
-                r = head
-                off0 = base.off
-                streak += 1
-                clear = 0
-                if streak >= MIN_BULK:
-                    # The count is measured once per stretch and then
-                    # counted down. What makes that safe is the streak
-                    # itself: it resets at every record the runs win,
-                    # which is the only thing that can move the record
-                    # the count was measured against.
-                    clear = base.clear
-                    if streak == MIN_BULK or clear < 0:
-                        clear = base.below(None if nxt is None
-                                           else nxt[:dedup_len], dedup_len)
-                    base.clear = clear - 1 if clear else 0
-                base.off = off0 + rec
-                from_base = True
-            elif nxt is not None:
-                r = nxt
-                nxt = next(runs, None)
-                streak = 0
-                from_base = False
-            else:
-                break
+    runs = heapq.merge(*sources)
+    nxt = next(runs, None)
+    head = base.peek() if base is not None else None
+    pending = None
+    streak = 0
+    while True:
+        if head is not None and (nxt is None or head <= nxt):
+            # The base's turn — ties go to it, as they did when it
+            # was heapq.merge's first source.
+            r = head
+            off0 = base.off
+            streak += 1
+            clear = 0
+            if streak >= MIN_BULK:
+                # The count is measured once per stretch and then
+                # counted down. What makes that safe is the streak
+                # itself: it resets at every record the runs win,
+                # which is the only thing that can move the record
+                # the count was measured against.
+                clear = base.clear
+                if streak == MIN_BULK or clear < 0:
+                    clear = base.below(None if nxt is None
+                                       else nxt[:dedup_len], dedup_len)
+                base.clear = clear - 1 if clear else 0
+            base.off = off0 + rec
+            from_base = True
+        elif nxt is not None:
+            r = nxt
+            nxt = next(runs, None)
+            streak = 0
+            from_base = False
+        else:
+            break
 
-            if pending is not None:
-                if r[:dedup_len] == pending[:dedup_len]:
-                    dups += 1
-                    if dup_log is not None and len(dup_log) < DUP_LOG_CAP:
-                        dup_log.append((bytes(pending), bytes(r)))
-                    if combine is not None:
-                        pending = combine(pending, r)
-                        if from_base:
-                            head = base.peek()
-                        continue             # one bulk missed, no more
-                    if keep_last:
-                        pending = r          # the later record wins
-                        if from_base:
-                            head = base.peek()
-                        continue             # one bulk missed, no more
-                emit(pending)
-                if len(buf) >= IO_CHUNK:
-                    f.write(buf)
-                    digest.update(buf)
-                    buf.clear()
-            pending = r
-
-            if from_base:
-                # `r` is the first of `clear` base records that nothing
-                # interleaves. Settle them all here, holding the last
-                # back as `pending` so the record after it can still be
-                # compared against it.
-                if clear >= MIN_BULK and off0 >= base.plain_until:
-                    slab = base.slab
-                    d = _adjacent_equal(slab, off0, clear, rec, dedup_len)
-                    if d == 0 or (not keep_last and combine is None
-                                  and dup_log is None):
-                        dups += d
-                        moved = clear - 1
-                        step = (-records) % ladder_every
-                        for j in range(step, moved, ladder_every):
-                            o = off0 + j * rec
-                            ladder.extend(slab[o:o + key_len])
-                        buf.extend(slab[off0:off0 + moved * rec])
-                        records += moved
-                        if len(buf) >= IO_CHUNK:
-                            f.write(buf)
-                            digest.update(buf)
-                            buf.clear()
-                        base.off = off0 + clear * rec
-                        base.clear = 0   # the next one is not below it
-                        pending = slab[base.off - rec:base.off]
-                    else:
-                        base.plain_until = off0 + clear * rec
-                head = base.peek()
         if pending is not None:
-            emit(pending)
-        if buf:
-            f.write(buf)
-            digest.update(buf)
-    durable_replace(tmp, out_path)
+            if r[:dedup_len] == pending[:dedup_len]:
+                dups += 1
+                if dup_log is not None and len(dup_log) < DUP_LOG_CAP:
+                    dup_log.append((bytes(pending), bytes(r)))
+                if combine is not None:
+                    pending = combine(pending, r)
+                    if from_base:
+                        head = base.peek()
+                    continue             # one bulk missed, no more
+                if keep_last:
+                    pending = r          # the later record wins
+                    if from_base:
+                        head = base.peek()
+                    continue             # one bulk missed, no more
+            writer.add(pending)
+        pending = r
 
-    ladder_sha = hashlib.sha256(ladder).hexdigest()
-    tmp = ladder_path + ".tmp"
-    with open(tmp, "wb") as f:
-        f.write(ladder)
-    durable_replace(tmp, ladder_path)
-    return records, digest.hexdigest(), ladder_sha, dups
+        if from_base:
+            # `r` is the first of `clear` base records that nothing
+            # interleaves. Settle them all here, holding the last
+            # back as `pending` so the record after it can still be
+            # compared against it.
+            if clear >= MIN_BULK and off0 >= base.plain_until:
+                slab = base.slab
+                d = _adjacent_equal(slab, off0, clear, rec, dedup_len)
+                if d == 0 or (not keep_last and combine is None
+                              and dup_log is None):
+                    dups += d
+                    moved = clear - 1
+                    writer.add_blob(slab[off0:off0 + moved * rec], moved)
+                    base.off = off0 + clear * rec
+                    base.clear = 0   # the next one is not below it
+                    pending = slab[base.off - rec:base.off]
+                else:
+                    base.plain_until = off0 + clear * rec
+            head = base.peek()
+    if pending is not None:
+        writer.add(pending)
+    records, sha, ladder_sha = writer.close()
+    if bulk is not None:
+        dups += bulk.dups
+    return records, sha, ladder_sha, dups
+
+
+def _records_of(blobs, rec):
+    for blob in blobs:
+        yield from _split(blob, rec)
 
 
 def _sifted(source, sift):
@@ -571,16 +900,22 @@ class GenStore:
         # rewrite or drop any record, which is exactly what a stretch
         # moved whole cannot express, so a rewind keeps the plain road.
         base = None
-        if old is not None and sift is None:
-            path, base_sha = todo.pop(0)
-            base = _BaseCursor(path, rec, base_sha, slab, self.error)
-        sources = [self.read(p, rec, sha, slab) for p, sha in todo]
+        sources, cursors = [], ()
         if sift is not None:
-            sources = [_sifted(s, sift) for s in sources]
+            sources = [_sifted(self.read(p, rec, sha, slab), sift)
+                       for p, sha in todo]
+        else:
+            if old is not None:
+                path, base_sha = todo.pop(0)
+                base = _BaseCursor(path, rec, base_sha, slab, self.error)
+            # The runs by slabs, through the k-way stage: sorted and
+            # reduced in blobs before the base gallops over them.
+            cursors = [_BaseCursor(p, rec, sha, slab, self.error)
+                       for p, sha in todo]
         records, sha, lad_sha, dups = merge_to_file(
             sources, self.path(out_name), rec, key_len,
             self.path(lad_name), every, dedup, dedup_len,
-            dup_log=dup_log, base=base)
+            dup_log=dup_log, base=base, cursors=cursors)
 
         delete = ([self.path(old["file"]),
                    self.path(self.state["caches"][logical]["file"])]
