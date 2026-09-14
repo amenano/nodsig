@@ -98,7 +98,7 @@ from nodsig.sightings import (FLAG_INNER_SIG, FLAG_INNER_WIT, FLAG_OUT,
                               is_control_block, key_records, leaf_xonly_keys,
                               new_filter_stats, output_keys, script_records,
                               taproot_body, witness_key_records)
-from nodsig.blockparse import ParseError, script_pushes
+from nodsig.blockparse import ParseError, script_pushes, script_pushes_or_none
 
 # The hash primitives (sha256d / ripemd160 / hash160) live in their own
 # leaf kernel; the scan recomputes hash160 of revealed keys and scripts.
@@ -676,20 +676,22 @@ def extract_reveals(tx_in, faces, cosigners, stats):
     """
     found = []          # (category, digest, flags), as the archive's
 
-    try:
-        sig_pushes = script_pushes(tx_in.script_sig)
-    except ParseError:
+    sig_pushes = script_pushes_or_none(tx_in.script_sig)
+    if sig_pushes is None:
         stats["malformed_scriptsig"] += 1
         sig_pushes = []
+    ck = None
     for p in sig_pushes:
-        key_records(found, p, FLAG_SIG)
+        ck = key_records(found, p, FLAG_SIG)
 
     witness = list(tx_in.witness)
     witness_key_records(found, witness)
 
     if sig_pushes and not cannot_be_script(sig_pushes[-1], 0, stats):
+        # `ck` is the last push's: when it was a key, its hash160 is the
+        # candidate's digest too, already computed.
         script_records(found, sig_pushes[-1], "scripts20", FLAG_INNER_SIG,
-                       stats)
+                       stats, None if ck is None else ck[1])
     if witness and not cannot_be_script(witness[-1], len(witness), stats):
         script_records(found, witness[-1], "scripts32", FLAG_INNER_WIT,
                        stats)

@@ -28,7 +28,7 @@ parser of `blockparse` are all it uses.
 
 import hashlib
 
-from nodsig.blockparse import ParseError, script_pushes
+from nodsig.blockparse import script_pushes_or_none
 from nodsig.hashing import hash160
 from nodsig.keyforms import UNCOMPRESSED, XONLY, canonical_key
 
@@ -72,11 +72,16 @@ def key_records(out, item, provenance, xonly=False):
     """Append the `keys` record(s) one key-shaped item yields, as
     (category, digest, flags): the digest of the form seen with its
     provenance and form bits, and, when the form seen is not the
-    compressed one, the compressed digest under OTHER_FACE. Returns True
-    when `item` was a key."""
+    compressed one, the compressed digest under OTHER_FACE.
+
+    Returns `canonical_key`'s answer (compressed digest, digest of the
+    form seen, form) when `item` was a key, None otherwise. The digest of
+    the form seen is `hash160(item)`: a caller about to hash the same
+    bytes again (a scriptSig's last push is both a key and a candidate
+    redeem script) reads it here instead of paying for it twice."""
     ck = canonical_key(item, xonly=xonly)
     if ck is None:
-        return False
+        return None
     canon, seen, form = ck
     if form == XONLY:
         out.append(("keys", canon, provenance | FLAG_XONLY))
@@ -85,7 +90,7 @@ def key_records(out, item, provenance, xonly=False):
         out.append(("keys", canon, FLAG_OTHER_FACE))
     else:
         out.append(("keys", canon, provenance))
-    return True
+    return ck
 
 
 def witness_key_records(out, witness):
@@ -176,7 +181,7 @@ def cannot_be_script(item, witness_len, stats):
     return False
 
 
-def script_records(out, script, cat, inner_flag, stats):
+def script_records(out, script, cat, inner_flag, stats, digest=None):
     """The record of a candidate script and of the keys inside it.
 
     The keys are walked for every candidate, not only for the ones the
@@ -185,20 +190,27 @@ def script_records(out, script, cat, inner_flag, stats):
     preimage, and tying the keys to the proof would take a join of every
     candidate with its keys that the reuse scan could not repeat in one
     pass. Measured on the chain through 957,301, dropping them with
-    their candidate lost 2,699 key digests."""
-    try:
-        inner = script_pushes(script)
-    except ParseError:
+    their candidate lost 2,699 key digests.
+
+    `digest`, when given, is the script's own digest a caller already
+    holds (`key_records` hashed the same bytes as a key): it must be
+    exactly `hash160(script)` for `scripts20`, and is taken as such.
+    Each inner key is recognised and hashed once, by `key_records`; the
+    script's record is placed before its keys, where it always was."""
+    inner = script_pushes_or_none(script)
+    if inner is None:
         stats["unparsed_candidates"] += 1
-        inner = []
-    keys = [p for p in inner if canonical_key(p) is not None]
-    n = min(len(keys), MAX_INNER_KEYS)
-    if cat == "scripts20":
-        out.append((cat, hash160(script), n))
-    else:
-        out.append((cat, hashlib.sha256(script).digest(), n))
-    for p in keys:
-        key_records(out, p, inner_flag)
+        inner = ()
+    at = len(out)
+    out.append(None)
+    found = 0
+    for p in inner:
+        if key_records(out, p, inner_flag) is not None:
+            found += 1
+    if digest is None:
+        digest = (hash160(script) if cat == "scripts20"
+                  else hashlib.sha256(script).digest())
+    out[at] = (cat, digest, min(found, MAX_INNER_KEYS))
 
 
 def output_keys(spk):
@@ -209,10 +221,7 @@ def output_keys(spk):
         return [spk[1:-1]]
     if (n >= 37 and spk[-1] == 0xae and 0x51 <= spk[-2] <= 0x60
             and 0x51 <= spk[0] <= 0x60):
-        try:
-            return script_pushes(spk[1:-2])
-        except ParseError:
-            return []
+        return script_pushes_or_none(spk[1:-2]) or []
     return []
 
 
