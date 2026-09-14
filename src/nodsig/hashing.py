@@ -34,6 +34,18 @@ def sha256d(data):
     return hashlib.sha256(hashlib.sha256(data).digest()).digest()
 
 
+def sha256d_parts(parts):
+    """`sha256d` of the concatenation of `parts`, without concatenating.
+
+    For the parser's stripped serialization of a SegWit transaction,
+    three regions of the block it can hash in place (as memoryviews)
+    instead of copying each and joining the copies."""
+    inner = hashlib.sha256()
+    for part in parts:
+        inner.update(part)
+    return hashlib.sha256(inner.digest()).digest()
+
+
 def _ripemd160_pure(data):
     """RIPEMD-160 in pure Python, straight from the specification.
 

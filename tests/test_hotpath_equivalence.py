@@ -220,3 +220,78 @@ def test_the_run_writer_writes_what_the_tuple_road_wrote():
                 check(n * ra.rec_width(cat) == len(want)
                       and sha == hashlib.sha256(want).hexdigest(),
                       f"{cat}, {size} records: count or sha differs")
+
+
+# ---------------------------------------------------------------------------
+# outputs answered by their length, transactions hashed in place
+# ---------------------------------------------------------------------------
+
+def _reference_output_keys(spk):
+    """The template test as it was, without the length guard."""
+    n = len(spk)
+    if n in (35, 67) and spk[0] == n - 2 and spk[-1] == 0xac:
+        return [spk[1:-1]]
+    if (n >= 37 and spk[-1] == 0xae and 0x51 <= spk[-2] <= 0x60
+            and 0x51 <= spk[0] <= 0x60):
+        return _safe_pushes(spk[1:-2]) or []
+    return []
+
+
+def test_outputs_too_short_for_a_key_are_answered_by_their_length():
+    rnd = random.Random(35)
+    key33 = lambda: bytes([2 + rnd.getrandbits(1)]) + rnd.randbytes(32)
+    key65 = lambda: b"\x04" + rnd.randbytes(64)
+    shapes = [
+        lambda: b"\x21" + key33() + b"\xac",                     # P2PK 35
+        lambda: b"\x41" + key65() + b"\xac",                     # P2PK 67
+        lambda: b"\x51\x21" + key33() + b"\x51\xae",             # 1-of-1
+        lambda: b"\x52\x21" + key33() + b"\x21" + key33() + b"\x52\xae",
+        lambda: b"\x76\xa9\x14" + rnd.randbytes(20) + b"\x88\xac",
+        lambda: b"\xa9\x14" + rnd.randbytes(20) + b"\x87",
+        lambda: b"\x00\x14" + rnd.randbytes(20),
+        lambda: b"\x00\x20" + rnd.randbytes(32),
+        lambda: b"\x51\x20" + rnd.randbytes(32),
+        lambda: rnd.randbytes(rnd.randrange(0, 80)),
+        lambda: bytes([rnd.randrange(0x51, 0x61)])
+        + rnd.randbytes(rnd.randrange(30, 40)) + b"\x51\xae",
+    ]
+    for _ in range(20_000):
+        spk = rnd.choice(shapes)()
+        check(list(sg.output_keys(spk)) == _reference_output_keys(spk),
+              f"output_keys({spk.hex()}) differs")
+        stats = sg.new_filter_stats()
+        got = ra.extract_output_revelations(bp.TxOut(1, spk), stats)
+        want = []
+        for push in _reference_output_keys(spk):
+            sg.key_records(want, push, sg.FLAG_OUT)
+        check(list(got) == want, f"extract_output_revelations({spk.hex()})")
+
+
+def test_a_transaction_hashed_in_place_has_the_ids_and_sizes_it_had():
+    import test_blockparse as tbw
+    rnd = random.Random(141)
+    for _ in range(500):
+        inputs = [tbw.w_input(rnd.randbytes(32), rnd.randrange(4),
+                              rnd.randbytes(rnd.randrange(0, 120)),
+                              0xFFFFFFFF)
+                  for _ in range(rnd.randrange(1, 4))]
+        outputs = [tbw.w_output(rnd.randrange(10**8),
+                                rnd.randbytes(rnd.randrange(0, 40)))
+                   for _ in range(rnd.randrange(1, 4))]
+        legacy, txid, _ = tbw.w_tx(2, inputs, outputs, 0)
+        witnesses = [[rnd.randbytes(rnd.randrange(0, 80))
+                      for _ in range(rnd.randrange(0, 4))] for _ in inputs]
+        for raw, wtxid, segwit in (
+                (legacy, txid, False),
+                tbw.w_tx(2, inputs, outputs, 0, witnesses=witnesses)[::2]
+                + (True,)):
+            tx, end = bp.parse_tx(raw)
+            check(end == len(raw) and tx.txid == txid,
+                  "the txid moved when hashed in place")
+            check(tx.size == len(raw) and tx.base_size == len(legacy),
+                  "the sizes moved when hashed in place")
+            check(tx.wtxid == hashlib.sha256(hashlib.sha256(raw).digest())
+                  .digest(), "the wtxid moved when hashed in place")
+    parts = [rnd.randbytes(rnd.randrange(0, 50)) for _ in range(3)]
+    check(ha.sha256d_parts([memoryview(p) for p in parts])
+          == ha.sha256d(b"".join(parts)), "sha256d_parts is not sha256d")

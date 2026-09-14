@@ -160,7 +160,8 @@ from nodsig import blockparse
 from nodsig.sightings import (FLAG_INNER_SIG, FLAG_INNER_WIT, FLAG_OTHER_FACE,
                               FLAG_OUT, FLAG_SIG, FLAG_UNCOMPRESSED, FLAG_WIT,
                               FLAG_XONLY, FLAGS_DEFINED, FLAGS_FULL_ONLY,
-                              MAX_INNER_KEYS, burns_for, cannot_be_script,
+                              MAX_INNER_KEYS, MIN_KEY_OUTPUT, burns_for,
+                              cannot_be_script,
                               is_control_block, key_records, leaf_xonly_keys,
                               new_filter_stats, output_keys, script_records,
                               taproot_body, witness_key_records)
@@ -395,8 +396,11 @@ def extract_output_revelations(tx_out, stats):
     every lock built on it is exposed from that height. A taproot output
     publishes its key by construction and no lock hides behind it: it
     yields nothing here."""
+    spk = tx_out.script_pubkey
+    if len(spk) < MIN_KEY_OUTPUT:
+        return ()
     out = []
-    for push in output_keys(tx_out.script_pubkey):
+    for push in output_keys(spk):
         if key_records(out, push, FLAG_OUT):
             stats["out_keys"] += 1
     return out
