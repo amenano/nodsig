@@ -21,6 +21,60 @@ contract, the **CLI** is convenience, and `reveal-archive-v2` inside a tool
 numbered 1.3.0 is not a discrepancy. Artifacts are identified by their
 fingerprint, never by a tag.
 
+## 3.0.1 (the scan does each piece of work once)
+
+A release of speed and nothing else: the same bytes, the same
+fingerprints, faster.
+
+3.0.0 said its extraction costs less per input than 2.1.2's, and that is
+true, but it left out what the scan does with what it extracts: it now
+writes about 56% more records (the candidates the proof needs), and on the
+stretch of chain from 510,000 to 570,000 the 3.0.0 scan ran 1.36 times
+slower than 2.0.0's, bound to one core. Measured piece by piece, most of
+the difference was work done twice or done the expensive way:
+
+- a compressed key was hashed twice (since 2.0.0): 7.28 to 3.49
+  microseconds per key;
+- RIPEMD-160 was looked up by name on every call: 3.38 to 2.24 per
+  hash160;
+- a candidate that is a key or a signature was read as a script by raising
+  and catching an exception, which 95% of them do: 2.58 to 1.01;
+- the last push of a P2PKH spend was hashed once as a key and again as the
+  candidate redeem script, and every key inside a candidate was recognised
+  twice;
+- every record was built as a tuple and taken apart to be written: 7.53 to
+  3.73 per record, writing whole records;
+- every output was run through the key templates, where one length test
+  answers nearly all of them: 0.91 to 0.74 per output;
+- the parser copied each transaction out of the block to hash it: 6.67 to
+  6.29 per transaction, hashing it in place.
+
+On 200 real blocks (heights 560,000 and 950,000, 1,191,173 inputs) the scan's
+work without fetching and parsing goes from 29.4 to 16.9-17.7 microseconds per
+input, and the runs it writes have the same sha256 under both releases.
+Projected over the chain's 3.4 billion inputs, about 11 hours less CPU for a
+full scan.
+
+### Command line
+
+Nothing changed.
+
+### Formats
+
+Nothing changed, and no artifact byte moves.
+
+### Do your artifacts still work?
+
+Yes, all of them, with the same fingerprints. A scan started under 3.0.0 can
+be resumed under 3.0.1: the runs are the same bytes whichever release wrote
+them.
+
+### Documentation
+
+None: the measurements are in the code beside each change, and the tests
+that pin them compare every faster road with a reference written the old
+way.
+
 ## 3.0.0 (the archive keeps a script when the chain proves it one)
 
 2.1.2 said the next major would replace the archive's shape filter with a
