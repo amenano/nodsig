@@ -21,6 +21,71 @@ contract, the **CLI** is convenience, and `reveal-archive-v2` inside a tool
 numbered 1.3.0 is not a discrepancy. Artifacts are identified by their
 fingerprint, never by a tag.
 
+## 2.1.2 — a key is archived wherever it sits: 2.0.0 and 2.1.x lose 707,356 of them
+
+A fix, and the defect it fixes is the one this toolkit exists to avoid:
+**2.0.0, 2.1.0 and 2.1.1 answer "protected" about keys the chain published.**
+Anyone holding an archive built by them should rebuild it.
+
+2.0.0 stopped archiving the witness items a taproot spend could put a Schnorr
+signature in. The aim was to keep a 65-byte signature whose lead happens to be
+04/06/07 from being read as an uncompressed key — a false positive, and the
+harmless kind: a digest can only ever match its own preimage, which is why the
+archive over-collects everywhere else.
+
+The exclusion was not harmless, because the rule answers without knowing the
+input's type: for a witness of three items or more it calls everything but the
+last two a signature slot. A P2WSH spend of a conditional script carries
+`[signature, key, preimage, branch, script]` — the shape a Lightning HTLC has
+on the chain — so its genuine 33-byte key sits in a slot and was dropped.
+
+Measured against the archive 1.9.0 built from the same chain through height
+957,301, digest by digest: **707,356 key records missing**, of which 704,657
+are this defect (the rest is named below). In a lock set distilled from the
+UTXO snapshot at that height, **1,615 locks that 1.9.0 reported as exposed are
+called protected** by 2.0.0 and 2.1.x.
+
+The rule with no exceptions, restored: the archive excludes an item only when
+the chain proves it cannot be what the archive would record it as. A control
+block and an annex cannot be scripts — their first byte executes and fails —
+and that exclusion stays. Shape is not a proof. Position is not a proof.
+`_taproot_slots` keeps the job it was written for, the nonce census, where a
+false positive invents a point and with it a repetition that never happened.
+
+**Still open, and fixed in the next major.** 2,699 of the 707,356 are keys
+*inside* a candidate script that the shape filter dropped: when the candidate
+goes, the keys it held go with it. That filter is the declared exception of
+`reveal-archive-v3`, and the next major replaces it with a proof — a candidate
+is dropped only when the chain shows no output was ever locked to it — which
+closes this and the exception together.
+
+### Command line
+
+Nothing changed.
+
+### Formats
+
+Nothing changed: `reveal-archive-v3` holds what it always said it held. What
+changed is that the code now writes it. An archive built by 2.0.0, 2.1.0 or
+2.1.1 is missing records, so its fingerprint is not the one this release
+produces from the same chain.
+
+### Do your artifacts still work?
+
+**The archive must be rebuilt, and everything derived from it with it**: the
+first-reveal table, the reuse table and its curve, any `check` answer kept from
+a previous run. The census of nonce points, the outpoint index, the
+derivatives, the header archive and the graph are untouched by this defect.
+Rebuilding the archive is the scan (see the cost table in the README); the
+derivations that follow are hours, not days.
+
+### Documentation
+
+The rule and what it cost are stated where the extraction is written, and the
+two roads now read a witness through one function: the same loop written twice
+in two files is how the cross-check came to share the defect instead of
+catching it.
+
 ## 2.1.0 — the key under its faces, three readers that seek less, and a scan that reaches the end
 
 The release 2.0.0 should have been: it carries the fix without which a scan
