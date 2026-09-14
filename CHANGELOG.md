@@ -21,7 +21,7 @@ contract, the **CLI** is convenience, and `reveal-archive-v2` inside a tool
 numbered 1.3.0 is not a discrepancy. Artifacts are identified by their
 fingerprint, never by a tag.
 
-## Unreleased (3.0.0): the archive keeps a script when the chain proves it one
+## 3.0.0 (the archive keeps a script when the chain proves it one)
 
 2.1.2 said the next major would replace the archive's shape filter with a
 proof. This is that release.
@@ -100,12 +100,15 @@ timeline and prices are untouched.
 and with it everything read out of it: the first-reveal table, the reuse table
 and its curve, the archive's curve, any `check` answer kept from a previous
 run. The rebuild is the scan of the chain and a merge; see the README's cost
-table, measured on the earlier formats. What moves, in both directions, and
-not yet measured at chain scale for this format:
+table, measured on the earlier formats. What moves, in both directions:
 
-- **the scan works more per input than 2.x**: every candidate is hashed and
-  walked for keys, as 1.9.0 did, and every output is compared with two
-  templates;
+- **the extraction costs less per input than 2.1.2's, not more**, measured
+  with `nonces bench` on the same blocks from the same node, one run each:
+  14.23 against 13.28 microseconds per input on 1,000 blocks spread over the
+  chain, 12.16 against 11.04 on 200 consecutive recent blocks. Hashing and
+  walking every candidate costs less than the shape filter did (a DER reader
+  and the taproot slots on every input). Not in that number: the two byte
+  comparisons per output and one per input that record the programs;
 - **the run pile grows** by the candidates 2.x dropped (about 1.47 billion
   records on the chain through 957,301, by the 2.0.0 counters) and by the
   programs (780 million P2SH and 56.8 million P2WSH outputs before
