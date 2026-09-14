@@ -147,7 +147,7 @@ snapshot and no node:
 nodsig archive curve --archive <archive> --out revelations.csv --every 10000
 ```
 
-One row per window of heights, counting the points and the candidate scripts
+One row per window of heights, counting the points and the scripts
 whose **first** revelation falls in it (`points` counts a point once, whatever
 serializations the chain showed). Both curves come with a sealed sidecar
 (`<csv>.meta.json`, `reuse-curve-v2` and `archive-curve-v2`): the CSV's
@@ -494,7 +494,10 @@ Two consequences worth knowing before they surprise you:
   (what the state does not name does not exist) is the same one that makes the
   crash windows safe, but the effect is that the copy is gone. Received
   artifacts are for reading and verifying; to extend the chain you need the
-  builder's own state, or a build of your own.
+  builder's own state, or a build of your own. The revelation archive is the
+  one exception, by design: a scan grows a sealed copy from the watermark and
+  the block its manifest names, provided the `proof/` it was sealed with came
+  with it (see [RevealArchive-v4](formats/RevealArchive-v4.md)).
 
 Honest boundary, stated here because it is the kind of thing a reader should
 not have to discover: at chain scale this path is covered by tests and by the
@@ -543,7 +546,7 @@ they read, time or explain something you already have.
 | `archive merge` | fuse the runs, seal, fingerprint | 3 |
 | `archive derive` | the reuse table and its curve, read out of the archive; `--checkpoint` writes the bitmaps `reuse stats` reads | 3 |
 | `archive curve` | first revelations per window of heights: the archive alone, no locks | 3 |
-| `archive verify` | re-read a sealed archive against its manifest; `--deep` reads every record | 5 |
+| `archive verify` | re-read a sealed archive and its proof against their manifests; `--deep` reads every record and checks the proof was applied | 5 |
 | `archive crosscheck` | the two roads compared bit for bit: locks, height, perimeter, fingerprint, and with `--curve` the curve | second road |
 | `archive lookup` | was this digest ever revealed, where, and when first | 6 |
 | `graph fingerprint` | seal the graph (and audit every byte doing it) | 3 |

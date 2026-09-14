@@ -21,6 +21,115 @@ contract, the **CLI** is convenience, and `reveal-archive-v2` inside a tool
 numbered 1.3.0 is not a discrepancy. Artifacts are identified by their
 fingerprint, never by a tag.
 
+## Unreleased (3.0.0): the archive keeps a script when the chain proves it one
+
+2.1.2 said the next major would replace the archive's shape filter with a
+proof. This is that release.
+
+The scan sees the input that spends, never the output it spends, so it cannot
+tell a redeem script from a public key: a 33-byte script that starts with `02`
+and a compressed key are the same bytes. 1.x kept every candidate and filled
+its script partitions with keys and signatures; 2.0.0 decided by the shape and
+dropped real scripts. Measured against the 1.9.0 archive of the chain through
+height 957,301: **73 P2SH and 17 P2WSH locks answered "protected" after their
+script had been revealed**, and **2,699 keys inside the dropped candidates were
+never recorded**.
+
+The proof is in the chain, only not in the input: a redeem script runs only
+behind a P2SH output with its hash, a witness script only behind a witness
+program with its hash. The scan now keeps every candidate and records the
+programs of every P2SH and P2WSH output created, and the witness program every
+P2SH-P2WSH spend pushes; the fusion keeps a candidate exactly when its digest
+is among them. The candidates no program opens yet, and the programs, are kept
+beside the archive in `proof/`, sealed in the same fusion: a program created
+later promotes a candidate revealed earlier, which is what keeps growing equal
+to rebuilding. The keys inside every candidate are archived whether or not it
+turns out to be a script. The declared exception of `reveal-archive-v3` no
+longer exists: what the archive leaves out of its script partitions, the chain
+has proved is not a script of any lock up to the watermark.
+
+The rule, one line and no list: **an item is excluded only when the chain
+proves it cannot be what it would be archived for; a shape is not a proof, a
+position is not a proof.** A control block and an annex stay out, because their
+first byte fails any script: that is a proof too.
+
+The second road needed none of this. `reuse scan` burns a candidate only against
+a lock, and a lock is a program the chain created: its lock set was always its
+proof. The two roads now reach the same scripts by two different facts instead
+of by one rule written twice.
+
+### Command line
+
+- **`archive merge`** seals two artifacts, the archive and `proof/`
+  (`reveal-proof-v1`), and prints per script partition how many records the
+  programs proved and how many candidates they did not.
+- **`archive verify`** verifies the proof beside the archive when it is there
+  and says what its absence costs when it is not; **`--deep`** also checks that
+  the proof was applied (every script is a program, no candidate set aside is).
+- **`archive scan`** grows a sealed archive that arrived without its state, from
+  the watermark and the block its manifest names, when its proof came with it.
+  It refuses to grow an archive without its proof or beside another archive's,
+  and refuses to scan on top of a fusion interrupted between its two manifests
+  (`merge` finishes it).
+- **`archive lookup`, `derive`, `curve`, `crosscheck`, `check --archive` and
+  `firstreveal build`** read an archive that has no `state.json`.
+- The scan's counters: `filtered_key_shaped` and `filtered_signature_shaped`
+  are gone, `filtered_control_or_annex` is `control_or_annex`,
+  `malformed_inner_script` is `unparsed_candidates` (it counts mostly keys and
+  signatures walked as scripts, and now says so), and `program_outputs` and
+  `nested_programs` are new. `reuse scan` renames the same two.
+- `check` no longer prints the limit sentence about the archive's exception.
+
+### Formats
+
+| artifact | 2.1.2 | 3.0.0 | why |
+|---|---|---|---|
+| revelation archive | `reveal-archive-v3` | `reveal-archive-v4` | the script partitions hold the candidates a created program opens, not the ones a shape filter let through; the keys inside every candidate; `build` names the block at the watermark, the proof, the generation fused onto and how many candidates the proof holds |
+| proof of the archive | (none) | `reveal-proof-v1` | new: the programs the chain created and the candidates none of them opens yet, sealed with the archive as declared parent |
+
+`firstreveal-v2` keeps its bytes and is now defined over `reveal-archive-v4`.
+`reuse-scan-v2`, `reuse-hits-v2` and the curve sidecars keep their layouts; the
+walk they record now looks for keys inside every candidate, as the archive's
+does. `check-report-v3` prints one limit string fewer. Graph, headers, nonce
+census, outpoint index, derivatives, first-spend table, lock set, block stats,
+timeline and prices are untouched.
+
+### Do your artifacts still work?
+
+**The archive must be rebuilt** (a `reveal-archive-v3` is refused by its tag),
+and with it everything read out of it: the first-reveal table, the reuse table
+and its curve, the archive's curve, any `check` answer kept from a previous
+run. The rebuild is the scan of the chain and a merge; see the README's cost
+table, measured on the earlier formats. What moves, in both directions, and
+not yet measured at chain scale for this format:
+
+- **the scan works more per input than 2.x**: every candidate is hashed and
+  walked for keys, as 1.9.0 did, and every output is compared with two
+  templates;
+- **the run pile grows** by the candidates 2.x dropped (about 1.47 billion
+  records on the chain through 957,301, by the 2.0.0 counters) and by the
+  programs (780 million P2SH and 56.8 million P2WSH outputs before
+  deduplication);
+- **the first merge reads that pile and writes the proof** beside the archive:
+  up to about 45 GB of candidates plus the programs, whose distinct 20-byte
+  digests alone take 7.2 GB, a projection from the counts above;
+- **the archive a reader holds stays the size of v3's**, and a lookup in a
+  sealed archive costs what it did; with runs pending, a script lookup also
+  reads the proof.
+
+Keeping `proof/` is only for whoever means to grow the archive. Without it the
+archive answers every question up to its watermark, and says it cannot grow.
+
+### Documentation
+
+`RevealArchive-v4` replaces the v3 page: the proof and why what it has not
+proven is kept, `reveal-proof-v1`, the commit order of the fusion and its one
+crash window, and an archive read and grown without its state. `BlockStats-v3`
+no longer says its pass can write the sets of programs: it never had that
+option, the sets were counted by a script outside the tool. `FirstReveal-v2`,
+`ReuseScan-v2`, `CheckReport-v3`, `ExposureLookup`, `ARTIFACTS` and
+`build-and-query` follow the archive.
+
 ## 2.1.2 — a key is archived wherever it sits: 2.0.0 and 2.1.x lose 707,356 of them
 
 A fix, and the defect it fixes is the one this toolkit exists to avoid:

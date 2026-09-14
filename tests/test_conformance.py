@@ -242,7 +242,11 @@ DOCUMENTED_ELSEWHERE = {
     "outpoint-index-v2": "historical: superseded by v3, read with the release that wrote it",
     "outpoint-derived-v2": "historical: superseded by v3, read with the release that wrote it",
     "reveal-archive-v1": "historical: the first published archive, named "
-                         "by the v3 page as what the v2 projection reproduced",
+                         "by the archive's page among the formats refused",
+    "reveal-archive-v3": "historical: the 2.x archive, read by the release "
+                         "that wrote it",
+    "reveal-proof-v1": "reveal_archive.PROOF_TAG: the proof sealed beside the "
+                       "archive, documented on the archive's page",
     "reuse-hits-v1": "historical: the v1 identity of a burnt set, a literal "
                      "in reuse_scan until 2.0.0",
     "address-book-v1": "historical: superseded by v2, named in the changelog",
@@ -388,7 +392,7 @@ def test_the_format_pages_pin_their_constants():
     assert header[0] == "height" and header[-1] == "fingerprint"
     assert _ticks(t["curve columns"])[0] == "height"
 
-    t = _constants_table("RevealArchive-v3.md")
+    t = _constants_table("RevealArchive-v4.md")
     assert _ticks(t["CAT_ORDER"]) == list(ra.CAT_ORDER)
     assert _ints(t["record widths"]) == [ra.rec_width(c) for c in ra.CAT_ORDER]
     assert _ints(t["digest widths"]) == [ra.CATEGORIES[c] for c in ra.CAT_ORDER]
@@ -398,6 +402,10 @@ def test_the_format_pages_pin_their_constants():
         sg.FLAG_UNCOMPRESSED, sg.FLAG_OUT, sg.FLAG_OTHER_FACE, sg.FLAG_XONLY]
     assert _ints(t["scripts* payload"]) == [sg.MAX_INNER_KEYS]
     assert _ticks(t["identity tag"]) == [ra.FORMAT_TAG]
+    assert _ticks(t["proof tag"]) == [ra.PROOF_TAG]
+    assert _ticks(t["PROOF_ORDER"]) == list(ra.PROOF_ORDER)
+    assert _ints(t["program carrier"])[:2] == [ra.PROGRAM_OUTPUT,
+                                               ra.PROGRAM_NESTED]
 
     t = _constants_table("FirstReveal-v2.md")
     assert _ints(t["keys row"])[0] == fr.KEY

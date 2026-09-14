@@ -1911,7 +1911,8 @@ def run_bench(client, start, count, stride=1, batch_size=25,
     n_blocks = n_tx = n_inputs = n_bytes = 0
     sorted_records = 0
     sort_batches = 0
-    arch_stats = {"malformed_scriptsig": 0, "malformed_inner_script": 0}
+    from nodsig.sightings import new_filter_stats
+    arch_stats = {"malformed_scriptsig": 0, **new_filter_stats()}
     nonce_stats = new_stats()
     unknown = Counter()          # (length, first byte) of unrecognized items
     pending = []

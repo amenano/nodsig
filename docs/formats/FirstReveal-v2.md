@@ -1,7 +1,7 @@
 # FirstReveal-v2: format (L0)
 
 When a public key was first revealed, ordered by that moment. The reveal
-archive ([`RevealArchive-v3`](RevealArchive-v3.md)) answers it one digest at
+archive ([`RevealArchive-v4`](RevealArchive-v4.md)) answers it one digest at
 a time (a key's record carries its first height), but it cannot enumerate
 *which* keys were first revealed inside a height range, because its records
 are ordered by digest, not by time. This table materialises that one missing
@@ -9,12 +9,12 @@ order.
 
 - **Directory** `<firstreveal>/`: `keys.bin`, `first_off.bin`, `state.json`,
   `manifest.json`
-- **Defined over** one sealed, merged `reveal-archive-v3` `keys` partition,
+- **Defined over** one sealed, merged `reveal-archive-v4` `keys` partition,
   and no other
 - **Read by** `firstreveal between` (and `stats`, `verify`)
 - **Built by** `firstreveal build`, a read of the archive alone: no node, no
   graph, no index at build time
-- **Parent** the archive it was built from (`reveal-archive-v3`), declared in
+- **Parent** the archive it was built from (`reveal-archive-v4`), declared in
   the manifest under its own tag
 - **Supersedes** `firstreveal-v1`, which this release neither reads nor
   reproduces
@@ -75,9 +75,10 @@ The perimeter is the archive's `keys` partition, inherited whole:
   nothing the output had not already published, and has no row;
 - revealed **scripts are out**: they live in the archive's script partitions,
   which this table does not read;
-- the archive's shape filter keeps keys and signatures out of the script
-  partitions, so a row here is a key by the archive's own rule, and the one
-  declared exception is on the archive's page.
+- a key found inside a candidate script has a row whether or not the chain
+  proved the candidate a script: the archive walks every candidate for keys,
+  and a key pushed inside bytes that were not a script is still a key the
+  chain published.
 
 ## Building it
 
@@ -153,7 +154,7 @@ specific to this table:
 | order | `(first_height, digest)` ascending, heights from 1 |
 | identity files | `keys`, `first_off`, in that order |
 | identity tag | `firstreveal-v2` |
-| parent tag accepted | `reveal-archive-v3` only |
+| parent tag accepted | `reveal-archive-v4` only |
 
 ## Notes for porters
 

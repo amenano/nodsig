@@ -10,7 +10,7 @@ no `Result<T>` envelope.
   [Graph-v2](../formats/Graph-v2.md),
   [OutpointIndex-v3](../formats/OutpointIndex-v3.md),
   [OutpointDerived-v3](../formats/OutpointDerived-v3.md),
-  [RevealArchive-v3](../formats/RevealArchive-v3.md),
+  [RevealArchive-v4](../formats/RevealArchive-v4.md),
   [FirstSpend-v1](../formats/FirstSpend-v1.md),
   [FirstReveal-v2](../formats/FirstReveal-v2.md),
   [BlockStats-v3](../formats/BlockStats-v3.md),

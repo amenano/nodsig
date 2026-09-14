@@ -103,7 +103,7 @@ That answer was printed by the build that sealed the archive quoted at the
 foot of this page, and the record has gained two fields since: the line now
 carries the height the digest was **first** seen at, and, for a key pushed in
 the 65-byte serialization, that it was uncompressed. The shape of the answer
-is in [`formats/RevealArchive-v3.md`](formats/RevealArchive-v3.md); this page
+is in [`formats/RevealArchive-v4.md`](formats/RevealArchive-v4.md); this page
 keeps the output it actually got, and will be re-taken from the next build
 rather than edited into a prediction.
 

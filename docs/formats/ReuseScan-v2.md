@@ -110,10 +110,13 @@ perimeter stay **before** the fingerprint comparison in `crosscheck`, so a
 mismatch is diagnosed by name and never as "one of the two pipelines is
 wrong".
 
-The extraction of what burns a lock follows [`RevealArchive-v3`](RevealArchive-v3.md):
+The extraction of what burns a lock follows [`RevealArchive-v4`](RevealArchive-v4.md):
 keys published in outputs, the other face of a point, x-only keys of a
-taproot script path, hybrid forms, and the shape filter on script
-candidates. The two roads share the classifier and the read-time perimeter
+taproot script path, hybrid forms, and every candidate script whatever its
+shape, which burns a P2SH or P2WSH lock only when its hash is that lock: the
+lock set is this road's proof that the candidate is a script, where the
+archive checks the programs the chain created. The two roads share the
+classifier of what a key looks like and the read-time perimeter
 map and are written twice only in the walk, which is what the cross-check
 checks; `OUT`, `OTHER_FACE` and `XONLY` count under the full perimeter and
 add no perimeter flag.
@@ -138,7 +141,7 @@ identity:  { format: "reuse-curve-v2", coverage: {from: 1, to: H},
 fingerprint
 build:     { producer, road: "scan" | "derive",
              parent: {format: "reuse-scan-v2", fingerprint} or
-                     {format: "reveal-archive-v3", fingerprint} or null,
+                     {format: "reveal-archive-v4", fingerprint} or null,
              grid: every, locks: <locks-v2 fingerprint>,
              perimeter: {faces, cosigners}, rows, files, caches: {} }
 ```

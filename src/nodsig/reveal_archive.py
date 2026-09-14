@@ -42,14 +42,48 @@ Every record is `digest | byte | first_height u24`:
 
     keys       hash160 of every public-key-shaped item found in an
                unlocking context (scriptSig push, witness item, or a
-               push inside a revealed script), 20 bytes. Its byte is
-               the FLAGS below: where it was seen, and in which form;
-    scripts20  hash160 of every candidate redeem script (the last
-               scriptSig push, where P2SH keeps it), 20 bytes. Its
+               push inside a candidate script), or published in an
+               output, 20 bytes. Its byte is the FLAGS below: where it
+               was seen, and in which form;
+    scripts20  hash160 of every redeem script the chain revealed (the
+               last scriptSig push, where P2SH keeps it), 20 bytes. Its
                byte COUNTS the pubkeys found inside that script;
-    scripts32  sha256 of every candidate witness script (the last
-               witness item, where P2WSH keeps it), 32 bytes. Same
+    scripts32  sha256 of every witness script the chain revealed (the
+               last witness item, where P2WSH keeps it), 32 bytes. Same
                count.
+
+WHAT MAKES A CANDIDATE A SCRIPT, AND WHY IT IS DECIDED AT THE FUSION
+===================================================================
+The scan sees the input that spends, never the output spent, so it
+cannot tell a redeem script from a public key: a 33-byte script that
+starts with `02` and a compressed key are the same bytes. 2.0.0 decided
+by the shape and dropped real scripts that looked like keys or
+signatures; 1.x kept every candidate and filled half its script
+partitions with keys and signatures. This format does neither. The rule
+it follows has no exception:
+
+    an item is excluded only when the chain itself proves it cannot be
+    what it would be archived for. A shape is not a proof. A position
+    is not a proof.
+
+The proof is in the chain, only not in the input: a redeem script runs
+only behind a P2SH output whose program is its hash160, a witness script
+only behind a P2WSH program that is its sha256 (a native output, or the
+`0020<32>` a P2SH-P2WSH spend pushes as its redeem script). So the scan
+keeps every candidate and also records, in two more run categories,
+every such program the chain created; the fusion keeps a candidate in
+`scripts20`/`scripts32` exactly when its digest is among the programs,
+and sets the others aside. What is set aside is not thrown away: a
+program created LATER can make an old candidate a revealed script, and
+appending must equal rebuilding. The programs and the candidates not
+proven yet are therefore a second artifact, `reveal-proof-v1`, sealed in
+the same fusion under `proof/`, with this archive as its declared
+parent. The archive answers every question without it; it grows only
+beside it.
+
+The two exclusions that remain are proofs of the same kind, made by the
+bytes: a control block and an annex cannot be scripts, because the first
+byte of a script always executes and theirs fail it.
 
 FIRST_HEIGHT is the lowest height the digest was ever seen at, so the
 archive answers WHEN a key became public and not only whether. It is
@@ -62,10 +96,11 @@ since height H" from an impossible question into a filter.
 The key count on a script is free: the extraction has just walked
 that script looking for pubkeys, and the byte it fills was reserved
 and always zero. It buys a census of multisig shapes over the whole
-chain, from an archive that stores hashes and never scripts.
+chain, from an archive that stores hashes and never scripts: a census
+that means something only because the partition holds scripts.
 
 The flags byte on a key records WHERE it was seen (directly in a
-scriptSig, directly in a witness, or inside a revealed script, the
+scriptSig, directly in a witness, or inside a candidate script, the
 cosigner case), with the bits of every sighting OR-ed together, and in
 one more bit WHICH FORM the key was serialized in. The form is not a
 place: it is a property of the key itself, constant across sightings
@@ -84,11 +119,12 @@ Subcommands:
                 JSON-RPC, or the binary REST interface with `--rest`,
                 which halves the bytes on the wire), verify integrity
                 (header hash, prev link, Merkle, witness commitment),
-                extract revelations, flush them as sorted deduplicated
-                runs, checkpoint and resume.
+                extract revelations and programs, flush them as sorted
+                deduplicated runs, checkpoint and resume.
     merge       fuse all runs (and the previous merged files) into
-                one sorted deduplicated file per category, and write
-                the manifest with the archive's canonical fingerprint.
+                one sorted deduplicated file per category, prove the
+                candidates against the programs, and write the two
+                manifests with their canonical fingerprints.
                 This is the periodic fusion of the card index —
                 periodic BETWEEN scans, never during one: scan and
                 merge on one directory exclude each other (a `.lock`
@@ -97,9 +133,10 @@ Subcommands:
                 the lock files of `reuse_scan.py prepare`, and print
                 the fingerprint in reuse_scan's exact format — or
                 compare it directly against a reuse_scan state file.
-    verify      re-read a sealed archive against its manifest: the
-                bytes, the ladders rebuilt from the files they index,
-                the fingerprint, and with --deep every record.
+    verify      re-read a sealed archive (and its proof, when it has
+                one) against the manifests: the bytes, the ladders
+                rebuilt from the files they index, the fingerprints,
+                and with --deep every record and the proof itself.
     derive      the reuse table and curve as a READ of the archive,
                 without a second pass over the chain.
     lookup      is this 20/32-byte digest in the archive? The seed of
@@ -123,13 +160,14 @@ from nodsig import blockparse
 from nodsig.sightings import (FLAG_INNER_SIG, FLAG_INNER_WIT, FLAG_OTHER_FACE,
                               FLAG_OUT, FLAG_SIG, FLAG_UNCOMPRESSED, FLAG_WIT,
                               FLAG_XONLY, FLAGS_DEFINED, FLAGS_FULL_ONLY,
-                              MAX_INNER_KEYS, burns_for, candidate_shape,
+                              MAX_INNER_KEYS, burns_for, cannot_be_script,
                               is_control_block, key_records, leaf_xonly_keys,
                               new_filter_stats, output_keys, script_records,
                               taproot_body, witness_key_records)
 from nodsig.progress import Pace
-from nodsig.artifact import (WallClock, declared_parent, make_identity, producer,
-                             seal_manifest, verify_sealed)
+from nodsig.artifact import (WallClock, declared_parent, identity_fingerprint,
+                             make_identity, producer, seal_manifest,
+                             verify_sealed)
 from nodsig.blockparse import ParseError, script_pushes, scriptsig_pushes
 
 # Slab I/O for the fixed-width record files (runs, merged archive): the
@@ -182,8 +220,15 @@ from nodsig.reuse_scan import (add_coemission_args, add_node_args,
 
 STATE_NAME = "state.json"
 MANIFEST_NAME = "manifest.json"
-FORMAT_TAG = "reveal-archive-v3"
+FORMAT_TAG = "reveal-archive-v4"
 RUNS_DIR = "runs"
+
+# The sibling artifact the fusion seals beside the archive: the programs
+# the chain created and the candidates they have not proven (see the
+# module docstring). A directory of its own, so the archive can be handed
+# over without it, and a tag of its own, so it can be handed over too.
+PROOF_TAG = "reveal-proof-v1"
+PROOF_DIR = "proof"
 
 # The eight bits of a `keys` record, and the classifier both roads
 # share, live in sightings.py; they are re-exported here by name.
@@ -198,35 +243,53 @@ RUNS_DIR = "runs"
 #   keys       the FLAGS above (provenance, plus the form bit), a
 #              bitfield: two sightings of one key are merged with OR;
 #   scripts*   the NUMBER of pubkey-shaped pushes found inside that
-#              script, saturating at 255. It is a function of the script
+#   unproven*  script, saturating at 255. It is a function of the script
 #              bytes, so every sighting of one script agrees; `max`
-#              merges them and is a no-op that a test pins.
+#              merges them and is a no-op that a test pins;
+#   programs*  where the chain committed to the program: PROGRAM_OUTPUT
+#              (an output created with it) and PROGRAM_NESTED (a
+#              P2SH-P2WSH spend pushing it as its redeem script), OR-ed.
 #
 # FIRST_HEIGHT is the LOWEST height at which the digest was ever seen, so
 # the merge takes `min`. Both `or` and `min` are associative and
 # commutative, which is exactly what keeps the fusion order-independent
 # and the append equal to a rebuild.
-CATEGORIES = {"keys": 20, "scripts20": 20, "scripts32": 32}
+CATEGORIES = {"keys": 20, "scripts20": 20, "scripts32": 32,
+              "programs20": 20, "programs32": 32,
+              "unproven20": 20, "unproven32": 32}
 CAT_ORDER = ["keys", "scripts20", "scripts32"]
+PROGRAM_CATS = ["programs20", "programs32"]
+RUN_CATS = CAT_ORDER + PROGRAM_CATS
+PROOF_ORDER = ["programs20", "programs32", "unproven20", "unproven32"]
+# A script partition → the programs that prove its candidates, and the
+# pile of the candidates they have not proven yet.
+PROVED_BY = {"scripts20": ("programs20", "unproven20"),
+             "scripts32": ("programs32", "unproven32")}
+_OR_CATS = frozenset(("keys", "programs20", "programs32"))
 HEIGHT_BYTES = 3            # 16.7M heights, ~318 years of chain
+
+PROGRAM_OUTPUT = 1          # an output the chain created carries it
+PROGRAM_NESTED = 2          # a P2SH-P2WSH spend pushed it as its redeem script
+PROGRAM_BITS = PROGRAM_OUTPUT | PROGRAM_NESTED
 
 
 def rec_width(cat):
-    """Bytes of one record of `cat`: 24, 24 and 36."""
+    """Bytes of one record of `cat`: 24 for a 20-byte digest, 36 for 32."""
     return CATEGORIES[cat] + 1 + HEIGHT_BYTES
 
 
 def _reduce(cat, byte_a, height_a, byte_b, height_b):
     """Merge two sightings of the same digest."""
-    byte = (byte_a | byte_b) if cat == "keys" else max(byte_a, byte_b)
+    byte = (byte_a | byte_b) if cat in _OR_CATS else max(byte_a, byte_b)
     return byte, min(height_a, height_b)
 
 
-def _combine_keys(a, b):
-    """`_reduce` on two whole `keys` records: flags OR-ed, the lowest
-    first height kept. The height is big-endian, so the byte minimum is
-    the numeric one."""
-    return a[:20] + bytes([a[20] | b[20]]) + min(a[21:], b[21:])
+def _combine_or(a, b):
+    """`_reduce` on two whole records whose byte is a bitfield (`keys`,
+    `programs*`): bits OR-ed, the lowest first height kept. The height
+    is big-endian, so the byte minimum is the numeric one."""
+    w = len(a) - 4
+    return a[:w] + bytes([a[w] | b[w]]) + min(a[w + 1:], b[w + 1:])
 
 
 def _combine_scripts(a, b):
@@ -234,6 +297,10 @@ def _combine_scripts(a, b):
     the larger inner-keys count, the lowest first height."""
     w = len(a) - 4
     return a[:w] + bytes([max(a[w], b[w])]) + min(a[w + 1:], b[w + 1:])
+
+
+def _combiner(cat):
+    return _combine_or if cat in _OR_CATS else _combine_scripts
 
 # Every K-th key of a merged file is sampled into a `.lad` sidecar at merge
 # time, so a lookup bisects the resident ladder and reads ONE bucket (here
@@ -246,10 +313,12 @@ ARCHIVE_LADDER_EVERY = 2048
 # What `verify` needs to rebuild each ladder from the file it indexes:
 # logical name → (record width, key length, step). The same triple the
 # merge sampled by, declared once so the seal and the audit cannot drift
-# apart and raise a false alarm at each other.
-ARCHIVE_LADDERS = {cat: (rec_width(cat), CATEGORIES[cat],
-                         ARCHIVE_LADDER_EVERY)
-                   for cat in CAT_ORDER}
+# apart and raise a false alarm at each other. One table for both
+# artifacts: their category names do not overlap.
+LADDERS = {cat: (rec_width(cat), CATEGORIES[cat], ARCHIVE_LADDER_EVERY)
+           for cat in CATEGORIES}
+ARCHIVE_LADDERS = {cat: LADDERS[cat] for cat in CAT_ORDER}
+PROOF_LADDERS = {cat: LADDERS[cat] for cat in PROOF_ORDER}
 
 
 # ---------------------------------------------------------------------------
@@ -265,16 +334,19 @@ def extract_revelations(tx_in, stats, sig_pushes=None):
 
     The walk mirrors the shapes of the standard spends (and is the
     same strategy as reuse_scan's, restated there independently): every
-    key-shaped push of the scriptSig and every key-shaped witness item
-    outside the taproot signature slots is a revealed key, keyed by
-    the identity `keyforms` decides once (the compressed digest under
-    OTHER_FACE when the form seen was another); the LAST scriptSig push
-    is a candidate redeem script and the LAST witness item a candidate
-    witness script, each kept only when its shape allows it to be a
-    script; key-shaped pushes inside a kept candidate are revealed keys
-    too, tagged as inner. A taproot script path reveals its internal
-    key (in the control block) and the keys its leaf names, both
-    x-only. Malformed scripts are counted and skipped, never guessed at.
+    key-shaped push of the scriptSig and every key-shaped witness item,
+    wherever it sits, is a revealed key, keyed by the identity
+    `keyforms` decides once (the compressed digest under OTHER_FACE
+    when the form seen was another); the LAST scriptSig push is a
+    candidate redeem script and the LAST witness item a candidate
+    witness script, whatever they look like, unless their bytes prove
+    they cannot be one (a control block, an annex); key-shaped pushes
+    inside a candidate are revealed keys too, tagged as inner. Whether a
+    candidate IS a script is not decided here: the fusion decides it
+    against the programs the chain created. A taproot script path
+    reveals its internal key (in the control block) and the keys its
+    leaf names, both x-only. Malformed scripts are counted and skipped,
+    never guessed at.
 
     `sig_pushes` lets the caller pass the scriptSig pushes it has
     already parsed. Passing them must not change the answer, only the
@@ -289,29 +361,17 @@ def extract_revelations(tx_in, stats, sig_pushes=None):
         key_records(out, p, FLAG_SIG)
 
     witness = tx_in.witness
-    slots, key_path = nonces._taproot_slots(witness)
     witness_key_records(out, witness)
 
-    # (candidate script, category, inner-key flag, sits in a slot)
-    candidates = []
-    if sig_pushes:
-        candidates.append((sig_pushes[-1], "scripts20", FLAG_INNER_SIG,
-                           False))
-    if witness:
-        last = witness[-1]
-        candidates.append((last, "scripts32", FLAG_INNER_WIT,
-                           any(last is slot for slot in slots)))
-
-    for script, cat, inner_flag, in_slot in candidates:
-        if candidate_shape(script, stats, in_slot, key_path,
-                           len(witness)) is not None:
-            continue
-        # The script's own record carries HOW MANY keys were found inside
-        # it. The count is already in hand and costs nothing to keep;
-        # recovering it later would mean another pass over the chain,
-        # because the archive stores the script's hash and never the
-        # script.
-        script_records(out, script, cat, inner_flag, stats)
+    # The script's own record carries HOW MANY keys were found inside
+    # it. The count is already in hand and costs nothing to keep;
+    # recovering it later would mean another pass over the chain,
+    # because the archive stores the script's hash and never the script.
+    if sig_pushes and not cannot_be_script(sig_pushes[-1], 0, stats):
+        script_records(out, sig_pushes[-1], "scripts20", FLAG_INNER_SIG,
+                       stats)
+    if witness and not cannot_be_script(witness[-1], len(witness), stats):
+        script_records(out, witness[-1], "scripts32", FLAG_INNER_WIT, stats)
 
     # A taproot script path: the internal key is bytes 1..33 of the
     # control block, the leaf names its own keys. Neither item is a
@@ -339,16 +399,47 @@ def extract_output_revelations(tx_out, stats):
     return out
 
 
+def output_program(spk):
+    """(category, program) for a P2SH output (`a914 <20> 87`) or a P2WSH
+    output (`0020 <32>`), else None. Both templates are exact and of
+    fixed length: this is a byte comparison, not a guess."""
+    n = len(spk)
+    if n == 23 and spk[0] == 0xA9 and spk[1] == 0x14 and spk[22] == 0x87:
+        return "programs20", bytes(spk[2:22])
+    if n == 34 and spk[0] == 0x00 and spk[1] == 0x20:
+        return "programs32", bytes(spk[2:34])
+    return None
+
+
+def nested_program(sig_pushes, witness):
+    """The 32-byte program of a P2SH-P2WSH spend, or None.
+
+    A witness script nested in P2SH is proven by no output: the output
+    holds hash160 of `0020 <32>`, and the `<32>` the witness script must
+    hash to sits in the redeem script the scriptSig pushes. BIP 141 makes
+    that push the scriptSig's only one, and a witness on any other spend
+    of a non-witness output invalid. So an input with a witness whose
+    last scriptSig push is `0020 <32>` names a program; the test is
+    looser than the consensus rule (any last push, not the only one),
+    which can only add programs, never miss one."""
+    if witness and sig_pushes:
+        last = sig_pushes[-1]
+        if len(last) == 34 and last[0] == 0x00 and last[1] == 0x20:
+            return bytes(last[2:34])
+    return None
+
+
 # ---------------------------------------------------------------------------
 # The on-disk format: sorted runs, fused periodically
 # ---------------------------------------------------------------------------
-# A run is an immutable file of fixed-width records [digest | flags],
-# sorted by digest, deduplicated within itself (flags OR-ed). The
-# archive at any moment is the union of the merged files and the runs
-# written since the last fusion; because deduplication is an OR of
-# bits, fusion is associative and the result does not depend on when
-# it happens — which is exactly what makes the format appendable: new
-# blocks only ever ADD runs on top.
+# A run is an immutable file of fixed-width records [digest | byte |
+# height], sorted by digest, deduplicated within itself. The archive at
+# any moment is the union of the merged files and the runs written since
+# the last fusion, with the proof applied to the candidates; because
+# deduplication is an OR of bits (or a max) and a min of heights, and the
+# proof is membership in a set that only grows, fusion is associative and
+# the result does not depend on when it happens, which is exactly what
+# makes the format appendable: new blocks only ever ADD runs on top.
 
 
 def _write_run(path, cat, records):
@@ -409,20 +500,90 @@ def _read_records(path, cat, expect_sha=None, slab_bytes=IO_CHUNK,
         yield r[:width], r[width], int.from_bytes(r[width + 1:], "big")
 
 
-def _merged_stream(sources, cat):
-    """One deduplicated (digest, byte, first_height) stream out of many
-    sorted sources: heapq.merge keeps the global order, so equal digests
-    arrive adjacent and the reduction is a look-behind."""
-    last = None
-    for h, fl, ht in heapq.merge(*sources):
-        if last is not None and h == last[0]:
-            last = (h,) + _reduce(cat, last[1], last[2], fl, ht)
+def _reduced(records, cat):
+    """One deduplicated stream of whole records out of a sorted one:
+    equal digests arrive adjacent and are reduced by the category's
+    rule, so the reduction is a look-behind."""
+    key_len = CATEGORIES[cat]
+    combine = _combiner(cat)
+    pending = None
+    for r in records:
+        if pending is not None and r[:key_len] == pending[:key_len]:
+            pending = combine(pending, r)
             continue
-        if last is not None:
-            yield last
-        last = (h, fl, ht)
-    if last is not None:
-        yield last
+        if pending is not None:
+            yield pending
+        pending = r
+    if pending is not None:
+        yield pending
+
+
+def _proven(candidates, programs, key_len, pile=None):
+    """THE PROOF, in one place for the fusion and for every reader.
+
+    `candidates` and `programs` are sorted streams of whole records. A
+    candidate whose digest is among the programs is yielded: the chain
+    created a program it opens, so it is a revealed script. Any other is
+    handed to `pile.add` when a pile is given (the fusion keeps it for
+    a program yet to come) and dropped otherwise (a reader answers at
+    the watermark). A merge-join: both streams are read once, in order.
+
+    The programs are read to their end even after the last candidate, so
+    a sha-checked reader settles its digest instead of stopping short."""
+    prog = next(programs, None)
+    for r in candidates:
+        key = r[:key_len]
+        while prog is not None and prog[:key_len] < key:
+            prog = next(programs, None)
+        if prog is not None and prog[:key_len] == key:
+            yield r
+        elif pile is not None:
+            pile.add(r)
+    for _ in programs:
+        pass
+
+
+class _RecordWriter:
+    """A sorted file written record by record, with its sha256 and its
+    ladder taken on the way by the rules `merge_to_file` and
+    `artifact.sha_and_ladder` use. It exists for the one output of a
+    fusion that is not a merge: the pile of candidates the proof sets
+    aside, which is produced as a side effect of the join feeding the
+    merge of the scripts, so both leave in one pass."""
+
+    def __init__(self, path, key_len, ladder_path, every):
+        self.path = path
+        self.key_len = key_len
+        self.ladder_path = ladder_path
+        self.every = every
+        self.digest = hashlib.sha256()
+        self.ladder = bytearray()
+        self.buf = bytearray()
+        self.records = 0
+        self.f = open(path + ".tmp", "wb")
+
+    def add(self, r):
+        if self.records % self.every == 0:
+            self.ladder.extend(r[:self.key_len])
+        self.buf.extend(r)
+        self.records += 1
+        if len(self.buf) >= IO_CHUNK:
+            self.f.write(self.buf)
+            self.digest.update(self.buf)
+            self.buf.clear()
+
+    def close(self):
+        """Returns (records, sha256, ladder sha256)."""
+        if self.buf:
+            self.f.write(self.buf)
+            self.digest.update(self.buf)
+        self.f.close()
+        durable_replace(self.path + ".tmp", self.path)
+        with open(self.ladder_path + ".tmp", "wb") as f:
+            f.write(self.ladder)
+        durable_replace(self.ladder_path + ".tmp", self.ladder_path)
+        return (self.records, self.digest.hexdigest(),
+                hashlib.sha256(self.ladder).hexdigest())
 
 
 def _load_state(archive_dir, required=True):
@@ -437,8 +598,8 @@ def _load_state(archive_dir, required=True):
         raise ScanError(
             f"archive state says {state.get('format')!r}, not "
             f"{FORMAT_TAG!r}: an earlier format is read by the release "
-            "that wrote it (v1.9.0 for reveal-archive-v2), and a fresh "
-            "scan writes this one")
+            "that wrote it (v2.1.2 for reveal-archive-v3, v1.9.0 for "
+            "reveal-archive-v2), and a fresh scan writes this one")
     return state
 
 
@@ -453,6 +614,38 @@ def _load_manifest(archive_dir):
             f"{FORMAT_TAG!r}: an earlier format is read by the release "
             "that wrote it")
     return manifest
+
+
+def _proof_dir(archive_dir):
+    return os.path.join(archive_dir, PROOF_DIR)
+
+
+def _load_proof(archive_dir):
+    """The sealed proof beside the archive, or None when there is none."""
+    path = os.path.join(_proof_dir(archive_dir), MANIFEST_NAME)
+    if not os.path.exists(path):
+        return None
+    proof = read_json(path, ScanError)
+    if proof.get("format") != PROOF_TAG:
+        raise ScanError(
+            f"{path} says {proof.get('format')!r}, not {PROOF_TAG!r}")
+    return proof
+
+
+def _state_from_seal(manifest):
+    """The state a sealed archive implies when it arrives without its
+    own: nothing pending, the watermark and the block its seal names.
+
+    What a state holds beyond that is how the archive was built (the
+    runs not yet fused, the counters, the seconds), none of which a
+    reader needs and none of which a copy carries. The block hash is the
+    one fact that is not in the identity and that a reader does need:
+    `derive` confronts it with the snapshot's block, and a scan growing
+    the archive checks that the next block links to it."""
+    return {"format": FORMAT_TAG,
+            "last_height": manifest["identity"]["coverage"]["to"],
+            "last_block_hash": manifest["build"]["last_block_hash"],
+            "stats": {}, "runs": []}
 
 
 def _cat_file(manifest, cat):
@@ -486,45 +679,87 @@ def _cat_sha(manifest, cat):
     raise ScanError(f"the identity names no category {cat!r}")
 
 
-def _sweep_unnamed(archive_dir, manifest, why):
+def _sweep_unnamed(directory, manifest, order, prefix, why):
     """What the manifest does not name does not exist: delete it.
 
     One rule, two moments. BEFORE a fusion it clears what a crashed
     fusion left — a generation written but never committed, a `.tmp`
-    stub; the manifest still describes a whole, readable archive and
+    stub; the manifest still describes a whole, readable artifact and
     the fusion simply runs again. AFTER a fusion it clears the
     generation the new manifest has just superseded. Both are the same
-    question ("is this file named?"), so they are the same code."""
+    question ("is this file named?"), so they are the same code, for
+    the archive and for its proof alike."""
+    if not os.path.isdir(directory):
+        return
     named = set()
     if manifest is not None:
-        named = ({_cat_file(manifest, c) for c in CAT_ORDER}
+        named = ({_cat_file(manifest, c) for c in order}
                  | {e["file"]
                     for e in manifest["build"]["caches"].values()})
-    for name in sorted(os.listdir(archive_dir)):
-        if not name.startswith("archive_"):
+    for name in sorted(os.listdir(directory)):
+        if not name.startswith(prefix):
             continue
         if name.endswith(".tmp") or name not in named:
-            os.remove(os.path.join(archive_dir, name))
+            os.remove(os.path.join(directory, name))
             print(f"  removed {name} ({why})", file=sys.stderr)
 
 
-def _archive_sources(archive_dir, cat, state, manifest):
-    """All the sorted sources holding one category right now: the
-    merged file (if a fusion happened) plus every run written since.
-    Each is streamed with its recorded sha256 checked."""
-    todo = []
-    if manifest is not None:
-        todo.append((os.path.join(archive_dir, _cat_file(manifest, cat)),
-                     _cat_sha(manifest, cat)))
-    for run in state["runs"]:
-        if run["category"] == cat:
-            todo.append((_run_path(archive_dir, run["name"]),
-                         run["sha256"]))
-    # All these sources feed one heapq.merge, so their read buffers must
-    # share a memory budget — otherwise a fragmented archive (hundreds of
-    # runs) blows past RAM before the merge yields anything.
-    slab = budgeted_slab(len(todo))
-    return [_read_records(path, cat, sha, slab) for path, sha in todo]
+def _in_fusion_window(state, manifest):
+    """True when a fusion sealed the archive and was killed before it
+    rewrote the state: runs are still named, and the watermark they
+    reach is the one the manifest already covers. Outside a crash this
+    cannot happen: a scan that adds runs moves the watermark past the
+    seal, and a completed fusion leaves no runs."""
+    return (manifest is not None and bool(state["runs"])
+            and state["last_height"] == manifest["identity"]["coverage"]["to"])
+
+
+def _check_proof(state, manifest, proof):
+    """Raise unless `proof` is the proof this archive can grow beside.
+
+    The normal case is the proof sealed in the same fusion: the archive
+    names its fingerprint, and it names the archive as its parent. The
+    one other case accepted is the crash window (`_in_fusion_window`):
+    the fusion commits the archive's manifest BEFORE the proof's, so a
+    kill between the two leaves the previous proof beside the new
+    archive, and re-fusing the same runs against it lands on the same
+    bytes (every candidate it promotes is already in the archive, and
+    merging a record twice is merging it once). The previous proof is
+    recognized by its parent: the archive the new one was fused onto.
+    The order is not negotiable: committed the other way round, the
+    new proof would have dropped the candidates it promoted, and the
+    archive holding them would have been swept."""
+    if manifest is None:
+        if proof is not None:
+            raise ScanError(
+                f"{PROOF_DIR}/ holds a sealed proof but the archive has no "
+                "manifest: a proof is sealed in the same fusion as its "
+                "archive, so this one belongs to another: remove it, or "
+                "restore the archive's manifest")
+        return
+    sealed_with = manifest["build"]["proof"]["fingerprint"]
+    if (proof is not None and proof["fingerprint"] == sealed_with
+            and proof["build"]["parent"]["fingerprint"]
+            == manifest["fingerprint"]):
+        return
+    if _in_fusion_window(state, manifest):
+        before = None if proof is None else \
+            proof["build"]["parent"]["fingerprint"]
+        if before == manifest["build"]["fused_onto"]:
+            return
+    if proof is None:
+        raise ScanError(
+            f"this archive has no proof beside it ({PROOF_DIR}/"
+            f"{MANIFEST_NAME}): it answers every question up to its "
+            "watermark, but it can only grow beside the proof it was "
+            "sealed with, which holds the programs that prove a candidate "
+            "and the candidates not proven yet. Restore that directory, "
+            "or build from zero")
+    raise ScanError(
+        f"the proof beside this archive ({proof['fingerprint'][:16]}…) is "
+        f"not the one it was sealed with ({sealed_with[:16]}…): growing "
+        "against another proof would keep or set aside candidates by "
+        "programs this archive never saw")
 
 
 # ---------------------------------------------------------------------------
@@ -549,25 +784,44 @@ def run_scan(rpc_url, auth, end_height, archive_dir,
     the same arguments resumes from there. Runs that a crash left
     unrecorded are deleted on resume: what the state does not name
     does not exist.
+
+    A sealed archive that arrived without its state grows from its
+    seal: the watermark and the block hash the manifest names stand in
+    for the state, and the first block fetched must link to that hash.
+    Growing needs the proof it was sealed with, checked here and not
+    after a day of scanning.
     """
     warn_if_slow_ripemd160("this scan")
     client = client or RpcClient(rpc_url, auth)
     os.makedirs(os.path.join(archive_dir, RUNS_DIR), exist_ok=True)
     state_path = os.path.join(archive_dir, STATE_NAME)
 
-    stats = {"transactions": 0, "inputs": 0,
-             "malformed_scriptsig": 0, "malformed_inner_script": 0,
-             "revelations": 0, **new_filter_stats()}
+    stats = {"transactions": 0, "inputs": 0, "malformed_scriptsig": 0,
+             "revelations": 0, "program_outputs": 0, "nested_programs": 0,
+             **new_filter_stats()}
     runs = []                      # [{name, category, records, sha256}]
     start_height = 1               # the genesis coinbase reveals nothing
     prev_hash = None
 
     state = _load_state(archive_dir, required=False)
+    manifest = _load_manifest(archive_dir)
+    if state is None and manifest is not None:
+        state = _state_from_seal(manifest)
+        print(f"growing a sealed archive from its watermark "
+              f"{state['last_height']:,}", file=sys.stderr)
+    if manifest is not None:
+        if _in_fusion_window(state, manifest):
+            raise ScanError(
+                "a fusion was interrupted after sealing the archive and "
+                "before rewriting the state: run `merge` to finish it, "
+                "then scan")
+        _check_proof(state, manifest, _load_proof(archive_dir))
     # Built from the state so a resumed scan continues its own total.
     clock = WallClock("scan", state)
     if state is not None:
+        zeros = dict(stats)
         stats.update(state["stats"])
-        for name, zero in new_filter_stats().items():
+        for name, zero in zeros.items():
             stats.setdefault(name, zero)
         runs = state["runs"]
         start_height = state["last_height"] + 1
@@ -639,7 +893,7 @@ def run_scan(rpc_url, auth, end_height, archive_dir,
               f"{start_height - 1}", file=sys.stderr)
         return
 
-    buffers = {cat: [] for cat in CAT_ORDER}
+    buffers = {cat: [] for cat in RUN_CATS}
     buffered = 0
     seg_start = start_height       # first height the open buffers cover
 
@@ -653,7 +907,7 @@ def run_scan(rpc_url, auth, end_height, archive_dir,
         that is why a missing tile is invisible to merge and verify
         by design, not by luck."""
         nonlocal buffered, seg_start
-        for cat in CAT_ORDER:
+        for cat in RUN_CATS:
             if not buffers[cat]:
                 continue
             name = (f"run_{seg_start:08d}-{through_height:08d}_"
@@ -722,13 +976,20 @@ def run_scan(rpc_url, auth, end_height, archive_dir,
             for tx in block.transactions:
                 stats["transactions"] += 1
                 # Outputs first, coinbase included: a key published in
-                # a scriptPubKey is in view from this block.
+                # a scriptPubKey is in view from this block, and a
+                # program created here proves the scripts that open it.
                 for tx_out in tx.outputs:
                     for cat, digest, byte in extract_output_revelations(
                             tx_out, stats):
                         buffers[cat].append((digest, byte, h))
                         buffered += 1
                         stats["revelations"] += 1
+                    program = output_program(tx_out.script_pubkey)
+                    if program is not None:
+                        buffers[program[0]].append(
+                            (program[1], PROGRAM_OUTPUT, h))
+                        buffered += 1
+                        stats["program_outputs"] += 1
                 if blockparse.is_coinbase(tx):
                     continue
                 for tx_in in tx.inputs:
@@ -742,6 +1003,12 @@ def run_scan(rpc_url, auth, end_height, archive_dir,
                         buffers[cat].append((digest, byte, h))
                         buffered += 1
                         stats["revelations"] += 1
+                    nested = nested_program(pushes, tx_in.witness)
+                    if nested is not None:
+                        buffers["programs32"].append(
+                            (nested, PROGRAM_NESTED, h))
+                        buffered += 1
+                        stats["nested_programs"] += 1
                     if nonce_emitter:
                         nonce_emitter.add_input(h, tx_in, pushes)
 
@@ -762,72 +1029,132 @@ def run_scan(rpc_url, auth, end_height, archive_dir,
     print(f"\narchive covers heights 1..{end_height} "
           f"({stats['revelations']:,} revelations, {len(runs)} runs; "
           f"malformed scriptSigs: {stats['malformed_scriptsig']}, "
-          f"malformed inner scripts: {stats['malformed_inner_script']}; "
-          f"keys in outputs: {stats['out_keys']:,}; candidates filtered by "
-          f"shape: {stats['filtered_key_shaped']:,} keys, "
-          f"{stats['filtered_signature_shaped']:,} signatures, "
-          f"{stats['filtered_control_or_annex']:,} control blocks or "
-          "annexes)")
+          f"candidates that do not parse as a script: "
+          f"{stats['unparsed_candidates']:,}; "
+          f"keys in outputs: {stats['out_keys']:,}; programs: "
+          f"{stats['program_outputs']:,} in outputs, "
+          f"{stats['nested_programs']:,} nested in P2SH; "
+          f"{stats['control_or_annex']:,} control blocks or annexes, "
+          "which cannot be scripts)")
     if graph_digest_dir:
         emitter.report()
-    print("run `merge` to fuse the runs and fingerprint the archive.")
+    print("run `merge` to fuse the runs, prove the candidates and "
+          "fingerprint the archive.")
 
 
 # ---------------------------------------------------------------------------
 # merge — the periodic fusion
 # ---------------------------------------------------------------------------
 
+def _fuse(directory, prefix, cat, generation, sources, base_manifest, slab):
+    """One merged file of the next generation: the previous one (named by
+    `base_manifest`, when there is one) as the gallop's cursor, `sources`
+    as the sorted runs, the category's own reduction on equal digests.
+    Returns (build.files entry, build.caches entry, sha256).
+
+    The shared fusion, with the previous generation as a cursor: an
+    append inserts a few million records into billions, and the
+    stretches nothing interleaves move as slabs instead of passing one by
+    one through three generator layers. The bytes, the ladder and the
+    count are the ones a per-record walk produces, which the suite pins."""
+    rec = rec_width(cat)
+    stem = f"{prefix}{cat}_g{generation:04d}"
+    cursor = None
+    if base_manifest is not None:
+        cursor = _BaseCursor(
+            os.path.join(directory, _cat_file(base_manifest, cat)), rec,
+            _cat_sha(base_manifest, cat), slab, ScanError)
+    records, sha, lad_sha, _dups = merge_to_file(
+        sources, os.path.join(directory, stem + ".bin"), rec,
+        CATEGORIES[cat], os.path.join(directory, stem + ".lad"),
+        ARCHIVE_LADDER_EVERY, None, base=cursor, combine=_combiner(cat))
+    return ({"file": stem + ".bin", "records": records},
+            {"file": stem + ".lad", "every": ARCHIVE_LADDER_EVERY,
+             "sha256": lad_sha},
+            sha)
+
+
 @locked("archive_dir", ScanError, "merge")
 def run_merge(archive_dir):
     """Fuse the merged files and all runs into one sorted deduplicated
-    file per category, then fingerprint the result.
+    file per category, prove the candidates, then fingerprint the
+    archive and its proof.
 
     The fingerprint is the archive's canonical form: after a full
     fusion the archive at height H is one well-defined set of bytes,
     whatever the run boundaries were — an interrupted-and-resumed scan
-    fuses to the SAME files as a one-shot scan. That is the
+    fuses to the SAME files as a one-shot scan, and an archive grown in
+    two takes to the same files as one built at once. That is the
     determinism rule of the card index: the incremental state must
     equal a rebuild from zero, and this is where it is enforced and
     measured.
 
-    WHY THE MERGED FILES CARRY A GENERATION
-    =======================================
-    The fusion writes generation N+1 beside generation N and commits
-    the manifest only when all three categories are on disk; the old
-    generation and the consumed runs are deleted after the state that
-    stopped naming them. Overwriting `archive_keys.bin` in place, as
-    this did before, left a window with no way out: a kill between the
-    rename and the manifest write left the manifest describing bytes
-    that no longer existed, and since every reader — merge included —
-    verifies that sha256 before yielding a byte, the archive could not
-    even be re-fused. Nothing about the FORMAT changes: the
+    THE PROOF, PER SCRIPT PARTITION
+    ===============================
+    1. the programs: the previous generation of the proof's programs
+       and the program runs, fused;
+    2. the candidates: the proof's pile of candidates not proven yet and
+       the candidate runs, reduced into one stream and joined with the
+       programs just sealed. A candidate among them joins the archive's
+       previous generation in the merge of the scripts; any other goes
+       to the new pile, in the same pass.
+    A candidate the pile has held for years is promoted the moment a
+    program for it appears, which is what makes appending equal
+    rebuilding: a rebuild sees the old candidate and the new program
+    together, and so does the pile.
+
+    WHY THE MERGED FILES CARRY A GENERATION, AND THE ORDER OF THE COMMIT
+    ===================================================================
+    The fusion writes generation N+1 beside generation N, for the
+    archive and for the proof, and deletes nothing before the commit.
+    The commit is three writes, in this order: the archive's manifest,
+    the proof's manifest, the state that stops naming the runs. The
+    consumed runs and the superseded generations are deleted after all
+    three. A kill between any two leaves the runs named and a readable
+    archive, and the next `merge` fuses them again onto what is sealed
+    and lands on the same bytes (see `_check_proof` for the one window
+    where the two manifests disagree, and why this order and not the
+    other). Nothing about the FORMAT depends on the generation: the
     fingerprint is over the category names and the file digests, never
-    over a file name, so a generation number cannot move it.
+    over a file name.
     """
     state = _load_state(archive_dir)
     manifest = _load_manifest(archive_dir)
-    _sweep_unnamed(archive_dir, manifest, "not named by the manifest")
+    proof = _load_proof(archive_dir)
+    proof_dir = _proof_dir(archive_dir)
+    # The sweep comes first, as it always did: a fusion killed while it
+    # deleted the generation it had just superseded leaves files no
+    # manifest names, and a merge with nothing to fuse is where they go.
+    _sweep_unnamed(archive_dir, manifest, CAT_ORDER, "archive_",
+                   "not named by the manifest")
+    _sweep_unnamed(proof_dir, proof, PROOF_ORDER, "proof_",
+                   "not named by the proof's manifest")
     if not state["runs"] and manifest is not None:
         print("nothing to fuse: no runs since the last merge.")
         return manifest["fingerprint"]
+    _check_proof(state, manifest, proof)
 
     generation = ((manifest["build"]["generation"] + 1)
                   if manifest else 1)
-    # The fusion writes the new generation beside the runs and the old
-    # one, and deletes nothing before the commit. Its upper bound is
-    # every record it reads: the run pile plus the current generation
+    # The fusion writes the new generations beside the runs and the old
+    # ones, and deletes nothing before the commit. Its upper bound is
+    # every record it reads: the run pile plus both current generations
     # (the first fusion of a scan reads a pile about twice the size of
-    # what it will seal — measured, and the reason this is checked
-    # here rather than discovered as EIO hours in).
+    # what it will seal: measured, and the reason this is checked here
+    # rather than discovered as EIO hours in).
     pile = sum(run["records"] * rec_width(run["category"])
                for run in state["runs"])
-    base = sum(os.path.getsize(os.path.join(archive_dir,
-                                            _cat_file(manifest, cat)))
-               for cat in CAT_ORDER) if manifest else 0
+    base = 0
+    for m, d, order in ((manifest, archive_dir, CAT_ORDER),
+                        (proof, proof_dir, PROOF_ORDER)):
+        if m is not None:
+            base += sum(os.path.getsize(os.path.join(d, _cat_file(m, c)))
+                        for c in order)
     print(f"  fusing {pile / 1e9:,.1f} GB of runs"
           + (f" into {base / 1e9:,.1f} GB sealed" if base else ""),
           file=sys.stderr)
     preflight_space(archive_dir, pile + base, ScanError, "archive merge")
+    os.makedirs(proof_dir, exist_ok=True)
     # The clock reads what the archive's state already carries, so an
     # entry the scan left under `scan` rides into the manifest here
     # instead of being lost when the runs are consumed. Stamped at the
@@ -836,47 +1163,73 @@ def run_merge(archive_dir):
     clock = WallClock("merge", state)
     build = {"producer": producer(), "generation": generation,
              "files": {}, "caches": {}}
+    proof_build = {"producer": producer(), "generation": generation,
+                   "files": {}, "caches": {}}
     digests = {}
-    for cat in CAT_ORDER:
-        out_name = f"archive_{cat}_g{generation:04d}.bin"
-        out_path = os.path.join(archive_dir, out_name)
-        lad_name = f"archive_{cat}_g{generation:04d}.lad"
-        lad_path = os.path.join(archive_dir, lad_name)
-        # The shared fusion, with the previous generation as a cursor:
-        # an append inserts a few million records into billions, and the
-        # stretches nothing interleaves move as slabs instead of passing
-        # one by one through three generator layers. The reduction on
-        # equal digests (flags OR-ed, lowest height) is the archive's
-        # own, handed in as `combine`; the bytes, the ladder and the
-        # count are the ones the per-record walk produced, which the
-        # suite pins and which was checked on the sealed chain-scale
-        # archive before this road replaced the other.
-        runs = [(_run_path(archive_dir, run["name"]), run["sha256"])
-                for run in state["runs"] if run["category"] == cat]
-        slab = budgeted_slab(len(runs) + 1)
-        base = None
-        if manifest is not None:
-            base_path = os.path.join(archive_dir, _cat_file(manifest, cat))
-            base = _BaseCursor(base_path, rec_width(cat),
-                               _cat_sha(manifest, cat), slab, ScanError)
-        sources = [read_fixed(path, rec_width(cat), expect_sha=sha,
-                              slab_bytes=slab, error=ScanError)
-                   for path, sha in runs]
-        records, digest_hex, lad_sha, _dups = merge_to_file(
-            sources, out_path, rec_width(cat), CATEGORIES[cat], lad_path,
-            ARCHIVE_LADDER_EVERY, None, base=base,
-            combine=_combine_keys if cat == "keys" else _combine_scripts)
-        build["files"][cat] = {"file": out_name, "records": records}
-        digests[cat] = digest_hex
-        # The ladder sidecar: written next to the file, recorded in the
-        # manifest, and deliberately OUT of the fingerprint (it is a cache).
-        build["caches"][cat] = {
-            "file": lad_name,
-            "every": ARCHIVE_LADDER_EVERY,
-            "sha256": lad_sha}
-        print(f"{cat:<10} {records:>14,} records")
+    proof_digests = {}
 
-    # The identity: the three category digests in fixed order, plus the
+    def runs_of(cat):
+        return [(_run_path(archive_dir, run["name"]), run["sha256"])
+                for run in state["runs"] if run["category"] == cat]
+
+    def readers(todo, rec, slab):
+        return [read_fixed(path, rec, expect_sha=sha, slab_bytes=slab,
+                           error=ScanError) for path, sha in todo]
+
+    runs = runs_of("keys")
+    slab = budgeted_slab(len(runs) + 1)
+    (build["files"]["keys"], build["caches"]["keys"],
+     digests["keys"]) = _fuse(archive_dir, "archive_", "keys", generation,
+                              readers(runs, rec_width("keys"), slab),
+                              manifest, slab)
+    print(f"{'keys':<10} {build['files']['keys']['records']:>14,} records")
+
+    for cat in ("scripts20", "scripts32"):
+        prog_cat, pile_cat = PROVED_BY[cat]
+        rec = rec_width(cat)
+        key_len = CATEGORIES[cat]
+
+        runs = runs_of(prog_cat)
+        slab = budgeted_slab(len(runs) + 1)
+        entry, cache, prog_sha = _fuse(proof_dir, "proof_", prog_cat,
+                                       generation, readers(runs, rec, slab),
+                                       proof, slab)
+        proof_build["files"][prog_cat] = entry
+        proof_build["caches"][prog_cat] = cache
+        proof_digests[prog_cat] = prog_sha
+
+        todo = runs_of(cat)
+        if proof is not None:
+            todo.insert(0, (os.path.join(proof_dir,
+                                         _cat_file(proof, pile_cat)),
+                            _cat_sha(proof, pile_cat)))
+        slab = budgeted_slab(len(todo) + 2)
+        candidates = _reduced(heapq.merge(*readers(todo, rec, slab)), cat)
+        programs = read_fixed(os.path.join(proof_dir, checked_name(
+                                  entry["file"], ScanError)), rec,
+                              expect_sha=prog_sha, slab_bytes=slab,
+                              error=ScanError)
+        stem = f"proof_{pile_cat}_g{generation:04d}"
+        pile_writer = _RecordWriter(os.path.join(proof_dir, stem + ".bin"),
+                                    key_len,
+                                    os.path.join(proof_dir, stem + ".lad"),
+                                    ARCHIVE_LADDER_EVERY)
+        kept = _proven(candidates, programs, key_len, pile_writer)
+        (build["files"][cat], build["caches"][cat],
+         digests[cat]) = _fuse(archive_dir, "archive_", cat, generation,
+                               [kept], manifest, slab)
+        n, pile_sha, pile_lad = pile_writer.close()
+        proof_build["files"][pile_cat] = {"file": stem + ".bin",
+                                          "records": n}
+        proof_build["caches"][pile_cat] = {"file": stem + ".lad",
+                                           "every": ARCHIVE_LADDER_EVERY,
+                                           "sha256": pile_lad}
+        proof_digests[pile_cat] = pile_sha
+        print(f"{cat:<10} {build['files'][cat]['records']:>14,} records "
+              f"proven by {entry['records']:,} programs; {n:,} candidates "
+              "not proven")
+
+    # The identities: the category digests in fixed order, plus the
     # coverage, which for THIS format is the field that matters most.
     # The records carry a first_height each, so `verify --deep` can hold
     # the watermark to a floor, but only a floor: a stretch of chain that
@@ -886,20 +1239,39 @@ def run_merge(archive_dir):
     # Inside the identity, the claim cannot move without moving the
     # fingerprint. Same chain + same height, same number on anyone's
     # machine: the archive's twin of muhash.
-    identity = make_identity(FORMAT_TAG, 1, state["last_height"],
+    last = state["last_height"]
+    proof_identity = make_identity(
+        PROOF_TAG, 1, last, ((c, proof_digests[c]) for c in PROOF_ORDER))
+    identity = make_identity(FORMAT_TAG, 1, last,
                              ((cat, digests[cat]) for cat in CAT_ORDER))
+    # Outside the identity, and each for a reader who has only this
+    # manifest: the block the watermark stands on (a received archive
+    # has no state to read it from), the proof sealed beside it, the
+    # archive it was fused onto (how a fusion killed between its two
+    # manifests is recognized), and how many candidates the proof has
+    # not proven, which is the archive's answer to "what did you leave
+    # out", for a reader who never received the proof.
+    build["last_block_hash"] = state["last_block_hash"]
+    build["fused_onto"] = manifest["fingerprint"] if manifest else None
+    build["proof"] = {"format": PROOF_TAG,
+                      "fingerprint": identity_fingerprint(proof_identity)}
+    build["unproven"] = {cat: proof_build["files"][PROVED_BY[cat][1]]
+                         ["records"] for cat in PROVED_BY}
     build["seconds"] = clock.stamp(state)
     build["wall"] = clock.wall()
     new_manifest = seal_manifest(FORMAT_TAG, identity, build)
+    proof_build["parent"] = declared_parent(
+        FORMAT_TAG, new_manifest["fingerprint"], identity["coverage"])
+    new_proof = seal_manifest(PROOF_TAG, proof_identity, proof_build)
 
-    # THE COMMIT POINT. Up to here the old generation is still the
-    # archive and a crash costs nothing but the work; from here the new
-    # one is, and what is deleted below is only what neither the
-    # manifest nor the state names any more. Between the two writes a
-    # reader sees the new base AND the runs it already contains, which
-    # is harmless: fusion dedups by OR, so reading a record twice is
-    # the same as reading it once.
+    # THE COMMIT. Up to the first write the old generations are still the
+    # archive and a crash costs nothing but the work; see the docstring
+    # for why these three writes come in this order. Between them a
+    # reader sees the new base AND the runs it already contains, which is
+    # harmless: fusion dedups by OR, so reading a record twice is the
+    # same as reading it once.
     atomic_json(os.path.join(archive_dir, MANIFEST_NAME), new_manifest)
+    atomic_json(os.path.join(proof_dir, MANIFEST_NAME), new_proof)
     # Checked BEFORE the state is rewritten, so a state naming a run
     # outside the archive is refused instead of removing it.
     consumed = [_run_path(archive_dir, run["name"]) for run in state["runs"]]
@@ -907,9 +1279,13 @@ def run_merge(archive_dir):
     atomic_json(os.path.join(archive_dir, STATE_NAME), state)
     for path in consumed:
         os.remove(path)
-    _sweep_unnamed(archive_dir, new_manifest, "superseded generation")
+    _sweep_unnamed(archive_dir, new_manifest, CAT_ORDER, "archive_",
+                   "superseded generation")
+    _sweep_unnamed(proof_dir, new_proof, PROOF_ORDER, "proof_",
+                   "superseded generation")
     print(f"merged through height {state['last_height']:,}")
     print(f"fingerprint: {new_manifest['fingerprint']}")
+    print(f"proof:       {new_proof['fingerprint']}")
     return new_manifest["fingerprint"]
 
 
@@ -917,13 +1293,13 @@ def run_merge(archive_dir):
 # verify — the audit of a sealed archive
 # ---------------------------------------------------------------------------
 
-def _audit_records(archive_dir, manifest):
-    """Read every record of every merged category and check what the
-    bytes alone cannot say. Returns (highest first_height, prepared),
-    where `prepared` is name → (sha256, ladder) for the files this pass
-    streamed — the digest and the ladder samples come free with the
-    bytes, and handing them to `verify_sealed` is what keeps the deep
-    audit to ONE read of the archive instead of two.
+def _audit_records(directory, manifest, order):
+    """Read every record of every merged category in `order` and check
+    what the bytes alone cannot say. Returns (highest first_height,
+    prepared), where `prepared` is name → (sha256, ladder) for the files
+    this pass streamed; the digest and the ladder samples come free with
+    the bytes, and handing them to `verify_sealed` is what keeps the deep
+    audit to ONE read of each file instead of two.
 
     The digests prove the files did not rot; they say nothing about
     whether the fusion did its job, because a wrongly built archive is
@@ -935,27 +1311,28 @@ def _audit_records(archive_dir, manifest):
       promises: the fusion emits each digest exactly once, so equal
       adjacent digests are as wrong as inverted ones;
     - **the record count** the manifest's build block claims;
-    - **the flags byte** of `keys` with no bit outside the five
-      defined ones, since nothing else can set one;
+    - **the byte**: for `keys`, never the 65-byte form and the x-only
+      form together; for a program, one or both of the two carriers and
+      nothing else;
     - **`first_height` within 1..watermark.** A record above the
       watermark would mean the archive holds a revelation the coverage
       claims not to cover, which is the one lie that would poison
       every "never revealed up to H".
 
-    The cost is a full read of the archive (tens of GB at chain
-    scale), which is why `verify` asks for it instead of assuming it.
+    The cost is a full read of every file (tens of GB at chain scale),
+    which is why `verify` asks for it instead of assuming it.
     """
     watermark = manifest["identity"]["coverage"]["to"]
     highest = 0
     prepared = {}
-    for cat in CAT_ORDER:
+    for cat in order:
         name = _cat_file(manifest, cat)
-        path = os.path.join(archive_dir, name)
+        path = os.path.join(directory, name)
         declared = manifest["build"]["files"][cat]["records"]
         previous = None
         records = 0
         top = 0
-        rec_w, key_len, every = ARCHIVE_LADDERS[cat]
+        rec_w, key_len, every = LADDERS[cat]
         digest_of_file = hashlib.sha256()
         ladder = bytearray()
         for digest, byte, height in _read_records(
@@ -977,6 +1354,11 @@ def _audit_records(archive_dir, manifest):
                     f"{name}: record {records:,} ({digest.hex()}) carries "
                     f"flag bits {byte:#04x}, outside the five this "
                     f"format defines")
+            if cat in PROGRAM_CATS and (not byte or byte & ~PROGRAM_BITS):
+                raise ScanError(
+                    f"{name}: record {records:,} ({digest.hex()}) says it "
+                    f"came from {byte:#04x}, which is neither an output nor "
+                    f"a nested redeem script")
             if not 1 <= height <= watermark:
                 raise ScanError(
                     f"{name}: record {records:,} ({digest.hex()}) was "
@@ -1002,12 +1384,61 @@ def _audit_records(archive_dir, manifest):
     return highest, prepared
 
 
-def run_verify(archive_dir, deep=False):
-    """Re-read a sealed archive against its manifest.
+def _common_digests(path_a, path_b, cat):
+    """How many digests two sorted files of `cat`'s width share: a
+    merge-join, both read once."""
+    rec, key_len = rec_width(cat), CATEGORIES[cat]
+    other = read_fixed(path_b, rec, error=ScanError)
+    b = next(other, None)
+    common = 0
+    for r in read_fixed(path_a, rec, error=ScanError):
+        key = r[:key_len]
+        while b is not None and b[:key_len] < key:
+            b = next(other, None)
+        if b is not None and b[:key_len] == key:
+            common += 1
+    return common
 
-    Without `--deep`: the three merged files against the digests in the
-    identity, the three ladders rebuilt from the files they index, and
-    the fingerprint recomputed from what is on disk. One read.
+
+def _audit_proof(archive_dir, manifest, proof):
+    """The proof applied, checked from the sealed bytes of both artifacts:
+    every script the archive holds is among the programs, and no candidate
+    the proof set aside is. The digests say both sets were written
+    faithfully; only this says the fusion kept and set aside by the rule.
+    Two merge-joins per partition."""
+    proof_dir = _proof_dir(archive_dir)
+    for cat, (prog_cat, pile_cat) in PROVED_BY.items():
+        programs = os.path.join(proof_dir, _cat_file(proof, prog_cat))
+        held = manifest["build"]["files"][cat]["records"]
+        proven = _common_digests(
+            os.path.join(archive_dir, _cat_file(manifest, cat)), programs,
+            prog_cat)
+        if proven != held:
+            raise ScanError(
+                f"{held - proven:,} of the {held:,} records of {cat} are not "
+                f"among the programs of the proof: the archive holds "
+                "candidates the chain never proved to be scripts")
+        wrong = _common_digests(
+            os.path.join(proof_dir, _cat_file(proof, pile_cat)), programs,
+            prog_cat)
+        if wrong:
+            raise ScanError(
+                f"{wrong:,} candidates the proof set aside in {pile_cat} are "
+                f"among its programs: they are revealed scripts the archive "
+                "does not hold")
+        print(f"ok  proof applied to {cat}: its {held:,} records are all "
+              f"programs, none of the "
+              f"{proof['build']['files'][pile_cat]['records']:,} set aside "
+              "is")
+
+
+def run_verify(archive_dir, deep=False):
+    """Re-read a sealed archive, and its proof when it has one, against
+    their manifests.
+
+    Without `--deep`: the merged files against the digests in the
+    identity, the ladders rebuilt from the files they index, and the
+    fingerprints recomputed from what is on disk. One read.
 
     With `--deep`: a pass over the records first (see `_audit_records`),
     whose highest `first_height` then confronts the declared coverage as
@@ -1015,7 +1446,8 @@ def run_verify(archive_dir, deep=False):
     nothing new leaves no record, so the tail of the coverage is
     unprovable by construction. Said out loud either way, because an
     audit silent about what it did not check reads as one that checked
-    everything.
+    everything. And, when the proof is there, the proof itself: the
+    archive's scripts are programs, the set-aside candidates are not.
     """
     manifest = _load_manifest(archive_dir)
     if manifest is None:
@@ -1024,7 +1456,7 @@ def run_verify(archive_dir, deep=False):
                         "has something to verify against")
     state = _load_state(archive_dir, required=False)
     floor, prepared = ((None, None) if not deep
-                       else _audit_records(archive_dir, manifest))
+                       else _audit_records(archive_dir, manifest, CAT_ORDER))
     verify_sealed(
         archive_dir, manifest, FORMAT_TAG, ScanError,
         fp_order=CAT_ORDER,
@@ -1039,6 +1471,39 @@ def run_verify(archive_dir, deep=False):
         # audit reads the files itself, exactly as before.
         prepared=prepared)
 
+    proof = _load_proof(archive_dir)
+    if proof is None:
+        print(f"..  no proof beside this archive ({PROOF_DIR}/): it answers "
+              "up to its watermark, and it cannot grow")
+    else:
+        if proof["identity"]["coverage"] != manifest["identity"]["coverage"]:
+            raise ScanError(
+                f"the proof covers {proof['identity']['coverage']} and the "
+                f"archive {manifest['identity']['coverage']}: a proof is "
+                "sealed with its archive, at the same height")
+        paired = (proof["build"]["parent"]["fingerprint"]
+                  == manifest["fingerprint"]
+                  and manifest["build"]["proof"]["fingerprint"]
+                  == proof["fingerprint"])
+        if not paired and state and _in_fusion_window(state, manifest):
+            raise ScanError(
+                "a fusion was interrupted between the archive's manifest "
+                "and the proof's: run `merge` to finish it, then verify")
+        pfloor, pprepared = ((None, None) if not deep else
+                             _audit_records(_proof_dir(archive_dir), proof,
+                                            PROOF_ORDER))
+        verify_sealed(
+            _proof_dir(archive_dir), proof, PROOF_TAG, ScanError,
+            fp_order=PROOF_ORDER,
+            coverage_from_data=(None if pfloor is None
+                                else lambda: ("floor", pfloor)),
+            trust_hint="--deep",
+            ladder_hint=" (rebuildable: re-run merge after deleting it)",
+            ladders=PROOF_LADDERS, parent_confirmed=paired,
+            prepared=pprepared)
+        if deep:
+            _audit_proof(archive_dir, manifest, proof)
+
     # The fingerprint above covers the merged base. Runs written since
     # are part of every answer the archive gives and part of no
     # fingerprint at all, so a report that ended here would let a
@@ -1049,6 +1514,241 @@ def run_verify(archive_dir, deep=False):
               f"{'s' if len(state['runs']) > 1 else ''} hold revelations "
               f"from heights {covered + 1:,}..{state['last_height']:,}, "
               f"which no fingerprint covers yet. Run `merge` to fuse them.")
+
+
+# ---------------------------------------------------------------------------
+# The archive as its readers see it
+# ---------------------------------------------------------------------------
+
+def _merged_sighting(directory, manifest, cat, key, reader):
+    """(byte, first_height) for `key` in the merged file of `cat`, or
+    None. Uses the resident-ladder `reader` (one bucket read) when there
+    is one, else a blind on-disk bisect. Both roads return the same
+    record: the ladder only decides WHERE to read."""
+    if reader is None:
+        path = os.path.join(directory, _cat_file(manifest, cat))
+        return _bisect_file(path, cat, key)
+    width = CATEGORIES[cat]
+    for rec in reader.scan(key):      # merged keys are unique: 0 or 1 match
+        return rec[width], int.from_bytes(rec[width + 1:], "big")
+    return None
+
+
+def _open_merged(directory, manifest, cat):
+    """Open the merged file of `cat` as a ladder-backed SortedFile, the
+    ladder loaded and verified ONCE. Returns None when the manifest has no
+    ladder for the category; the caller then falls back to the blind
+    on-disk bisect. The reader is reusable across many keys, so a batch
+    lookup pays the ladder load and its sha check a single time, like the
+    outpoint index does."""
+    cache = manifest["build"]["caches"].get(cat)
+    if cache is None:
+        return None
+    return SortedFile.open(directory, manifest["build"]["files"][cat],
+                           cache, LADDERS[cat], error=ScanError)
+
+
+def _bisect_file(path, cat, key):
+    """Binary search for `key` in a sorted fixed-width record file,
+    without loading it: seek arithmetic on record boundaries. Returns
+    (byte, first_height), or None. This is what makes the archive usable
+    as an index: one lookup costs ~35 seeks even on a 60 GB file."""
+    width = CATEGORIES[cat]
+    rec = rec_width(cat)
+    size = os.path.getsize(path)
+    if size % rec:
+        raise ScanError(f"{path}: size {size} not a multiple of {rec}")
+    with open(path, "rb") as f:
+        lo, hi = 0, size // rec
+        while lo < hi:
+            mid = (lo + hi) // 2
+            f.seek(mid * rec)
+            row = f.read(rec)
+            if row[:width] < key:
+                lo = mid + 1
+            elif row[:width] > key:
+                hi = mid
+            else:
+                return row[width], int.from_bytes(row[width + 1:], "big")
+    return None
+
+
+def _either(cat, a, b):
+    """Two (byte, first_height) sightings of one digest, either absent,
+    reduced to one."""
+    if a is None:
+        return b
+    if b is None:
+        return a
+    return _reduce(cat, a[0], a[1], b[0], b[1])
+
+
+class ArchiveView:
+    """The archive every reader asks, in one place: the sealed generation,
+    the runs written since, and the proof applied to the candidates among
+    them. Built from what is on disk: the state when there is one, the
+    manifest alone when the archive arrived without it (see
+    `_state_from_seal`).
+
+    A reader of `scripts20`/`scripts32` with runs pending needs the proof:
+    a candidate in a run is a script only if a program opens it, and a
+    program in a run can promote a candidate the proof's pile has held
+    for years. Asking for a script partition then checks the proof
+    exactly as a fusion would, and refuses when it cannot apply it.
+    Everything else reads without it.
+    """
+
+    def __init__(self, archive_dir):
+        self.dir = archive_dir
+        self.manifest = _load_manifest(archive_dir)
+        state = _load_state(archive_dir, required=False)
+        if state is None:
+            if self.manifest is None:
+                raise ScanError(f"no {STATE_NAME} and no {MANIFEST_NAME} in "
+                                f"{archive_dir}: run `scan` first")
+            state = _state_from_seal(self.manifest)
+        self.state = state
+        self.runs = state["runs"]
+        self.watermark = state["last_height"]
+        self.last_block_hash = state["last_block_hash"]
+        self.proof = _load_proof(archive_dir)
+        self.proof_dir = _proof_dir(archive_dir)
+        self._readers = {}
+        self._proof_checked = False
+
+    @property
+    def sealed(self):
+        """True when one fingerprint covers every answer: nothing pending,
+        and the watermark the answers reach is the one the seal names. A
+        scan over blocks that revealed nothing and created no program
+        moves the watermark and writes no run; its answers are right up to
+        the new height, and the fingerprint still speaks for the old one."""
+        return (self.manifest is not None and not self.runs
+                and self.watermark
+                == self.manifest["identity"]["coverage"]["to"])
+
+    def coverage_to(self):
+        """The last height the archive speaks for, as the readers here
+        walk it: the sealed generation AND the pending runs, which is the
+        state's watermark whenever runs are pending. The manifest's
+        coverage is the authority only for what the manifest seals; a
+        curve computed over the runs too and labelled with the
+        manifest's height folded every revelation past that height into
+        its last row."""
+        if self.runs or self.manifest is None:
+            return self.watermark
+        return self.manifest["identity"]["coverage"]["to"]
+
+    def close(self):
+        for reader in self._readers.values():
+            if reader is not None:
+                reader.close()
+        self._readers = {}
+
+    # -- where each category lives --------------------------------------
+
+    def _sealed(self, cat):
+        """[(path, sha)] of the sealed file holding `cat`, or []."""
+        if cat in PROOF_ORDER:
+            m, d = self.proof, self.proof_dir
+        else:
+            m, d = self.manifest, self.dir
+        if m is None:
+            return []
+        return [(os.path.join(d, _cat_file(m, cat)), _cat_sha(m, cat))]
+
+    def _runs(self, cat):
+        return [(_run_path(self.dir, run["name"]), run["sha256"])
+                for run in self.runs if run["category"] == cat]
+
+    def _pending_proof(self, cat):
+        """True when the proof must be applied to answer `cat`: a script
+        partition with candidates or programs still in runs."""
+        if cat not in PROVED_BY:
+            return False
+        prog_cat, _pile = PROVED_BY[cat]
+        if not (self._runs(cat) or self._runs(prog_cat)):
+            return False
+        if not self._proof_checked:
+            _check_proof(self.state, self.manifest, self.proof)
+            self._proof_checked = True
+        return True
+
+    def _reader(self, cat):
+        if cat not in self._readers:
+            if cat in PROOF_ORDER:
+                m, d = self.proof, self.proof_dir
+            else:
+                m, d = self.manifest, self.dir
+            self._readers[cat] = None if m is None else _open_merged(d, m,
+                                                                     cat)
+        return self._readers[cat]
+
+    # -- streams ----------------------------------------------------------
+
+    def raw(self, cat):
+        """Every record of `cat` the archive answers from, as whole
+        records, deduplicated and in digest order."""
+        rec = rec_width(cat)
+
+        def opened(todo, slab):
+            return [read_fixed(path, rec, expect_sha=sha, slab_bytes=slab,
+                               error=ScanError) for path, sha in todo]
+
+        base = self._sealed(cat)
+        if not self._pending_proof(cat):
+            todo = base + self._runs(cat)
+            return _reduced(heapq.merge(*opened(todo, budgeted_slab(
+                len(todo)))), cat)
+        prog_cat, pile_cat = PROVED_BY[cat]
+        candidates = self._sealed(pile_cat) + self._runs(cat)
+        programs = self._sealed(prog_cat) + self._runs(prog_cat)
+        slab = budgeted_slab(len(base) + len(candidates) + len(programs))
+        pending = _proven(
+            _reduced(heapq.merge(*opened(candidates, slab)), cat),
+            _reduced(heapq.merge(*opened(programs, slab)), prog_cat),
+            CATEGORIES[cat])
+        return _reduced(heapq.merge(*opened(base, slab), pending), cat)
+
+    def stream(self, cat):
+        """`raw`, split into (digest, byte, first_height)."""
+        width = CATEGORIES[cat]
+        for r in self.raw(cat):
+            yield r[:width], r[width], int.from_bytes(r[width + 1:], "big")
+
+    # -- one digest -------------------------------------------------------
+
+    def _run_sighting(self, cat, key):
+        hit = None
+        for path, _sha in self._runs(cat):
+            hit = _either(cat, hit, _bisect_file(path, cat, key))
+        return hit
+
+    def sighting(self, cat, key):
+        """(byte, first_height) for one digest of `cat`, reduced across
+        the sealed generation and the runs, with the proof applied; or
+        None when the archive never saw it (up to its watermark)."""
+        hit = None
+        if self.manifest is not None:
+            hit = _merged_sighting(self.dir, self.manifest, cat, key,
+                                   self._reader(cat))
+        if not self._pending_proof(cat):
+            return _either(cat, hit, self._run_sighting(cat, key))
+        prog_cat, pile_cat = PROVED_BY[cat]
+        pending = self._run_sighting(cat, key)
+        if self.proof is not None:
+            pending = _either(cat, pending, _merged_sighting(
+                self.proof_dir, self.proof, pile_cat, key,
+                self._reader(pile_cat)))
+        if pending is not None:
+            program = self._run_sighting(prog_cat, key)
+            if program is None and self.proof is not None:
+                program = _merged_sighting(self.proof_dir, self.proof,
+                                           prog_cat, key,
+                                           self._reader(prog_cat))
+            if program is None:
+                pending = None
+        return _either(cat, hit, pending)
 
 
 # ---------------------------------------------------------------------------
@@ -1105,6 +1805,18 @@ def _print_lock_table(locks, faces, cosigners, fp):
     print(f"fingerprint: {fp}")
 
 
+def _burn_archive(view, locks, faces, cosigners):
+    """Every record of the archive through the perimeter map. Returns the
+    number of `keys` records that made the cut."""
+    keys_seen = 0
+    for cat in CAT_ORDER:
+        for h, fl, ht in view.stream(cat):
+            if (_apply_revelation(locks, cat, h, fl, faces, cosigners, ht)
+                    and cat == "keys"):
+                keys_seen += 1
+    return keys_seen
+
+
 # ---------------------------------------------------------------------------
 # crosscheck — the cross-check
 # ---------------------------------------------------------------------------
@@ -1151,24 +1863,23 @@ def run_crosscheck(archive_dir, locks_dir, faces=True, cosigners=True,
     and the read-time perimeter map. That is why the load verifies the
     files against the manifest's shas, and why --reuse-state refuses a
     checkpoint made against different locks: without those guards the
-    shared input could make both roads agree on garbage.
+    shared input could make both roads agree on garbage. The proof is
+    NOT shared: the reuse scan burns a candidate only against a lock,
+    which the chain created, and the archive keeps a candidate only
+    against a program the chain created: two roads to the same fact.
     """
-    state = _load_state(archive_dir)
-    manifest = _load_manifest(archive_dir)
+    view = ArchiveView(archive_dir)
     locks, locks_manifest = _load_locksets(locks_dir)
     perimeter = _perimeter(faces, cosigners)
-    height = state["last_height"]
+    height = view.watermark
     if curve_path:
         for t in TYPE_ORDER:
             locks[t].track_burn_heights()
 
-    keys_seen = 0
-    for cat in CAT_ORDER:
-        for h, fl, ht in _merged_stream(
-                _archive_sources(archive_dir, cat, state, manifest), cat):
-            if (_apply_revelation(locks, cat, h, fl, faces, cosigners, ht)
-                    and cat == "keys"):
-                keys_seen += 1
+    try:
+        keys_seen = _burn_archive(view, locks, faces, cosigners)
+    finally:
+        view.close()
 
     fp = _fingerprint(locks, locks_manifest["fingerprint"], height, perimeter)
     print(f"=== Cross-check from archive (heights 1..{height:,}"
@@ -1260,40 +1971,6 @@ def _crosscheck_curve(locks, locks_manifest, perimeter, height, curve_path):
 # derive — the reuse count and curve as a READ of the archive
 # ---------------------------------------------------------------------------
 
-def _tiles(state):
-    """The archive's runs grouped by the exact height interval they
-    cover, in chain order. Run names carry their interval
-    (`run_START-END_category.bin`), and the intervals tile the chain:
-    that tiling is what makes the curve derivable — each tile is
-    'every revelation of blocks START..END', so burning tiles in
-    order replays the scan's cumulative state at every boundary."""
-    groups = {}
-    for run in state["runs"]:
-        interval = run["name"].split("_")[1]
-        start, end = (int(x) for x in interval.split("-"))
-        groups.setdefault((start, end), []).append(run)
-    tiles = sorted(groups.items())
-    prev_end = None
-    for (start, end), _ in tiles:
-        if prev_end is not None and start != prev_end + 1:
-            raise ScanError(f"runs do not tile the chain: gap or overlap "
-                            f"at {prev_end}..{start}")
-        prev_end = end
-    return tiles
-
-
-def _coverage_to(state, manifest):
-    """The last height the archive speaks for, as the readers here walk
-    it: the sealed generation AND the pending runs, which is the state's
-    watermark whenever runs are pending. The manifest's coverage is the
-    authority only for what the manifest seals; a curve computed over
-    the runs too and labelled with the manifest's height folded every
-    revelation past that height into its last row."""
-    if state["runs"] or manifest is None:
-        return state["last_height"]
-    return manifest["identity"]["coverage"]["to"]
-
-
 def _write_curve(locks, curve_path, every, coverage_to, locks_fp, perimeter):
     """Replay the burns in height order and write one row per grid
     point: cumulative counts, satoshis, and the fingerprint the burnt
@@ -1381,33 +2058,34 @@ def run_archive_curve(archive_dir, out_path, every=10_000):
     `height - every + 1 .. height`. First, not every sighting: a digest
     seen again at a later height was already revealed, and the fused
     archive keeps the earliest height precisely so this question has an
-    exact answer. The stream is deduplicated, so the count is the same
-    whether the archive has been merged or is still in runs.
+    exact answer. The stream is deduplicated and proven, so the count is
+    the same whether the archive has been merged or is still in runs.
 
     The `points` column counts KEYS records without the UNCOMPRESSED
     bit: a point seen at 65 bytes holds two records (the form seen and
     its compressed face under OTHER_FACE), and every point has exactly
     one canonical record, whose first height is the minimum over every
     form seen. So the column counts points, and says so. The script
-    columns count candidate scripts only, by the archive's own filter.
+    columns count the scripts the chain proved, by the archive's proof.
     """
-    state = _load_state(archive_dir)
-    manifest = _load_manifest(archive_dir)
-    coverage_to = _coverage_to(state, manifest)
+    view = ArchiveView(archive_dir)
+    coverage_to = view.coverage_to()
     points = cv.grid(every, coverage_to)
     last = len(points) - 1
     counts = {cat: [0] * len(points) for cat in CAT_ORDER}
 
-    for cat in CAT_ORDER:
-        col = counts[cat]
-        for _h, fl, ht in _merged_stream(
-                _archive_sources(archive_dir, cat, state, manifest), cat):
-            if cat == "keys" and fl & FLAG_UNCOMPRESSED:
-                continue
-            # The grid is regular, so the window is arithmetic rather
-            # than a search: this runs once per record.
-            i = (ht - 1) // every
-            col[i if i < last else last] += 1
+    try:
+        for cat in CAT_ORDER:
+            col = counts[cat]
+            for _h, fl, ht in view.stream(cat):
+                if cat == "keys" and fl & FLAG_UNCOMPRESSED:
+                    continue
+                # The grid is regular, so the window is arithmetic rather
+                # than a search: this runs once per record.
+                i = (ht - 1) // every
+                col[i if i < last else last] += 1
+    finally:
+        view.close()
 
     def rows():
         for n, point in enumerate(points):
@@ -1420,7 +2098,7 @@ def run_archive_curve(archive_dir, out_path, every=10_000):
     total = sum(sum(counts[cat]) for cat in CAT_ORDER)
     cv.seal(out_path, cv.ARCHIVE_TAG, coverage_to, {
         "road": "archive",
-        "parent": _archive_parent(manifest),
+        "parent": _archive_parent(view.manifest),
         "grid": every,
         "rows": len(points),
         "columns": ("height",) + ARCHIVE_CURVE_COLUMNS + ("total",),
@@ -1466,14 +2144,13 @@ def run_derive(archive_dir, locks_dir, faces=True, cosigners=True,
     cross-check stays `crosscheck --reuse-state`, which compares
     against an INDEPENDENT scan's state instead.
     """
-    state = _load_state(archive_dir)
-    manifest = _load_manifest(archive_dir)
+    view = ArchiveView(archive_dir)
     locks, locks_manifest = _load_locksets(locks_dir)
     perimeter = _perimeter(faces, cosigners)
     # The table is defined by TWO heights: the archive's coverage and
     # the block the snapshot's locks were photographed at. The manifest
     # names that block by hash and by height, and the archive
-    # checkpoints the hash at its watermark, so the two can be
+    # records the hash at its watermark, so the two can be
     # confronted offline and exactly: same hash, same block, same
     # height. Deriving an archive against locks from another block
     # produces a table indistinguishable from a right one, which is
@@ -1497,8 +2174,8 @@ def run_derive(archive_dir, locks_dir, faces=True, cosigners=True,
             "intermediate rows would over-count — derive the table with "
             "the narrow perimeter and the curve without it")
     base_hash = locks_base_hash(locks_manifest)
-    tip_hash = state["last_block_hash"]
-    tip = state["last_height"]
+    tip_hash = view.last_block_hash
+    tip = view.watermark
     if base_hash == tip_hash and tip != locks_height(locks_manifest):
         raise ScanError(
             f"the locks manifest puts the snapshot's block {base_hash[:16]}… "
@@ -1517,35 +2194,19 @@ def run_derive(archive_dir, locks_dir, faces=True, cosigners=True,
         for t in TYPE_ORDER:
             locks[t].track_burn_heights()
 
-    def apply_stream(cat, stream):
-        n = 0
-        for h, fl, ht in stream:
-            if (_apply_revelation(locks, cat, h, fl, faces, cosigners, ht)
-                    and cat == "keys"):
-                n += 1
-        return n
+    try:
+        keys_seen = _burn_archive(view, locks, faces, cosigners)
+    finally:
+        view.close()
 
-    keys_seen = 0
-    if manifest is not None:
-        for cat in CAT_ORDER:
-            path = os.path.join(archive_dir, _cat_file(manifest, cat))
-            keys_seen += apply_stream(cat, _read_records(
-                path, cat, _cat_sha(manifest, cat)))
-
-    for (start, end), runs in _tiles(state):
-        for run in sorted(runs, key=lambda r: CAT_ORDER.index(r["category"])):
-            path = _run_path(archive_dir, run["name"])
-            keys_seen += apply_stream(run["category"], _read_records(
-                path, run["category"], run["sha256"]))
-
-    coverage_to = _coverage_to(state, manifest)
+    coverage_to = view.coverage_to()
     locks_fp = locks_manifest["fingerprint"]
     if curve_path:
         sha, rows = _write_curve(locks, curve_path, curve_every, coverage_to,
                                  locks_fp, perimeter)
         meta = cv.seal(curve_path, cv.REUSE_TAG, coverage_to, {
             "road": "derive",
-            "parent": _archive_parent(manifest),
+            "parent": _archive_parent(view.manifest),
             "grid": curve_every,
             "locks": locks_fp,
             "perimeter": perimeter,
@@ -1564,12 +2225,8 @@ def run_derive(archive_dir, locks_dir, faces=True, cosigners=True,
                          {}, road="derive")
         print(f"checkpoint: bitmaps and state written to {checkpoint_dir}",
               file=sys.stderr)
-    # "sightings", not "keys": tiles are read one by one, so a key
-    # revealed in several intervals is counted at each sighting (the
-    # burns stay idempotent; only this informational counter differs
-    # from crosscheck's, which walks the deduplicated stream).
     print(f"=== Derived from archive (heights 1..{tip:,}"
-          f", {keys_seen:,} key sightings in perimeter) ===")
+          f", {keys_seen:,} keys in perimeter) ===")
     print(f"    archive tip {tip_hash}")
     print(f"    locks base  {base_hash} ("
           + ("the same block" if base_hash == tip_hash
@@ -1584,62 +2241,9 @@ def run_derive(archive_dir, locks_dir, faces=True, cosigners=True,
 # lookup — the seed of check_addresses
 # ---------------------------------------------------------------------------
 
-def _bisect_file(path, cat, key):
-    """Binary search for `key` in a sorted fixed-width record file,
-    without loading it: seek arithmetic on record boundaries. Returns
-    (byte, first_height), or None. This is what makes the archive usable
-    as an index: one lookup costs ~35 seeks even on a 60 GB file."""
-    width = CATEGORIES[cat]
-    rec = rec_width(cat)
-    size = os.path.getsize(path)
-    if size % rec:
-        raise ScanError(f"{path}: size {size} not a multiple of {rec}")
-    with open(path, "rb") as f:
-        lo, hi = 0, size // rec
-        while lo < hi:
-            mid = (lo + hi) // 2
-            f.seek(mid * rec)
-            row = f.read(rec)
-            if row[:width] < key:
-                lo = mid + 1
-            elif row[:width] > key:
-                hi = mid
-            else:
-                return row[width], int.from_bytes(row[width + 1:], "big")
-    return None
-
-
-def _open_merged(archive_dir, manifest, cat):
-    """Open the merged file of `cat` as a ladder-backed SortedFile, the
-    ladder loaded and verified ONCE. Returns None when the archive has no
-    ladder for the category (a merge from before ladders existed) — the
-    caller then falls back to the blind on-disk bisect. The reader is
-    reusable across many keys, so a batch lookup pays the ladder load and
-    its sha check a single time, like the outpoint index does."""
-    cache = manifest["build"]["caches"].get(cat)
-    if cache is None:
-        return None
-    return SortedFile.open(archive_dir, manifest["build"]["files"][cat],
-                           cache, ARCHIVE_LADDERS[cat], error=ScanError)
-
-
-def _merged_sighting(archive_dir, manifest, cat, key, reader):
-    """(byte, first_height) for `key` in the merged file of `cat`, or
-    None. Uses the resident-ladder `reader` (one bucket read) when there
-    is one, else a blind on-disk bisect. Both roads return the same
-    record: the ladder only decides WHERE to read."""
-    if reader is None:
-        path = os.path.join(archive_dir, _cat_file(manifest, cat))
-        return _bisect_file(path, cat, key)
-    width = CATEGORIES[cat]
-    for rec in reader.scan(key):      # merged keys are unique: 0 or 1 match
-        return rec[width], int.from_bytes(rec[width + 1:], "big")
-    return None
-
-
 def _lookup_merged(archive_dir, manifest, cat, key):
     """Single-key convenience: open the merged reader, query it, close it.
-    `run_lookup` opens the reader once and reuses it across keys instead."""
+    `ArchiveView` opens the reader once and reuses it across keys instead."""
     reader = _open_merged(archive_dir, manifest, cat)
     try:
         return _merged_sighting(archive_dir, manifest, cat, key, reader)
@@ -1656,21 +2260,10 @@ def run_lookup(archive_dir, hex_digests):
     for what it is: not revealed in confirmed blocks up to the
     watermark, within what a block scan can see.
     """
-    state = _load_state(archive_dir)
-    manifest = _load_manifest(archive_dir)
-    print(f"archive covers heights 1..{state['last_height']:,}"
-          + ("" if not state["runs"] else
-             f" ({len(state['runs'])} unfused runs included)"))
-
-    # One merged reader per category, opened lazily and reused across every
-    # queried digest: the ladder is loaded and sha-checked once, not per key.
-    readers = {}
-
-    def reader_for(cat):
-        if cat not in readers:
-            readers[cat] = (None if manifest is None
-                            else _open_merged(archive_dir, manifest, cat))
-        return readers[cat]
+    view = ArchiveView(archive_dir)
+    print(f"archive covers heights 1..{view.watermark:,}"
+          + ("" if not view.runs else
+             f" ({len(view.runs)} unfused runs included)"))
 
     try:
         for hx in hex_digests:
@@ -1685,18 +2278,7 @@ def run_lookup(archive_dir, hex_digests):
                 continue
             found = {}
             for cat in cats:
-                hit = None
-                if manifest is not None:
-                    hit = _merged_sighting(archive_dir, manifest, cat,
-                                           key, reader_for(cat))
-                for run in state["runs"]:
-                    if run["category"] != cat:
-                        continue
-                    got = _bisect_file(
-                        _run_path(archive_dir, run["name"]), cat, key)
-                    if got is not None:
-                        hit = got if hit is None else (
-                            _reduce(cat, hit[0], hit[1], got[0], got[1]))
+                hit = view.sighting(cat, key)
                 if hit is not None:
                     found[cat] = hit
             if not found:
@@ -1728,9 +2310,7 @@ def run_lookup(archive_dir, hex_digests):
                 print(f"{hx}: REVEALED at height {first_height:,}, {cat}"
                       + (f" ({', '.join(where)})" if where else ""))
     finally:
-        for r in readers.values():
-            if r is not None:
-                r.close()
+        view.close()
 
 
 # ---------------------------------------------------------------------------
@@ -1764,11 +2344,14 @@ def main(argv=None):
                          "record counts, the flag bits, and every "
                          "first-seen height inside the coverage, whose "
                          "highest value then confronts the declared "
-                         "watermark as a floor. Costs a second read of "
+                         "watermark as a floor; and, with the proof beside "
+                         "the archive, that every script is a program and "
+                         "no candidate set aside is. Costs a second read of "
                          "the archive; without it the coverage is taken "
                          "on trust and the report says so")
 
-    pm = sub.add_parser("merge", help="fuse runs, fingerprint the archive")
+    pm = sub.add_parser("merge", help="fuse runs, prove the candidates, "
+                                      "fingerprint the archive")
     pm.add_argument("--archive", required=True)
 
     pc = sub.add_parser("crosscheck",

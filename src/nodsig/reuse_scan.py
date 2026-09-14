@@ -92,10 +92,9 @@ from nodsig.artifact import (WallClock, declared_parent, identity_fingerprint,
                              make_identity, producer, seal_manifest,
                              verify_sealed)
 from nodsig.keyforms import looks_like_key
-from nodsig.nonces import _taproot_slots as nonces_taproot_slots
 from nodsig.progress import Pace
 from nodsig.sightings import (FLAG_INNER_SIG, FLAG_INNER_WIT, FLAG_OUT,
-                              FLAG_SIG, FLAG_WIT, burns_for, candidate_shape,
+                              FLAG_SIG, FLAG_WIT, burns_for, cannot_be_script,
                               is_control_block, key_records, leaf_xonly_keys,
                               new_filter_stats, output_keys, script_records,
                               taproot_body, witness_key_records)
@@ -656,11 +655,15 @@ def extract_reveals(tx_in, faces, cosigners, stats):
     WALK is this road's own, written apart from the archive's on
     purpose: every key-shaped scriptSig push, every key-shaped witness
     item wherever it sits, the last scriptSig push and the last witness
-    item as candidate scripts, the keys inside a kept candidate, the
+    item as candidate scripts, the keys inside every candidate, the
     internal key and the leaf keys of a taproot script path. No
     position is excluded: see `sightings.witness_key_records` for why
-    excluding one cost 804 keys. What a key looks like, which candidate can be a
-    script, and what each sighting burns under `faces`/`cosigners` are
+    excluding one cost 804 keys. No shape is excluded either: a
+    candidate burns only a lock, and a lock is a program the chain
+    created, so this road needs no proof that a candidate is a script;
+    the archive, which keeps candidates without locks, proves it at the
+    fusion. What a key looks like, which candidate cannot be a script,
+    and what each sighting burns under `faces`/`cosigners` are
     `sightings`' rules, shared with the archive so the cross-check
     compares the walks and not two copies of one rule.
 
@@ -682,19 +685,14 @@ def extract_reveals(tx_in, faces, cosigners, stats):
         key_records(found, p, FLAG_SIG)
 
     witness = list(tx_in.witness)
-    slots, key_path = nonces_taproot_slots(witness)
     witness_key_records(found, witness)
 
-    if sig_pushes:
-        last = sig_pushes[-1]
-        if candidate_shape(last, stats) is None:
-            script_records(found, last, "scripts20", FLAG_INNER_SIG, stats)
-    if witness:
-        last = witness[-1]
-        in_slot = any(last is slot for slot in slots)
-        if candidate_shape(last, stats, in_slot, key_path,
-                           len(witness)) is None:
-            script_records(found, last, "scripts32", FLAG_INNER_WIT, stats)
+    if sig_pushes and not cannot_be_script(sig_pushes[-1], 0, stats):
+        script_records(found, sig_pushes[-1], "scripts20", FLAG_INNER_SIG,
+                       stats)
+    if witness and not cannot_be_script(witness[-1], len(witness), stats):
+        script_records(found, witness[-1], "scripts32", FLAG_INNER_WIT,
+                       stats)
 
     body = taproot_body(witness)
     if len(body) >= 2 and is_control_block(body[-1]):
@@ -1334,7 +1332,7 @@ def run_scan(locks_dir, rpc_url, auth, end_height, checkpoint_dir,
                            expect_sha=entry["sha256"])
         print(f"  {t:<8} {locks[t].count:>12,} locks", file=sys.stderr)
 
-    stats = {"malformed_scriptsig": 0, "malformed_inner_script": 0,
+    stats = {"malformed_scriptsig": 0,
              "inputs": 0, "transactions": 0, **new_filter_stats()}
 
     # --- Resume, or start fresh ---
@@ -1569,7 +1567,8 @@ def run_scan(locks_dir, rpc_url, auth, end_height, checkpoint_dir,
     print(f"perimeter: faces={'on' if faces else 'off'}, "
           f"cosigners={'on' if cosigners else 'off'}; "
           f"malformed scriptSigs: {stats['malformed_scriptsig']}, "
-          f"malformed inner scripts: {stats['malformed_inner_script']}")
+          f"candidates that do not parse as a script: "
+          f"{stats['unparsed_candidates']}")
     print("NOT visible to this or any block scan, by declaration: "
           "keys shared off-chain (xpub), keys seen only in mempool, "
           "P2SH/P2WSH locks never spent. The true exposure can only be "

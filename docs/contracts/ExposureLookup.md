@@ -1,12 +1,13 @@
 # ExposureLookup — contract
 
 **Capability.** Was the key or script behind a lock **ever revealed on-chain**?
-A membership check against the archive of every public key and candidate script
-that appeared in an unlocking context in confirmed blocks — answered from local
-disk, with **where** a key was seen and **when** it was first seen.
+A membership check against the archive of every public key and every script
+that appeared in an unlocking context in confirmed blocks (a script counts when
+the chain created the program it opens), answered from local disk, with
+**where** a key was seen and **when** it was first seen.
 
 - **Layer:** L1 (in-process). See [ARCHITECTURE](../ARCHITECTURE.md).
-- **Reads format:** [RevealArchive-v3](../formats/RevealArchive-v3.md).
+- **Reads format:** [RevealArchive-v4](../formats/RevealArchive-v4.md).
 - **Reference impl:** `RevealArchiveExposure.query` (the contract's `exposure`) +
   the `lookup` command.
 - **Independent of** the outpoint index/derivatives: this reads the reveal
@@ -140,7 +141,7 @@ result (and the archive fingerprint where merged).
   part of this contract any more: two builds of one release meet by
   fingerprint.
 - A merged file may carry a **ladder sidecar** that turns the search into one
-  bucket read (see RevealArchive-v3). It is an optional accelerator, excluded
+  bucket read (see RevealArchive-v4). It is an optional accelerator, excluded
   from the fingerprint: with or without it the answer is identical.
 - Appendability: the merged file of a category plus zero or more run files of
   that category; a correct lookup consults all of them. Take both file names

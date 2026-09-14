@@ -127,13 +127,16 @@ def _archive_source(archive_dir):
 
     The parent must be MERGED and have no pending runs: a run not yet
     fused holds sightings the merged file does not, so a table built
-    beside it would claim the archive's coverage while missing keys."""
-    state = ra._load_state(archive_dir)
-    manifest = ra._load_manifest(archive_dir)
+    beside it would claim the archive's coverage while missing keys.
+    Its proof is not read: the table is built over `keys`, which the
+    proof does not touch, so an archive received without its proof (or
+    without the state that built it) is a parent like any other."""
+    view = ra.ArchiveView(archive_dir)
+    manifest = view.manifest
     if manifest is None:
         raise FirstRevealError(
             f"no sealed archive in {archive_dir}: run `archive merge` first")
-    if state["runs"]:
+    if view.runs:
         raise FirstRevealError(
             "the archive has unfused runs: their sightings are not in the "
             "merged keys file yet — run `archive merge`, then build")

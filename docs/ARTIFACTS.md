@@ -18,7 +18,7 @@ placeholders: every one of them is a path you choose on the command line.
 |---|---|---|
 | graph | `graph-v2` | — |
 | headers | `headers-v2` | — |
-| revelation archive | `reveal-archive-v3` | — |
+| revelation archive | `reveal-archive-v4` | — |
 | nonce census | `nonces-v3` | — |
 | nonce witness table | `nonces-witness-v2` | — |
 | outpoint index | `outpoint-index-v3` | — |
@@ -168,13 +168,14 @@ archive); and a release at which it is not run is the release it comes out.
 | `<locks>/` | `locks-v2` | The current locks: sorted digests of unspent outputs, one file per type, sealed with the snapshot's height | `reuse prepare` | `reuse scan`, `reuse verify`, `archive derive/crosscheck` |
 | ├ `locks_{p2pkh,p2sh,p2wpkh,p2wsh}.bin` | sorted records | One lock type per file | `reuse prepare` | as above |
 | └ `manifest.json` | `locks-v2` | The identity over the four files at the snapshot's height (from `--headers` or `--height`, checked by the first consumer that sees the block), the base hash declared beside it; every reader checks the files before burning a lock | `reuse prepare` | as above |
-| `<archive>/` | `reveal-archive-v3` | Every key and script ever revealed, appendable | `archive scan` | `archive merge/verify/derive/crosscheck/curve/lookup`, `check` |
+| `<archive>/` | `reveal-archive-v4` | Every key and script ever revealed, appendable; answers without its state and without its proof | `archive scan` | `archive merge/verify/derive/crosscheck/curve/lookup`, `check`, `firstreveal build` |
 | ├ `runs/…_keys.bin` | records | `hash160` of public keys revealed in a scriptSig, a witness, an output or a taproot leaf, one identity per point | `archive scan` | as above |
-| ├ `runs/…_scripts20.bin` | records | `hash160` of candidate redeem scripts | `archive scan` | as above |
-| ├ `runs/…_scripts32.bin` | records | `sha256` of candidate witness scripts | `archive scan` | as above |
-| └ `manifest.json` | `reveal-archive-v3` | The canonical fingerprint, written by `merge` | `archive merge` | `archive verify` |
+| ├ `runs/…_scripts20.bin`, `runs/…_scripts32.bin` | records | Every candidate redeem and witness script, before the proof | `archive scan` | as above |
+| ├ `runs/…_programs20.bin`, `runs/…_programs32.bin` | records | The programs of the P2SH and P2WSH outputs created, and of the P2SH-P2WSH redeem scripts pushed | `archive scan` | `archive merge` |
+| ├ `manifest.json` | `reveal-archive-v4` | The canonical fingerprint, written by `merge`: the scripts are the candidates a created program opens | `archive merge` | `archive verify` |
+| └ `proof/` | `reveal-proof-v1` | The programs and the candidates none of them opens yet, sealed in the same fusion with the archive as parent. Needed to grow the archive and to audit the proof, not to read it | `archive merge` | `archive merge`, `archive verify --deep`, a scan that grows the archive |
 | `curve.csv` | CSV + `reuse-curve-v2` sidecar | One row per height step over the snapshot's locks: the coins spendable at the snapshot whose key was public by that height, with the `reuse-hits-v2` fingerprint of the row; the sidecar seals the CSV and names the grid, the locks and the perimeter | `archive derive --curve`, `reuse scan` | `curve deltas`, `curve dates`, `archive crosscheck --curve` |
-| `revelations.csv` | CSV + `archive-curve-v2` sidecar | One row per window of heights: the points and the candidate scripts first revealed in it, no locks and no perimeter | `archive curve` | `curve dates`, a human |
+| `revelations.csv` | CSV + `archive-curve-v2` sidecar | One row per window of heights: the points and the scripts first revealed in it, no locks and no perimeter | `archive curve` | `curve dates`, a human |
 | `<headers>/` | `headers-v2` | The header chain the scan verified, from genesis: 88 B per height plus each coinbase script. Off by default, enabled with `--headers` (~150 MB) | `archive scan --headers` | `headers verify/crosscheck`, `curve dates` |
 | ├ `headers.bin` | records | The 80 header bytes verbatim, then the block's size and weight | `archive scan --headers` | as above |
 | ├ `coinbase.bin`, `coinbase_off.bin` | records | Each block's coinbase scriptSig, and where it starts | `archive scan --headers` | as above |

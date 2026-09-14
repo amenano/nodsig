@@ -164,7 +164,7 @@ def test_provenance_names_only_the_archive_bits():
     format, so the allowed set is written by name.
     """
     allowed = {"reveal_archive.py",
-               "RevealArchive-v3.md",   # the archive's own page
+               "RevealArchive-v4.md",   # the archive's own page
                "sightings.py",          # where the bits are defined now
                "ExposureLookup.md", "AGENTS.md",
                "AddressBook-v2.md",     # explains the rename it made

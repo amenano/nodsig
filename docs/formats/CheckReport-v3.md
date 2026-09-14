@@ -66,7 +66,7 @@ Two additions to the table of v2:
 
 | key | change |
 |---|---|
-| `id` | the 2.0.0 tags: `reveal-archive-v3`, `outpoint-derived-v3`, `nonces-witness-v2`, …; always the tag of the artifact **read**, never the constant of the code that reads it |
+| `id` | the tags the reading release accepts: `reveal-archive-v4`, `outpoint-derived-v3`, `nonces-witness-v2`, …; always the tag of the artifact **read**, never the constant of the code that reads it |
 | `key-forms` | a new entry, present only with `--key`: `{"status": "OK", "id": "key-forms", "live": false, "root": "one modular square root per key given: names the other serialization, multiplies no point, verifies nothing, recovers nothing"}` |
 
 ## `addresses[].exposure`
@@ -75,10 +75,11 @@ Two additions to the table of v2:
 the sightings listed under `keys` above, including `published in an output` (a P2PK or bare multisig
 output revealed this key before any spend), `seen in its other
 serialization` (the point is in view although this exact digest never was
-pushed), and `seen as a taproot internal or leaf key`. A script lock whose
-script has the shape of a key or of a signature is the archive's one
-declared exception, and `why` says so when it applies, with the count the
-archive's page publishes.
+pushed), and `seen as a taproot internal or leaf key`. Up to
+`reveal-archive-v3` a script lock whose script had the shape of a key or of
+a signature was the archive's declared exception; from `reveal-archive-v4`
+the archive keeps a script when the chain proves it one, and there is no
+exception left to state.
 
 ## `linkage`
 
@@ -114,7 +115,8 @@ The block of v2 with four fields made explicit:
 ## `limits`
 
 One more stable string when `--key` is present, the square-root sentence
-above; and one when a script lock met the archive's exception.
+above. The string a script lock received under the exception of
+`reveal-archive-v3` is no longer printed, because the exception is gone.
 
 ## Compatibility
 

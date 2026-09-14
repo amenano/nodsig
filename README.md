@@ -86,7 +86,7 @@ typing:
 
 ```console
 $ nodsig check --stdout 1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa
-# exposure: not configured (pluggable: reveal-archive-v3 (--archive))
+# exposure: not configured (pluggable: reveal-archive-v4 (--archive))
 # balance: not configured (pluggable: bitcoin-core-rpc scantxoutset (--rpc))
 # history: not configured (pluggable: outpoint-index derivatives (--index + --derived))
 # co-inputs: not configured (pluggable: outpoint-index derivatives (--index + --derived))
@@ -655,12 +655,14 @@ another name.
 
 `archive verify --deep` adds the pass the digests cannot replace: every record
 read, digests strictly ascending (order and uniqueness at once), the flag
-bits within the five the format defines, and every first-seen height inside the
-claimed coverage, whose highest value then holds the watermark to a floor. It
+bits the format defines, every first-seen height inside the claimed coverage,
+whose highest value then holds the watermark to a floor, and the proof: every
+script the archive holds is a program the chain created, and no candidate the
+proof set aside is. It
 costs a second read of the archive, so it is a flag and not the default, and
 without it the report says the coverage was taken on trust rather than staying
 silent about it. The recipe, for anyone writing their own reader, is in
-[`docs/formats/RevealArchive-v3.md`](docs/formats/RevealArchive-v3.md).
+[`docs/formats/RevealArchive-v4.md`](docs/formats/RevealArchive-v4.md).
 
 The 1.x releases had a third check, `archive v1-digests`, that confronted an
 archive with the one *published* in July 2026 by projecting it back to that
@@ -681,9 +683,9 @@ artifacts settle it rather than merely claiming it: every one of them carries
 package has never been at 3. A format tag answers *what does this artifact
 capture*, which is what lets a reader tell an absence from a blind spot; a
 release number answers *what does the command line promise until the next
-major*. They move for different reasons, so `reveal-archive-v3` inside a 2.0.0
-tool is not a discrepancy: the reveal archive really is at its third format,
-and the tool at its second major. Internal module names carry no promise at
+major*. They move for different reasons, so `reveal-archive-v4` inside a 3.0.0
+tool is not a discrepancy: the reveal archive really is at its fourth format,
+and the tool at its third major. Internal module names carry no promise at
 all: they are free to move, and they have.
 
 **A worked application of one release.** A hands-on walkthrough of release

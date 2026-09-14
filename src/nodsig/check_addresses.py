@@ -29,7 +29,7 @@ signs:
     capability  question answered            backend today
     ----------  -------------------------    -------------------------
     exposure    was the key/script behind    RevealArchiveExposure
-                this address ever revealed      (reveal-archive-v2 dir)
+                this address ever revealed      (reveal-archive dir)
                 on-chain?
     balance     how many satoshis sit         CoreBalance (scantxoutset
                 behind it right now?             via your node's RPC)
@@ -399,39 +399,30 @@ class RevealArchiveExposure:
     address per category, while the archive's own `lookup` already had
     the ladder: same files, two roads, and the slow one was in the
     tool people actually run.) Unfused runs keep the blind bisect:
-    they have no ladder, and there are few of them."""
+    they have no ladder, and there are few of them. What a run and the
+    sealed file say together, with the proof applied to the script
+    candidates among the runs, is `reveal_archive.ArchiveView`'s: one
+    reader of the archive, so `check` and `archive lookup` cannot give
+    two answers. An archive received as its sealed files and manifest,
+    without the state that built it, answers here too."""
 
     def __init__(self, archive_dir):
         self.dir = archive_dir
-        self.state = ra._load_state(archive_dir)
-        self.manifest = ra._load_manifest(archive_dir)
-        self.watermark = self.state["last_height"]
-        self._readers = {}
-
-    def _reader(self, cat):
-        """The merged reader for a category, opened (and its ladder
-        sha-checked) on first use."""
-        if cat not in self._readers:
-            self._readers[cat] = (
-                None if self.manifest is None
-                else ra._open_merged(self.dir, self.manifest, cat))
-        return self._readers[cat]
+        self.view = ra.ArchiveView(archive_dir)
+        self.manifest = self.view.manifest
+        self.watermark = self.view.watermark
 
     def close(self):
-        for reader in self._readers.values():
-            if reader is not None:
-                reader.close()
-        self._readers = {}
+        self.view.close()
 
     def source(self):
         # The answers OR the merged file with any run not yet fused, so
         # a leftover run means the reply covers more than the manifest
         # describes: that is precisely the unsealed case, and the
         # fingerprint must be withheld rather than implied.
-        sealed = self.manifest is not None and not self.state["runs"]
         return Source.artifact(
             ra.FORMAT_TAG, self.watermark,
-            self.manifest["fingerprint"] if sealed else None)
+            self.manifest["fingerprint"] if self.view.sealed else None)
 
     def describe(self):
         return self.source().describe("exposure")
@@ -441,21 +432,7 @@ class RevealArchiveExposure:
         the merged file and any unfused runs, or a definite negative when
         the digest was never revealed. Categories don't mix: a p2sh digest
         is only looked up among revealed redeem scripts."""
-        cat = address.category
-        hit = None
-        if self.manifest is not None:
-            hit = ra._merged_sighting(self.dir, self.manifest, cat,
-                                      address.digest, self._reader(cat))
-        for run in self.state["runs"]:
-            if run["category"] != cat:
-                continue
-            got = ra._bisect_file(
-                os.path.join(self.dir, ra.RUNS_DIR,
-                             checked_name(run["name"], AddressError, "run")),
-                cat, address.digest)
-            if got is not None:
-                hit = got if hit is None else ra._reduce(
-                    cat, hit[0], hit[1], got[0], got[1])
+        hit = self.view.sighting(address.category, address.digest)
         return Result.ok(hit, self.source())
 
 
@@ -913,7 +890,7 @@ def build_backends(sources, rpc_call=None):
     `sources` is a plain mapping of what to plug in, and every key is
     optional:
 
-        archive       a reveal-archive-v2 directory
+        archive       a reveal-archive directory
         index         an outpoint-index-v3 directory
         derived       an outpoint-derived-v3 directory (needs `index`)
         witness       a nonces-witness-v2 directory
@@ -1150,7 +1127,7 @@ def answer(address, backends):
 # A public key is a point. The chain serializes it two ways (33 and 65
 # bytes), each behind three standard address forms, and the archive
 # keys a point by the digest of its compressed form while keeping the
-# 65-byte digest it saw (RevealArchive-v3). So a key typed here is
+# 65-byte digest it saw (RevealArchive-v4). So a key typed here is
 # asked about as a point: both digests looked up in `keys`, both
 # wrappers in `scripts20`, and one entry in the report per key, the
 # faces under it, instead of six addresses as if the user had typed
@@ -1164,11 +1141,6 @@ def answer(address, backends):
 ROOT_SENTENCE = ("one modular square root per key given: names the other "
                  "serialization, multiplies no point, verifies nothing, "
                  "recovers nothing")
-EXCEPTION_SENTENCE = (
-    "a script lock whose script has the shape of a key or of a signature "
-    "is the archive's declared exception: its revelation is not archived, "
-    "so `protected` for a script lock is also that filter's blind spot "
-    "(the archive's manifest counts the candidates it dropped)")
 
 
 class Face:
@@ -1651,7 +1623,7 @@ def main(argv=None):
                         "addresses you MEANT to keep apart, and "
                         "without that claim a sentence about "
                         "separation would mean nothing")
-    p.add_argument("--archive", help="reveal-archive-v2 directory "
+    p.add_argument("--archive", help="reveal-archive directory "
                                      "(enables the exposure capability)")
     p.add_argument("--index", help="outpoint-index-v3 directory "
                                    "(with --derived enables history "

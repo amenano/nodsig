@@ -8,19 +8,26 @@ archive (`reveal_archive.extract_revelations`) and the direct reuse scan
 the WALK (which pushes, which witness items, which candidates, which
 outputs), so that a mistake in one is caught by the other at the
 cross-check. What they must NOT decide twice is what a key looks like,
-which candidate can be a script, and what a sighting burns under a
-read-time perimeter: a rule written twice is a rule that drifts, and
-the cross-check would then measure the drift as agreement. This module
-holds those three decisions, and the eight provenance and form bits
-the archive's `keys` record carries.
+which candidate the chain proves cannot be a script, and what a
+sighting burns under a read-time perimeter: a rule written twice is a
+rule that drifts, and the cross-check would then measure the drift as
+agreement. This module holds those three decisions, and the eight
+provenance and form bits the archive's `keys` record carries.
 
-A kernel: no I/O, no flag; the byte rules of `keyforms`, the signature
-readers of `nonces` and the push parser of `blockparse` are all it uses.
+What it deliberately does NOT decide is whether a candidate IS a
+script. From the unlocking data alone that cannot be known (a 33-byte
+redeem script starting with `02` and a compressed key are the same
+bytes), and 2.0.0 guessed it from the shape, which dropped real scripts.
+The archive decides it at the fusion, where the programs of every output
+the chain created are in hand; the reuse scan never has to, because it
+only burns locks, and a lock is a program the chain created.
+
+A kernel: no I/O, no flag; the byte rules of `keyforms` and the push
+parser of `blockparse` are all it uses.
 """
 
 import hashlib
 
-from nodsig import nonces
 from nodsig.blockparse import ParseError, script_pushes
 from nodsig.hashing import hash160
 from nodsig.keyforms import UNCOMPRESSED, XONLY, canonical_key
@@ -153,32 +160,36 @@ def leaf_xonly_keys(leaf):
     return out
 
 
-def candidate_shape(item, stats, in_slot=False, key_path=False,
-                    witness_len=0):
-    """The shape that keeps an item out of the script partitions, or
-    None when it may be a script. A key or a signature CAN be a script
-    (`02` is a push of two bytes, `30` a push of 48), which is why the
-    exception is counted and published; a control block or an annex
-    cannot (their first byte executes and fails), which is exact."""
-    if canonical_key(item) is not None:
-        stats["filtered_key_shaped"] += 1
-        return "key"
-    if nonces.signature_r(item) is not None or (
-            in_slot and nonces.taproot_r(item, key_path) is not None):
-        stats["filtered_signature_shaped"] += 1
-        return "signature"
+def cannot_be_script(item, witness_len, stats):
+    """True when the bytes themselves prove `item` is not a script that
+    ever ran: a control block (length 33 + 32m, first byte c0 or c1) or,
+    as the last item of a witness of two or more, an annex (first byte
+    50). The first byte of a script always executes, and those are
+    opcodes that fail it. Everything else is a candidate, whatever it
+    looks like: a key or a signature CAN be a script (`02` is a push of
+    two bytes, `30` a push of 48), and the chain answers that question
+    at the fusion, not the shape here. `witness_len` is 0 for the last
+    scriptSig push, where an annex does not exist."""
     if is_control_block(item) or (witness_len >= 2 and item[:1] == b"\x50"):
-        stats["filtered_control_or_annex"] += 1
-        return "control_or_annex"
-    return None
+        stats["control_or_annex"] += 1
+        return True
+    return False
 
 
 def script_records(out, script, cat, inner_flag, stats):
-    """The record of a kept candidate script and of the keys inside it."""
+    """The record of a candidate script and of the keys inside it.
+
+    The keys are walked for every candidate, not only for the ones the
+    fusion will prove to be scripts: a push of 33 bytes found inside
+    bytes that were not a script is a record that can only match its own
+    preimage, and tying the keys to the proof would take a join of every
+    candidate with its keys that the reuse scan could not repeat in one
+    pass. Measured on the chain through 957,301, dropping them with
+    their candidate lost 2,699 key digests."""
     try:
         inner = script_pushes(script)
     except ParseError:
-        stats["malformed_inner_script"] += 1
+        stats["unparsed_candidates"] += 1
         inner = []
     keys = [p for p in inner if canonical_key(p) is not None]
     n = min(len(keys), MAX_INNER_KEYS)
@@ -206,8 +217,11 @@ def output_keys(spk):
 
 
 def new_filter_stats():
-    return {"out_keys": 0, "filtered_key_shaped": 0,
-            "filtered_signature_shaped": 0, "filtered_control_or_annex": 0}
+    """The counters both walks keep: keys published in outputs,
+    candidates the bytes prove are not scripts, and candidates that do
+    not parse as a script (most of which are not scripts at all: a key
+    or a signature walked as one)."""
+    return {"out_keys": 0, "control_or_annex": 0, "unparsed_candidates": 0}
 
 
 def burns_for(cat, digest, flags, faces, cosigners):

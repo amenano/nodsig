@@ -54,7 +54,7 @@ XONLY        = 128   seen as 32 bytes (a leaf, a control block, a taproot output
 Other bits are undefined and a record carrying one is refused.
 
 The digest of the compressed form, the identity every other artifact of this
-project keys a point by ([`RevealArchive-v3`](RevealArchive-v3.md)), is not a
+project keys a point by ([`RevealArchive-v4`](RevealArchive-v4.md)), is not a
 field: it is `hash160((0x02 | ODD_Y) || x)`, derived on read, and for `XONLY`
 it is `hash160(0x02 || x)` by the definition of BIP 340. Storing it beside
 the value it is computed from would be two sources for one fact, the same

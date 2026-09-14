@@ -11,7 +11,7 @@ and the repetition is visible from public data alone.
   The four-digit **generation** counts fusions; the manifest names the file, so
   a reader never derives a name.
 - **Defined over:** nothing. It is produced from confirmed blocks, co-emitted by the
-  scan that builds [RevealArchive-v3](./RevealArchive-v3.md).
+  scan that builds [RevealArchive-v4](./RevealArchive-v4.md).
 - **Read by:** `nonces groups` and `nonces lookup` for the chain-wide question,
   and `nonces address` for one address of yours, which joins the outpoint index
   and a node to it. The how-to is [`../nonce-check.md`](../nonce-check.md).
@@ -74,7 +74,7 @@ signature committed to is half of that. The extraction has the byte in hand
 (it is the DER trailer it already validated, or the 65th byte of the long
 form), so the cost is zero bytes and zero work, and no artifact this project
 keeps could give it back: [Graph-v2](./Graph-v2.md) holds no unlocking data and
-[RevealArchive-v3](./RevealArchive-v3.md) holds hashes. The price, stated: a
+[RevealArchive-v4](./RevealArchive-v4.md) holds hashes. The price, stated: a
 flags byte now has ~32 valid values out of 256 instead of 2, so it detects a
 little less corruption on its own — the file's sha256 is what detects it.
 
@@ -263,7 +263,7 @@ rebuilding, because nothing in a record was derived from a record above the cut:
 there is no reduction to undo, no minimum to recompute, no flag whose history
 was folded away.
 
-This is the property [RevealArchive-v3](./RevealArchive-v3.md) cannot have, and
+This is the property [RevealArchive-v4](./RevealArchive-v4.md) cannot have, and
 the contrast is instructive: the archive folds many sightings into one record,
 so it cannot restore what it folded; this format keeps every sighting, pays 16
 bytes for each, and gets reversibility for it.

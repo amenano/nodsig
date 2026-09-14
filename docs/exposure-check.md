@@ -184,7 +184,7 @@ costs a read and it is the cheapest statement anyone can make that two
 independent builds of this archive describe the same history.
 
 The recipe both follow is written out in
-[`formats/RevealArchive-v3.md`](formats/RevealArchive-v3.md), for anyone who
+[`formats/RevealArchive-v4.md`](formats/RevealArchive-v4.md), for anyone who
 would rather check by hand or from another implementation.
 
 ## What the answer means, and what it does not

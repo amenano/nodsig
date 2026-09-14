@@ -54,7 +54,7 @@ output record:                 // a TILE: a coin is born
 ## Excluded on purpose (with the reason)
 
 - **scriptSig & witness** — the *revelations*; archived by
-  [RevealArchive-v3](./RevealArchive-v3.md). The graph is flow, not unlocking.
+  [RevealArchive-v4](./RevealArchive-v4.md). The graph is flow, not unlocking.
 - **version, locktime, sequence** — consensus bookkeeping, not flow.
 - **fees** — a join of these records (edges resolved against tiles); storing them
   would be transformation, not fidelity.

@@ -36,11 +36,10 @@ never by the node. `derived supply` and `derived timeline` cite this page
 where they print `coinbase` and `unspent`.
 
 The pass reads every scriptPubKey verbatim, which is the one thing the
-graph keeps that no index-side artifact does; the same pass, asked to, can
-write beside the artifact the sets of P2SH and P2WSH programs ever created,
-which is how the reveal archive's shape-filter exception is counted
-([`RevealArchive-v3`](RevealArchive-v3.md)). Those sets are working files,
-not part of this artifact.
+graph keeps that no index-side artifact does. The programs of the P2SH and
+P2WSH outputs ever created are not written here: the reveal archive's own
+scan records them, as the proof its script partitions are kept by
+([`RevealArchive-v4`](RevealArchive-v4.md)).
 
 ## The meta
 

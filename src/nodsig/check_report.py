@@ -342,10 +342,6 @@ def limits(report):
     if report.keys:
         from nodsig.check_addresses import ROOT_SENTENCE
         out.append(ROOT_SENTENCE)
-    if report.answered("exposure") and any(
-            e.valid and e.kind in ("p2sh", "p2wsh") for e in report.entries):
-        from nodsig.check_addresses import EXCEPTION_SENTENCE
-        out.append(EXCEPTION_SENTENCE)
     return out
 
 

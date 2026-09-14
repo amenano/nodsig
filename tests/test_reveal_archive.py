@@ -85,11 +85,14 @@ def archive_records(archive_dir, cat, with_height=False):
     """Every digest in the archive for one category, from the merged file
     and any runs, deduplicated: the test's own reader. By default it maps
     digest → byte, so the long-standing perimeter assertions read as they
-    always did; `with_height` asks for the whole (byte, first_height)."""
-    state = read_state(archive_dir)
-    manifest = ra._load_manifest(archive_dir)
-    rows = ra._merged_stream(
-        ra._archive_sources(archive_dir, cat, state, manifest), cat)
+    always did; `with_height` asks for the whole (byte, first_height).
+    It reads through `ArchiveView`, so the proof is applied to the
+    candidates of the runs exactly as every reader applies it."""
+    view = ra.ArchiveView(archive_dir)
+    try:
+        rows = list(view.stream(cat))
+    finally:
+        view.close()
     if with_height:
         return {h: (fl, ht) for h, fl, ht in rows}
     return {h: fl for h, fl, _ht in rows}
@@ -127,19 +130,20 @@ def test_scan_content(tmp, blocks):
           f"expected provenance map")
     check(rs.hash160(trs.PUB5) not in keys, "unrevealed key archived")
 
-    # Candidate scripts: the real redeem/witness scripts, and nothing
-    # else. PUB1 (the last scriptSig push of the P2PKH spend) and PUB3
-    # (the last witness item of the P2WPKH spend) used to land here as
-    # over-collected candidates; the shape filter keeps them out and
-    # counts them.
+    # Scripts: the real redeem/witness scripts, and nothing else. PUB1
+    # (the last scriptSig push of the P2PKH spend) and PUB3 (the last
+    # witness item of the P2WPKH spend) are candidates too, and no
+    # program the chain created opens them, so the proof leaves them
+    # out; the programs of REDEEM and WSCRIPT were created at height 2.
     s20 = archive_records(archive, "scripts20")
     check(set(s20) == {rs.hash160(trs.REDEEM)},
           "scripts20 content differs from the crafted spends")
     s32 = archive_records(archive, "scripts32")
     check(set(s32) == {hashlib.sha256(trs.WSCRIPT).digest()},
           "scripts32 content differs from the crafted spends")
-    check(state["stats"]["filtered_key_shaped"] == 2,
-          f"two key-shaped candidates were filtered: {state['stats']}")
+    check(state["stats"]["program_outputs"] == 2,
+          f"the two programs created at height 2 are counted: "
+          f"{state['stats']}")
     print("ok  scan: watermark, provenance bits, exact content")
     return archive
 
@@ -150,8 +154,8 @@ def test_scan_content_v3(tmp, blocks):
     key whose compressed face is recorded under OTHER_FACE, a hybrid
     lead accepted, a taproot script path revealing its internal key and
     its leaf key (XONLY), and a scriptSig that is one well-formed DER
-    signature, which by position is a candidate script and by shape is
-    not."""
+    signature: a candidate script by position, kept out of `scripts20`
+    because no program opens it, not because of its shape."""
     from nodsig import keyforms as kf
     server, url = trs.serve(blocks)
     archive = os.path.join(tmp, "archive_v3")
@@ -185,14 +189,15 @@ def test_scan_content_v3(tmp, blocks):
     check(set(s32) == {hashlib.sha256(trs.WSCRIPT).digest()},
           "a control block or a leaf reached scripts32")
     st = read_state(archive)["stats"]
-    check(st["out_keys"] == 3 and st["filtered_signature_shaped"] == 1
-          and st["filtered_control_or_annex"] == 1
-          and st["filtered_key_shaped"] == 3,
-          f"the filter counters must say what was dropped: {st}")
+    check(st["out_keys"] == 3 and st["control_or_annex"] == 1,
+          f"the counters must say what the bytes excluded: {st}")
     ra.run_merge(archive)
     ra.run_verify(archive, deep=True)
+    pile = archive_records(archive, "unproven20")
+    check(rs.hash160(trs.DER_SIG) in pile and rs.hash160(trs.PUB1) in pile,
+          "the candidates no program opens wait in the proof")
     print("ok  scan v3: outputs, other face, hybrid, x-only, and the "
-          "shape filter, with its counters")
+          "candidates the proof sets aside")
 
 
 def test_stale_run_cleanup(tmp, blocks):
@@ -375,6 +380,12 @@ def test_verify(tmp, blocks):
     ra.run_verify(inherited, deep=True)
     print("ok  verify: a sealed archive passes both roads, inherited "
           "without its state too")
+
+    # What follows breaks the ARCHIVE one way at a time and re-seals it;
+    # each re-seal moves the fingerprint the proof names as its parent,
+    # and the proof's own audit has tests of its own. Set it aside, so
+    # every refusal below is the archive's.
+    shutil.rmtree(os.path.join(archive, ra.PROOF_DIR))
 
     man_path = os.path.join(archive, ra.MANIFEST_NAME)
     man = ra._load_manifest(archive)
@@ -871,7 +882,7 @@ def test_the_two_roads_meet_on_the_forms_v3_sees(tmp, blocks):
     finally:
         server.shutdown()
     st = read_state(archive)["stats"]
-    check(st["out_keys"] == 3 and st["filtered_key_shaped"] == 3,
+    check(st["out_keys"] == 3 and st["control_or_annex"] == 1,
           f"the archive must have seen height 5: {st}")
     print("ok  cross-check at 5: both roads meet on the v3 sightings, on "
           "all three perimeters")
@@ -1180,18 +1191,18 @@ def test_lookup(archive):
     print("ok  lookup: found with provenance, ladder meets blind bisect")
 
 
-# The frozen reveal-archive-v3 fingerprint of the synthetic chain. Unlike the
+# The frozen reveal-archive-v4 fingerprint of the synthetic chain. Unlike the
 # determinism tests (which check that two builds AGREE), this pins the absolute
 # value, so a format change that alters every build identically is still
 # caught. Update deliberately if the format or the fixture chain changes.
 GOLDEN_ARCHIVE_FINGERPRINT = \
-    "dac96458c68ea80a42e445392ecf7e939d6d564551e4396c8c13435b8fcc2318"
+    "b920ff746bc92a933f0dc1161b68319280409fe76ce766c56dcbe2b74fd4c379"
 
 
 def test_golden_fingerprint(archive):
     fp = ra._load_manifest(archive)["fingerprint"]
     check(fp == GOLDEN_ARCHIVE_FINGERPRINT,
-          f"reveal-archive-v3 fingerprint drifted from the frozen value: {fp}")
+          f"reveal-archive-v4 fingerprint drifted from the frozen value: {fp}")
     print("ok  golden: the synthetic archive fingerprint is unchanged")
 
 
@@ -1267,9 +1278,11 @@ def heights_chain():
 
     cb, cbid, _ = coinbase(b"\x01b")
     spend = bytes([71]) + trs.FAKE_SIG + bytes([33]) + trs.PUB1
+    # The same transaction creates the P2SH output MULTI opens at h3.
     tx, txid, _ = tbw.w_tx(
         2, [tbw.w_input(b"\xB1" * 32, 0, spend, 0xFFFFFFFF)],
-        [tbw.w_output(10, tbw.P2PKH_SPK)], 0)
+        [tbw.w_output(10, tbw.P2PKH_SPK),
+         tbw.w_output(10, b"\xa9\x14" + rs.hash160(MULTI) + b"\x87")], 0)
     add(2, [cb, tx], [cbid, txid])
 
     cb, cbid, _ = coinbase(b"\x01c")
@@ -1330,6 +1343,25 @@ def test_first_height_is_the_lowest_sighting(tmp):
           "the blind bisect disagrees with the merged stream")
     check(ra._lookup_merged(archive, manifest, "keys", key) == after[key],
           "the ladder-backed lookup disagrees with the blind bisect")
+
+
+def test_a_watermark_past_the_seal_withholds_the_fingerprint(tmp):
+    """Height 4 of this chain reveals nothing and creates no program, so a
+    scan from a seal at 3 to 4 moves the watermark and writes no run. The
+    answers are right up to 4; the fingerprint speaks for 3, and a reader
+    must not hand it out as if it covered both."""
+    archive = _scan_heights(tmp, "past_seal", end=3)
+    ra.run_merge(archive)
+    server, url = trs.serve(heights_chain())
+    try:
+        ra.run_scan(url, "user:pass", 4, archive, batch_size=1,
+                    checkpoint_every=1)
+    finally:
+        server.shutdown()
+    view = ra.ArchiveView(archive)
+    check(not view.runs and view.watermark == 4,
+          "the fixture needs a watermark past the seal and no run")
+    check(not view.sealed, "a fingerprint sealed at 3 was offered for 4")
 
 
 def test_a_never_revealed_key_stays_absent(tmp):
@@ -1579,16 +1611,21 @@ def test_what_the_archive_does_exclude_is_proved_impossible():
     """The other half of the same rule. A control block and an annex
     cannot be scripts — their first byte executes and fails — so they
     are kept out of the script partitions, and that exclusion is a
-    proof rather than a shape."""
-    from nodsig.sightings import candidate_shape, is_control_block
+    proof rather than a shape. A key and a signature are not excluded:
+    they CAN be scripts, and the fusion asks the chain."""
+    from nodsig.sightings import cannot_be_script, is_control_block
     stats = ra.new_filter_stats()
     control = b"\xc0" + b"\x11" * 32
     check(is_control_block(control), "the fixture must be a control block")
-    check(candidate_shape(control, stats, witness_len=2) == "control_or_annex",
+    check(cannot_be_script(control, 2, stats),
           "a control block must be excluded from the script partitions")
     annex = b"\x50" + b"\x22" * 10
-    check(candidate_shape(annex, stats, witness_len=2) == "control_or_annex",
-          "an annex must be excluded too")
+    check(cannot_be_script(annex, 2, stats), "an annex must be excluded too")
+    for shaped in (trs.PUB1, trs.PUBU5, trs.DER_SIG, trs.SCHNORR_SIG):
+        check(not cannot_be_script(shaped, 2, stats)
+              and not cannot_be_script(shaped, 0, stats),
+              f"a {len(shaped)}-byte item was excluded by its shape")
+    check(stats["control_or_annex"] == 2, f"counted: {stats}")
 
 
 def test_the_two_roads_read_a_witness_the_same_way():
@@ -1608,3 +1645,385 @@ def test_the_two_roads_read_a_witness_the_same_way():
         b = set(rs.extract_reveals(txin, True, True, rs.new_filter_stats()))
         check(a == b, f"{name}: the two roads disagree: {a ^ b}")
     print("ok  the two roads extract the same records from a witness")
+
+
+# ---------------------------------------------------------------------------
+# The proof: a candidate is a script when the chain created its program
+# ---------------------------------------------------------------------------
+# A chain of its own again, built around the cases the proof has to get
+# right and the shape filter of 2.0.0 got wrong.
+
+def _push(data):
+    if len(data) <= 75:
+        return bytes([len(data)]) + data
+    return b"\x4c" + bytes([len(data)]) + data
+
+
+def _p2sh(script):
+    return b"\xa9\x14" + rs.hash160(script) + b"\x87"
+
+
+def _p2wsh(script):
+    return b"\x00\x20" + hashlib.sha256(script).digest()
+
+
+# A redeem script with the shape of a key and a witness script with the
+# shape of a DER signature: real scripts here, because outputs were
+# created with their programs, and exactly what 2.0.0 dropped by shape.
+KEY_SHAPED_REDEEM = b"\x02" + bytes(range(100, 132))
+SIG_SHAPED_WSCRIPT = trs.DER_SIG
+# A witness script nested in P2SH: no output carries its program, the
+# redeem script its spend pushes does.
+NESTED_WSCRIPT = bytes([0x51, 33]) + trs.PUB6 + bytes([0x51, 0xAE])
+NESTED_REDEEM = b"\x00\x20" + hashlib.sha256(NESTED_WSCRIPT).digest()
+# Revealed at height 2; its P2SH output is created only at height 4.
+LATE_SCRIPT = bytes([0x51, 33]) + trs.PUB7 + bytes([0x51, 0xAE])
+
+PROVEN20 = {rs.hash160(KEY_SHAPED_REDEEM), rs.hash160(NESTED_REDEEM),
+            rs.hash160(LATE_SCRIPT)}
+PROVEN32 = {hashlib.sha256(SIG_SHAPED_WSCRIPT).digest(),
+            hashlib.sha256(NESTED_WSCRIPT).digest()}
+UNPROVEN20 = {rs.hash160(trs.PUB1)}
+UNPROVEN32 = {hashlib.sha256(trs.PUB3).digest()}
+
+
+def proof_chain():
+    """Five blocks:
+
+        h1  outputs create the P2SH of KEY_SHAPED_REDEEM and of
+            NESTED_REDEEM, and the P2WSH of SIG_SHAPED_WSCRIPT
+        h2  one transaction spending all three, plus LATE_SCRIPT (no
+            program yet), a P2PKH spend of PUB1 and a P2WPKH spend of
+            PUB3, whose last items are candidates nothing opens
+        h3  a coinbase
+        h4  an output creates the P2SH of LATE_SCRIPT
+        h5  a coinbase
+    """
+    blocks = {}
+    prev = bytes(32)
+
+    def add(height, raw_txs, txids):
+        nonlocal prev
+        raw, block_hash = tbw.w_block(4, prev, 1_600_000_000 + height,
+                                      0x1700_0000, height, raw_txs, txids)
+        prev = block_hash
+        blocks[height] = (block_hash[::-1].hex(), raw.hex())
+
+    def coinbase(tag, commit_wtxids=None):
+        outs = [tbw.w_output(50 * rs.SAT, tbw.P2PKH_SPK)]
+        if commit_wtxids is not None:
+            outs.append(tbw.w_output(
+                0, tbw.w_commitment_spk(commit_wtxids, bytes(32))))
+        return tbw.w_tx(
+            1, [tbw.w_input(bytes(32), 0xFFFFFFFF, tag, 0xFFFFFFFF)],
+            outs, 0,
+            witnesses=[[bytes(32)]] if commit_wtxids is not None else None)
+
+    cb, cbid, _ = coinbase(b"\x01p1")
+    tx, txid, _ = tbw.w_tx(
+        2, [tbw.w_input(b"\xD1" * 32, 0, b"", 0xFFFFFFFF)],
+        [tbw.w_output(10, _p2sh(KEY_SHAPED_REDEEM)),
+         tbw.w_output(10, _p2sh(NESTED_REDEEM)),
+         tbw.w_output(10, _p2wsh(SIG_SHAPED_WSCRIPT))], 0)
+    add(1, [cb, tx], [cbid, txid])
+
+    inputs = [
+        (_push(KEY_SHAPED_REDEEM), []),
+        (b"\x00" + _push(trs.FAKE_SIG) + _push(LATE_SCRIPT), []),
+        (_push(trs.FAKE_SIG) + _push(trs.PUB1), []),
+        (b"", [trs.FAKE_SIG, SIG_SHAPED_WSCRIPT]),
+        (_push(NESTED_REDEEM), [trs.FAKE_SIG, NESTED_WSCRIPT]),
+        (b"", [trs.FAKE_SIG, trs.PUB3]),
+    ]
+    tx, txid, wtxid = tbw.w_tx(
+        2, [tbw.w_input(bytes([0xE0 + i]) * 32, 0, sig, 0xFFFFFFFF)
+            for i, (sig, _w) in enumerate(inputs)],
+        [tbw.w_output(10, tbw.P2PKH_SPK)], 0,
+        witnesses=[w for _sig, w in inputs])
+    cb, cbid, _ = coinbase(b"\x01p2", commit_wtxids=[wtxid])
+    add(2, [cb, tx], [cbid, txid])
+
+    cb, cbid, _ = coinbase(b"\x01p3")
+    add(3, [cb], [cbid])
+
+    cb, cbid, _ = coinbase(b"\x01p4")
+    tx, txid, _ = tbw.w_tx(
+        2, [tbw.w_input(b"\xD2" * 32, 0, b"", 0xFFFFFFFF)],
+        [tbw.w_output(10, _p2sh(LATE_SCRIPT))], 0)
+    add(4, [cb, tx], [cbid, txid])
+
+    cb, cbid, _ = coinbase(b"\x01p5")
+    add(5, [cb], [cbid])
+    return blocks
+
+
+def _proof_scan(tmp, name, end, archive=None):
+    d = archive or os.path.join(tmp, name)
+    server, url = trs.serve(proof_chain())
+    try:
+        ra.run_scan(url, "user:pass", end, d, batch_size=1,
+                    checkpoint_every=1)
+    finally:
+        server.shutdown()
+    return d
+
+
+def _sealed_bytes(archive):
+    """Every sealed file of the archive and of its proof, by category,
+    with the two fingerprints: what 'the same archive' means."""
+    man = ra._load_manifest(archive)
+    proof = ra._load_proof(archive)
+    files = {}
+    for cat in ra.CAT_ORDER:
+        with open(os.path.join(archive, ra._cat_file(man, cat)), "rb") as f:
+            files[cat] = f.read()
+    for cat in ra.PROOF_ORDER:
+        with open(os.path.join(archive, ra.PROOF_DIR,
+                               ra._cat_file(proof, cat)), "rb") as f:
+            files[cat] = f.read()
+    return files, man["fingerprint"], proof["fingerprint"]
+
+
+def test_a_candidate_is_kept_exactly_when_the_chain_created_its_program(tmp):
+    """The invariant, on every kind of candidate at once: the scripts are
+    the candidates whose program the chain created, the proof holds the
+    others, and nothing else decides. A key-shaped redeem script and a
+    signature-shaped witness script are scripts; a witness script nested
+    in P2SH is proven by the redeem script its spend pushes; the keys that
+    ended a P2PKH and a P2WPKH spend are not scripts."""
+    archive = _proof_scan(tmp, "proof_oneshot", 5)
+    ra.run_merge(archive)
+    s20 = archive_records(archive, "scripts20", with_height=True)
+    s32 = archive_records(archive, "scripts32", with_height=True)
+    check(set(s20) == PROVEN20,
+          f"scripts20 must be the proven candidates: {sorted(s20)}")
+    check(set(s32) == PROVEN32,
+          f"scripts32 must be the proven candidates: {sorted(s32)}")
+    check(set(archive_records(archive, "unproven20")) == UNPROVEN20
+          and set(archive_records(archive, "unproven32")) == UNPROVEN32,
+          "the proof must hold exactly the candidates nothing opens")
+    check(s20[rs.hash160(LATE_SCRIPT)] == (1, 2),
+          "a script is revealed when its bytes appear (height 2), not when "
+          "its program does (height 4)")
+    programs32 = archive_records(archive, "programs32")
+    check(programs32 == {
+        hashlib.sha256(SIG_SHAPED_WSCRIPT).digest(): ra.PROGRAM_OUTPUT,
+        hashlib.sha256(NESTED_WSCRIPT).digest(): ra.PROGRAM_NESTED},
+          f"each program says where the chain committed to it: {programs32}")
+    keys = archive_records(archive, "keys")
+    for pub in (trs.PUB6, trs.PUB7):
+        check(rs.hash160(pub) in keys, "the keys inside a script are archived")
+    man = ra._load_manifest(archive)
+    check(man["build"]["unproven"] == {"scripts20": 1, "scripts32": 1},
+          f"the archive says what the proof left out: {man['build']}")
+    proof = ra._load_proof(archive)
+    check(proof["build"]["parent"]["fingerprint"] == man["fingerprint"]
+          and man["build"]["proof"]["fingerprint"] == proof["fingerprint"],
+          "the archive and its proof name each other")
+    ra.run_verify(archive, deep=True)
+    print("ok  proof: key- and signature-shaped scripts kept, nested "
+          "witness scripts proven, keys set aside, and nothing else decides")
+
+
+def test_appending_promotes_a_candidate_whose_program_came_later(tmp):
+    """Why the proof keeps what it has not proven. LATE_SCRIPT is revealed
+    at height 2 and its program is created at 4: an archive sealed at 3
+    cannot keep it, and the same archive grown to 5 must hold exactly the
+    bytes of one built to 5 at once. Before the second fusion, with the
+    program still in a run, every reader already sees it."""
+    one = _proof_scan(tmp, "late_one", 5)
+    ra.run_merge(one)
+
+    two = _proof_scan(tmp, "late_two", 3)
+    ra.run_merge(two)
+    late = rs.hash160(LATE_SCRIPT)
+    check(late not in archive_records(two, "scripts20")
+          and late in archive_records(two, "unproven20"),
+          "at 3 no program opens LATE_SCRIPT: the proof holds it")
+    check(rs.hash160(trs.PUB7) in archive_records(two, "keys"),
+          "the keys inside a candidate are archived whether or not it is "
+          "proven")
+
+    _proof_scan(tmp, None, 5, archive=two)
+    view = ra.ArchiveView(two)
+    try:
+        check(view.sighting("scripts20", late) == (1, 2),
+              "a program still in a run promotes the candidate for a lookup")
+    finally:
+        view.close()
+    check(archive_records(two, "scripts20", with_height=True).get(late)
+          == (1, 2), "and for a stream")
+
+    ra.run_merge(two)
+    check(_sealed_bytes(two) == _sealed_bytes(one),
+          "appending in two takes did not seal the bytes of one build")
+    print("ok  proof: a candidate waits in the proof and is promoted when "
+          "its program appears; append == rebuild")
+
+
+def test_a_fusion_killed_between_its_manifests_completes_on_the_same_bytes(
+        tmp):
+    """The fusion commits three writes: the archive's manifest, the
+    proof's, the state. Killed after the first, the new archive stands
+    beside the previous proof; killed after the second, both are new and
+    the state still names the runs. Either way a scan must refuse to run
+    on top, and the next merge must land on the uninterrupted bytes."""
+    ref = _proof_scan(tmp, "kill_ref", 5)
+    ra.run_merge(ref)
+    want = _sealed_bytes(ref)
+    for with_proof in (False, True):
+        d = _proof_scan(tmp, f"kill_{with_proof}", 3)
+        ra.run_merge(d)
+        _proof_scan(tmp, None, 5, archive=d)
+        clone = os.path.join(tmp, f"kill_clone_{with_proof}")
+        shutil.copytree(d, clone)
+        ra.run_merge(clone)
+        for name in os.listdir(clone):
+            if name.startswith("archive_") or name == ra.MANIFEST_NAME:
+                shutil.copyfile(os.path.join(clone, name),
+                                os.path.join(d, name))
+        if with_proof:
+            for name in os.listdir(os.path.join(clone, ra.PROOF_DIR)):
+                shutil.copyfile(os.path.join(clone, ra.PROOF_DIR, name),
+                                os.path.join(d, ra.PROOF_DIR, name))
+        check(read_state(d)["runs"], "the fixture needs the runs still named")
+        try:
+            _proof_scan(tmp, None, 5, archive=d)
+            fail("a scan ran on top of an interrupted fusion")
+        except ra.ScanError as e:
+            check("merge" in str(e), f"the refusal must name the way out: {e}")
+        ra.run_merge(d)
+        check(_sealed_bytes(d) == want,
+              f"the completed fusion (proof committed: {with_proof}) "
+              "differs from the uninterrupted one")
+        ra.run_verify(d, deep=True)
+    print("ok  proof: a fusion killed between its manifests completes on "
+          "the same bytes, and nothing scans on top of it")
+
+
+def test_an_archive_grows_only_beside_the_proof_it_was_sealed_with(tmp):
+    """Without its proof an archive answers everything up to its
+    watermark, and must refuse to grow: a candidate set aside at the last
+    fusion would never be promoted. Beside another archive's proof it
+    must refuse too."""
+    d = _proof_scan(tmp, "no_proof", 3)
+    ra.run_merge(d)
+    other = _proof_scan(tmp, "other_proof", 2)
+    ra.run_merge(other)
+    saved = os.path.join(tmp, "saved_proof")
+    shutil.move(os.path.join(d, ra.PROOF_DIR), saved)
+
+    check(rs.hash160(KEY_SHAPED_REDEEM) in archive_records(d, "scripts20"),
+          "a sealed archive answers without its proof")
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        ra.run_verify(d, deep=True)
+    check("cannot grow" in out.getvalue(),
+          f"verify must say what a missing proof costs: {out.getvalue()}")
+    try:
+        _proof_scan(tmp, None, 5, archive=d)
+        fail("an archive grew without its proof")
+    except ra.ScanError as e:
+        check("no proof" in str(e), f"unexpected: {e}")
+
+    shutil.copytree(os.path.join(other, ra.PROOF_DIR),
+                    os.path.join(d, ra.PROOF_DIR))
+    try:
+        _proof_scan(tmp, None, 5, archive=d)
+        fail("an archive grew beside another archive's proof")
+    except ra.ScanError as e:
+        check("not the one it was sealed with" in str(e), f"unexpected: {e}")
+
+    shutil.rmtree(os.path.join(d, ra.PROOF_DIR))
+    shutil.move(saved, os.path.join(d, ra.PROOF_DIR))
+    _proof_scan(tmp, None, 5, archive=d)
+    ra.run_merge(d)
+    print("ok  proof: no proof or a foreign one refuses to grow; the "
+          "archive still answers")
+
+
+def test_a_received_archive_answers_and_grows_from_its_seal(tmp):
+    """An archive handed over as its sealed files, its manifest and its
+    proof, with no state and no runs: every reader answers from the
+    manifest, and a scan grows it from the watermark and the block hash
+    the manifest names, to the bytes of an archive built at once."""
+    ref = _proof_scan(tmp, "recv_ref", 5)
+    ra.run_merge(ref)
+    built = _proof_scan(tmp, "recv_built", 3)
+    ra.run_merge(built)
+
+    received = os.path.join(tmp, "received")
+    os.makedirs(received)
+    for name in os.listdir(built):
+        if name.startswith("archive_") or name == ra.MANIFEST_NAME:
+            shutil.copyfile(os.path.join(built, name),
+                            os.path.join(received, name))
+    shutil.copytree(os.path.join(built, ra.PROOF_DIR),
+                    os.path.join(received, ra.PROOF_DIR))
+
+    view = ra.ArchiveView(received)
+    try:
+        check(view.sealed and view.watermark == 3
+              and view.last_block_hash == read_state(built)["last_block_hash"],
+              "the manifest stands in for the state")
+        check(view.sighting("scripts20", rs.hash160(KEY_SHAPED_REDEEM))
+              == (0, 2), "a received archive answers a lookup")
+    finally:
+        view.close()
+    ra.run_lookup(received, [rs.hash160(KEY_SHAPED_REDEEM).hex()])
+    ra.run_verify(received, deep=True)
+
+    _proof_scan(tmp, None, 5, archive=received)
+    ra.run_merge(received)
+    check(_sealed_bytes(received) == _sealed_bytes(ref),
+          "a received archive grown to 5 differs from one built to 5")
+    print("ok  proof: a received archive answers from its manifest and "
+          "grows from its seal")
+
+
+def test_deep_verify_refuses_a_script_the_chain_never_proved(tmp):
+    """The digests say the files are the ones sealed; only the deep audit
+    can say the fusion kept by the rule. A candidate slipped into
+    `scripts20` and RE-SEALED, with the proof's parent moved to match, is
+    a wrong archive sealed faithfully: the fast road passes, the deep one
+    must not."""
+    d = _proof_scan(tmp, "tampered", 5)
+    ra.run_merge(d)
+    man = ra._load_manifest(d)
+    proof = ra._load_proof(d)
+    path = os.path.join(d, ra._cat_file(man, "scripts20"))
+    width = ra.rec_width("scripts20")
+    with open(path, "rb") as f:
+        data = f.read()
+    records = [data[i:i + width] for i in range(0, len(data), width)]
+    records.append(rs.hash160(trs.PUB1) + b"\x00" + (2).to_bytes(3, "big"))
+    with open(path, "wb") as f:
+        f.write(b"".join(sorted(records)))
+
+    rec, key_len, every = ra.LADDERS["scripts20"]
+    sha, ladder = sha_and_ladder(path, rec, key_len, every, ra.ScanError)
+    for entry in man["identity"]["files"]:
+        if entry["name"] == "scripts20":
+            entry["sha256"] = sha
+    cache = man["build"]["caches"]["scripts20"]
+    with open(os.path.join(d, cache["file"]), "wb") as f:
+        f.write(ladder)
+    cache["sha256"] = hashlib.sha256(ladder).hexdigest()
+    man["build"]["files"]["scripts20"]["records"] += 1
+    man["fingerprint"] = identity_fingerprint(man["identity"])
+    man["statement"] = statement_digest(man)
+    with open(os.path.join(d, ra.MANIFEST_NAME), "w") as f:
+        json.dump(man, f)
+    proof["build"]["parent"]["fingerprint"] = man["fingerprint"]
+    proof["statement"] = statement_digest(proof)
+    with open(os.path.join(d, ra.PROOF_DIR, ra.MANIFEST_NAME), "w") as f:
+        json.dump(proof, f)
+
+    ra.run_verify(d)
+    try:
+        ra.run_verify(d, deep=True)
+        fail("the deep audit accepted a script no program opens")
+    except ra.ScanError as e:
+        check("never proved" in str(e), f"unexpected: {e}")
+    print("ok  proof: the deep audit refuses a re-sealed archive holding a "
+          "candidate the chain never proved")

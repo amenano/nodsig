@@ -346,8 +346,7 @@ def test_locks_are_verified_against_their_manifest(tmp):
 # ---------------------------------------------------------------------------
 
 def test_extraction():
-    stats = {"malformed_scriptsig": 0, "malformed_inner_script": 0,
-             **rs.new_filter_stats()}
+    stats = {"malformed_scriptsig": 0, **rs.new_filter_stats()}
 
     def tx_in(script_sig, witness):
         return bp.TxIn(bytes(32), 0, script_sig, 0, witness)
