@@ -21,6 +21,60 @@ contract, the **CLI** is convenience, and `reveal-archive-v2` inside a tool
 numbered 1.3.0 is not a discrepancy. Artifacts are identified by their
 fingerprint, never by a tag.
 
+## 3.1.0 (the scan has a native kernel, and the same bytes)
+
+The first native kernel, and with it the first proof that the formats are a
+contract and not this code: the archive scan's per-block body exists twice,
+as the Python reference (`reveal_archive.block_records`) and as C
+(`src/nodsig/native`), and the two are held to the same records, the same
+counters and the same refusals by conformance vectors any third
+implementation can run.
+
+- **`tests/fixtures/scan/vectors.json`**: ten synthetic blocks with their
+  bytes included and 200 real blocks from five eras (heights 100000, 300000,
+  480000, 650000, 830000, forty each) referenced by height and hash; for each
+  the sorted, reduced run of every record category (count and sha256), the
+  counters from zero, and the header facts a parser must agree on. The recipe
+  is spelled out in the file; `tools/make_scan_vectors.py` regenerates it.
+- **The kernel**, plain C99 with no dependency: SHA-256, RIPEMD-160, the
+  parser with the parser's own refusals, the push walk, the key forms, the
+  sightings, the block loop. `python3 -m nodsig.native.build` compiles it
+  from a checkout; `pip install` compiles it when a C compiler is there and
+  ships a pure-Python wheel when it is not. `nodsig.kernel` chooses the road;
+  `NODSIG_NATIVE=0` forces the reference.
+- **What it costs, measured** on eighty real blocks (heights 560,000 and
+  950,000, 445,041 inputs) with the two forms alternated on the development
+  machine (no SHA-NI): 24.8 to 6.2 microseconds an input for hash, parse,
+  extraction and records, of which about 3.5 are the hashes, the same in C
+  and in Python. Projected over the chain's 3.4 billion inputs, about
+  17 hours less CPU for a full scan; the fetch and the run writing are
+  unchanged.
+- **Where the reference stays**: a scan that co-emits the graph
+  (`--graph`, `--graph-digest`) or the nonce census (`--nonces`) reads the
+  parsed block and keeps the Python road; `--headers` rides on either.
+
+### Command line
+
+Nothing changed. One environment variable is new: `NODSIG_NATIVE=0`.
+
+### Formats
+
+`reveal-archive-v4` is unchanged; its manifest gains one field in `build`,
+outside the identity: `kernels`, which road scanned the runs (`["python"]`,
+`["native"]`, or both across resumes). No fingerprint moves.
+
+### Do your artifacts still work?
+
+Yes, all of them, with the same fingerprints. A scan started under 3.0.x
+can be resumed under 3.1.0 on either road: the runs are the same bytes
+whichever road wrote them, and the suite scans its chain on both and seals
+the same archive, proof and header archive.
+
+### Documentation
+
+README (*Requirements*), `docs/ARCHITECTURE.md` §4 and §6, the manifest
+table of `docs/formats/RevealArchive-v4.md`, `tests/fixtures/README.md`.
+
 ## 3.0.2 (the fusion sorts the runs instead of merging them)
 
 A release of speed and nothing else, like 3.0.1: the same bytes, the same
