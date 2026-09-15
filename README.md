@@ -275,7 +275,8 @@ Five ideas, each of which shows up everywhere in the code.
 - **Python 3.10 or later, and nothing else.** No dependencies: the standard
   library is the whole runtime, on purpose, so that what you run is what you
   can read.
-- **Optionally, a C compiler**, for the native kernel of the archive scan
+- **Optionally, a C compiler and Python's development headers** (`python3-dev`
+  on Debian and Ubuntu), for the native kernel of the archive scan
   (`src/nodsig/native`): the same walk as the Python reference, in C, proven
   to write the same bytes (the conformance vectors in `tests/fixtures/scan`
   and the suite hold the two to the same records, counters and refusals), and
