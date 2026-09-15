@@ -83,3 +83,7 @@ CLAUDE.md
 
 # the native kernel, built from src/nodsig/native by python3 -m nodsig.native.build
 *.so
+
+# what `python -m build` leaves behind
+dist/
+build/
