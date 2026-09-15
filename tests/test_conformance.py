@@ -16,8 +16,11 @@ encodings are fixed by the protocol, and the fingerprint recipe is stated in
 full in the fixture and in docs/formats.
 """
 
+import hashlib
 import json
 import os
+
+import pytest
 
 from nodsig.artifact import (canonical_identity, canonical_statement,
                              identity_fingerprint, statement_digest)
@@ -448,3 +451,62 @@ def test_the_fee_formula_for_porters_has_the_record_width():
         assert m, page
         assert [int(x) for x in m.groups()] == [dv.FEE_REC * 8, dv.FEE_REC,
                                                 dv.FEE_REC], page
+
+
+def test_scan_vectors():
+    """One block in, the archive's records out: the scan's own per-block
+    body (`reveal_archive.block_records`) must give every synthetic
+    vector its runs, its counters and its header facts. The chain
+    vectors need a node: set NODSIG_VECTOR_NODE to a REST base URL to
+    run them too, otherwise they are skipped and said so."""
+    import tempfile
+    from nodsig import blockparse
+    from nodsig import reveal_archive as ra
+    from nodsig.sightings import new_filter_stats
+    data = _load("scan")
+    assert data["format"] == ra.FORMAT_TAG
+    assert data["categories"] == list(ra.RUN_CATS)
+
+    def confront(v, raw, tmp):
+        assert hashlib.sha256(raw).hexdigest() == v["raw_sha256"]
+        assert blockparse.block_id(raw)[::-1].hex() == v["hash"]
+        block = blockparse.parse_block(raw)
+        stats = {"transactions": 0, "inputs": 0, "malformed_scriptsig": 0,
+                 "revelations": 0, "program_outputs": 0,
+                 "nested_programs": 0, **new_filter_stats()}
+        buffers = {cat: [] for cat in ra.RUN_CATS}
+        n = ra.block_records(block, v["height"], stats, buffers)
+        assert n == sum(len(b) for b in buffers.values())
+        assert stats == v["stats"], (v["height"], stats, v["stats"])
+        for cat in ra.RUN_CATS:
+            count, sha = ra._write_run(os.path.join(tmp, cat + ".bin"),
+                                       cat, buffers[cat])
+            assert {"records": count, "sha256": sha} == v["runs"][cat], \
+                (v["height"], cat)
+        h = block.header
+        assert v["header"] == {
+            "prev_hash": h.prev_hash[::-1].hex(),
+            "merkle_root": h.merkle_root[::-1].hex(),
+            "tx_count": len(block.transactions),
+            "weight": block.weight,
+            "txids_sha256": hashlib.sha256(
+                b"".join(tx.txid for tx in block.transactions)).hexdigest(),
+            "wtxids_sha256": hashlib.sha256(
+                b"".join(tx.wtxid for tx in block.transactions)).hexdigest(),
+        }, v["height"]
+
+    with tempfile.TemporaryDirectory() as tmp:
+        for v in data["synthetic"]:
+            confront(v, bytes.fromhex(v["raw"]), tmp)
+        node = os.environ.get("NODSIG_VECTOR_NODE")
+        if not node:
+            pytest.skip(f"{len(data['chain'])} chain vectors need a node: "
+                        "set NODSIG_VECTOR_NODE to its REST base URL")
+        from nodsig.reuse_scan import RestClient
+        client = RestClient(node)
+        vectors = data["chain"]
+        for i in range(0, len(vectors), 25):
+            window = vectors[i:i + 25]
+            _hashes, raws = client.fetch_blocks([v["height"] for v in window])
+            for v, raw in zip(window, raws):
+                confront(v, raw, tmp)

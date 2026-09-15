@@ -420,6 +420,63 @@ def output_program(spk):
     return None
 
 
+def block_records(block, height, stats, buffers, on_input=None):
+    """What one block adds to the archive: the records, appended to
+    `buffers` by category (whole records, see `_record`), and the
+    counters it moves in `stats`. Returns how many records it appended.
+
+    This is THE per-block body of the scan, stated once so that the scan,
+    the conformance vectors (tests/fixtures/scan) and the differential
+    test of a native kernel all call the same function: a kernel of the
+    scan is answerable for exactly this — the multiset of records a block
+    yields and the counters it moves — and for nothing else. The order
+    of the records inside a buffer is the walk's and is not part of any
+    contract: a run is sorted and reduced before it is written.
+
+    `on_input(height, tx_in, pushes)`, when given, sees every non-coinbase
+    input with its scriptSig pushes already parsed: the nonce census rides
+    on the same walk (parsed once, walked twice), which is the whole
+    saving of co-emission."""
+    hb = height.to_bytes(HEIGHT_BYTES, "big")   # every record's height
+    buffered = 0
+    for tx in block.transactions:
+        stats["transactions"] += 1
+        # Outputs first, coinbase included: a key published in a
+        # scriptPubKey is in view from this block, and a program created
+        # here proves the scripts that open it.
+        for tx_out in tx.outputs:
+            recs = extract_output_revelations(tx_out, stats)
+            for cat, digest, byte in recs:
+                buffers[cat].append(_record(digest, byte, hb))
+            buffered += len(recs)
+            stats["revelations"] += len(recs)
+            program = output_program(tx_out.script_pubkey)
+            if program is not None:
+                buffers[program[0]].append(
+                    _record(program[1], PROGRAM_OUTPUT, hb))
+                buffered += 1
+                stats["program_outputs"] += 1
+        if blockparse.is_coinbase(tx):
+            continue
+        for tx_in in tx.inputs:
+            stats["inputs"] += 1
+            pushes = scriptsig_pushes(tx_in, stats)
+            recs = extract_revelations(tx_in, stats, pushes)
+            for cat, digest, byte in recs:
+                buffers[cat].append(_record(digest, byte, hb))
+            buffered += len(recs)
+            stats["revelations"] += len(recs)
+            nested = nested_program(pushes, tx_in.witness)
+            if nested is not None:
+                buffers["programs32"].append(
+                    _record(nested, PROGRAM_NESTED, hb))
+                buffered += 1
+                stats["nested_programs"] += 1
+            if on_input is not None:
+                on_input(height, tx_in, pushes)
+    return buffered
+
+
 def nested_program(sig_pushes, witness):
     """The 32-byte program of a P2SH-P2WSH spend, or None.
 
@@ -1004,46 +1061,9 @@ def run_scan(rpc_url, auth, end_height, archive_dir,
                 continue
             if emitter:
                 emitter.add_block(h, block)
-            hb = h.to_bytes(HEIGHT_BYTES, "big")   # every record's height
-
-            for tx in block.transactions:
-                stats["transactions"] += 1
-                # Outputs first, coinbase included: a key published in
-                # a scriptPubKey is in view from this block, and a
-                # program created here proves the scripts that open it.
-                for tx_out in tx.outputs:
-                    recs = extract_output_revelations(tx_out, stats)
-                    for cat, digest, byte in recs:
-                        buffers[cat].append(_record(digest, byte, hb))
-                    buffered += len(recs)
-                    stats["revelations"] += len(recs)
-                    program = output_program(tx_out.script_pubkey)
-                    if program is not None:
-                        buffers[program[0]].append(
-                            _record(program[1], PROGRAM_OUTPUT, hb))
-                        buffered += 1
-                        stats["program_outputs"] += 1
-                if blockparse.is_coinbase(tx):
-                    continue
-                for tx_in in tx.inputs:
-                    stats["inputs"] += 1
-                    # Parsed once, walked twice: the scriptSig pushes are
-                    # what both artifacts start from, and parsing them
-                    # here is the whole saving of co-emission.
-                    pushes = scriptsig_pushes(tx_in, stats)
-                    recs = extract_revelations(tx_in, stats, pushes)
-                    for cat, digest, byte in recs:
-                        buffers[cat].append(_record(digest, byte, hb))
-                    buffered += len(recs)
-                    stats["revelations"] += len(recs)
-                    nested = nested_program(pushes, tx_in.witness)
-                    if nested is not None:
-                        buffers["programs32"].append(
-                            _record(nested, PROGRAM_NESTED, hb))
-                        buffered += 1
-                        stats["nested_programs"] += 1
-                    if nonce_emitter:
-                        nonce_emitter.add_input(h, tx_in, pushes)
+            buffered += block_records(
+                block, h, stats, buffers,
+                on_input=nonce_emitter.add_input if nonce_emitter else None)
 
         pace.add(len(window))
         if buffered >= flush_records:
