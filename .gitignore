@@ -80,3 +80,6 @@ verdicts.txt
 
 # Local agent instructions: private, never published.
 CLAUDE.md
+
+# the native kernel, built from src/nodsig/native by python3 -m nodsig.native.build
+*.so

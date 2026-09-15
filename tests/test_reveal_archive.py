@@ -2108,3 +2108,52 @@ def test_the_proof_by_blobs_is_the_proof_by_records(tmp):
     except ra.ScanError:
         pass
     print("ok  proof: the blob road and the record road agree on 80 cases")
+
+
+def test_the_native_road_seals_the_same_archive_and_headers(tmp):
+    """Two roads, one archive: the synthetic chain scanned and fused on
+    the Python reference and on the native kernel (built into a temp
+    dir for the test) must seal byte-identical files, fingerprints and
+    proof, with byte-identical header archives beside them; the state
+    says which road scanned. Skipped without a C compiler."""
+    import test_native as tn
+    from nodsig import headers as hd
+    from nodsig import kernel
+    import test_headers as th
+    ext = tn.extension()
+    chain, _model = th.headers_chain()   # from genesis: the header archive links to it
+    sealed = {}
+    for road, native in (("python", None), ("native", ext)):
+        real = kernel._native
+        kernel._native = native
+        try:
+            d = os.path.join(tmp, f"road_{road}")
+            hdir = os.path.join(tmp, f"headers_{road}")
+            server, url = trs.serve(chain)
+            try:
+                ra.run_scan(url, "user:pass", 5, d, batch_size=2,
+                            checkpoint_every=2, headers_dir=hdir)
+            finally:
+                server.shutdown()
+            state = ra._load_state(d)
+            check(state["kernels"] == [road],
+                  f"the state must say which road scanned: {state['kernels']}")
+            check((kernel.available()) == (native is not None),
+                  "kernel.available() must follow the module in place")
+            ra.run_merge(d)
+            files, fp, proof_fp = _sealed_bytes(d)
+            hfp = hd.run_fingerprint(hdir)
+            hfiles = {}
+            for name, _ in hd.FILES:
+                with open(hd._path(hdir, name), "rb") as f:
+                    hfiles[name] = f.read()
+            sealed[road] = (files, fp, proof_fp, hfp, hfiles)
+        finally:
+            kernel._native = real
+    py, nat = sealed["python"], sealed["native"]
+    check(py[0] == nat[0] and py[1] == nat[1] and py[2] == nat[2],
+          "the native road must seal the archive and the proof the Python "
+          "road seals, byte for byte")
+    check(py[3] == nat[3] and py[4] == nat[4],
+          "the header archive must be the same on both roads")
+    print("ok  native road: same archive, same proof, same headers")

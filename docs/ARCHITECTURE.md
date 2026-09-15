@@ -195,7 +195,10 @@ something else. An audit finds what it looks for; a test looks every time.
 - The `Index` and `Derived` **readers** still live with their formats. Sharing
   them would mean sharing a query model, which is not the same problem the
   builders had; extracted on demand, not before.
-- **native kernels** — demand-driven, post-publication (see §6).
+- **native kernels** — demand-driven, post-publication (see §6). The first
+  one exists since 3.1.0: `src/nodsig/native`, the archive scan's per-block
+  body in C behind `nodsig.kernel`, a proven-identical accelerator of
+  `reveal_archive.block_records` and nothing more.
 
 The orchestration (phase state machines, `build`, manifest/source,
 checkpoint/resume, CLI) **stays glue**: it calls the kernels, and is not ported
@@ -272,6 +275,24 @@ kernel that parsed the same bytes and returned the same structures would
 therefore have a ceiling near 1.12×: it removes the walk and pays the
 allocation regardless. The residue worth attacking natively is never obvious
 before (1), and here it was not the pass that looked slowest.
+
+**Step (3), done for the archive scan (3.1.0).** The profile above said
+where a native kernel would bite and where it would not: over eighty real
+blocks the parser spent 44% of its time in hashing (already in OpenSSL), 45%
+building Python objects, 11% walking the bytes, and the extraction as much
+again. A native parser returning the same objects would therefore have kept
+most of the cost; the kernel takes the block whole instead — hash, parse,
+extraction, records — and returns the archive's records and counters, which
+is exactly what `reveal_archive.block_records` is answerable for, and nothing
+a Python object has to carry. Measured on the same blocks with the two forms
+alternated: **24.8 to 6.2 microseconds an input**, of which about 3.5 are the
+hashes themselves, the floor no implementation removes on that machine. The
+kernel is optional (a C99 compiler, no library), attaches behind
+`nodsig.kernel` with the Python road as the fallback, and is held to the
+reference by the conformance vectors of `tests/fixtures/scan`, a
+per-refusal comparison at every truncation of a block, and a scan of the
+suite's chain on both roads sealing the same archive, proof and header
+archive. The manifest records which road scanned, outside the identity.
 
 **Sequence (demand-driven):** kernel/orchestration boundaries first (design) →
 I/O + algorithm wins if needed → native kernels only on the residue, one at a

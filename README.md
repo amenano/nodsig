@@ -275,6 +275,15 @@ Five ideas, each of which shows up everywhere in the code.
 - **Python 3.10 or later, and nothing else.** No dependencies: the standard
   library is the whole runtime, on purpose, so that what you run is what you
   can read.
+- **Optionally, a C compiler**, for the native kernel of the archive scan
+  (`src/nodsig/native`): the same walk as the Python reference, in C, proven
+  to write the same bytes (the conformance vectors in `tests/fixtures/scan`
+  and the suite hold the two to the same records, counters and refusals), and
+  about four times faster on the block. It is built by `pip install` when a
+  compiler is there and skipped when it is not, or by hand from a checkout with
+  `python3 -m nodsig.native.build`; a package without it runs the reference,
+  unchanged. The archive's manifest says which road scanned it, outside the
+  fingerprint. `NODSIG_NATIVE=0` forces the reference road.
 - **Your own Bitcoin node**, not pruned, with RPC reachable (and `-rest=1` if
   you want the faster block fetch described below). Pruned nodes
   cannot serve the block history these tools read. The node is contacted while

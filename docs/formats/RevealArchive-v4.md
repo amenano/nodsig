@@ -365,7 +365,7 @@ block that does not. `identity.coverage.to` is the **watermark**. With unfused
 runs present the archive is queryable but **not sealed**, and that state must be
 reported: there is no single sealed fingerprint yet.
 
-`build` holds the generation, file names, records and ladders, and four fields a
+`build` holds the generation, file names, records and ladders, and five fields a
 reader holding only this manifest needs:
 
 | field | what it is |
@@ -374,6 +374,7 @@ reader holding only this manifest needs:
 | `proof` | `{format, fingerprint}` of the proof sealed in the same fusion |
 | `fused_onto` | the fingerprint of the generation this one was fused onto, or null |
 | `unproven` | `{scripts20, scripts32}`: how many candidates the proof holds, the archive's answer to "what did you leave out" for a reader who never received the proof |
+| `kernels` | which road scanned the runs fused here: `["python"]` (the reference), `["native"]` (the C kernel, `nodsig.kernel`), or both across resumes. How the bytes were made, never what they are: both roads write the same bytes, and the fingerprint does not depend on it |
 
 `build.files.<cat>.file` is the **authority** on which file holds a category:
 resolve it from the manifest, never by formatting the category name.

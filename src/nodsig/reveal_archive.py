@@ -170,6 +170,7 @@ from nodsig.progress import Pace
 from nodsig.artifact import (WallClock, declared_parent, identity_fingerprint,
                              make_identity, producer, seal_manifest,
                              verify_sealed)
+from nodsig import kernel
 from nodsig.blockparse import ParseError, script_pushes, scriptsig_pushes
 
 # Slab I/O for the fixed-width record files (runs, merged archive): the
@@ -418,6 +419,23 @@ def output_program(spk):
     if n == 34 and spk[0] == 0x00 and spk[1] == 0x20:
         return "programs32", bytes(spk[2:34])
     return None
+
+
+def _facts_block(facts):
+    """The `Block` the header archive reads, out of what the native
+    kernel reports: the header (re-serialized and re-hashed by the
+    emitter, so it must be the block's), the two sizes, and a first
+    transaction that is a coinbase exactly when the block's is, carrying
+    its scriptSig. Nothing else is filled in, and nothing else is read."""
+    coinbase = facts["coinbase_is_coinbase"]
+    header = blockparse.BlockHeader(
+        facts["version"], facts["prev_hash"], facts["merkle_root"],
+        facts["time"], facts["bits"], facts["nonce"], facts["hash"])
+    tx_in = blockparse.TxIn(bytes(32) if coinbase else b"\x01" * 32,
+                            0xFFFFFFFF if coinbase else 0,
+                            facts["coinbase_script"], 0, [])
+    tx = blockparse.Tx(0, [tx_in], [], 0, None, None, False, 0, 0)
+    return blockparse.Block(header, [tx], facts["size"], facts["weight"])
 
 
 def block_records(block, height, stats, buffers, on_input=None):
@@ -1026,6 +1044,10 @@ def run_scan(rpc_url, auth, end_height, archive_dir,
             "last_block_hash": block_hash_display,
             "stats": stats,
             "runs": runs,
+            # The roads that scanned this archive, across resumes: the
+            # native kernel, the Python reference, or both. Information,
+            # never identity: the two write the same bytes.
+            "kernels": sorted(kernels | {"native" if native else "python"}),
         }
         # The pass's own seconds, accumulated across resumes because the
         # total lives in the state and the state is what survives a kill.
@@ -1039,8 +1061,35 @@ def run_scan(rpc_url, auth, end_height, archive_dir,
     pace = Pace(end_height)
     fetcher = BlockFetcher(client, feed_from, end_height, batch_size,
                            prefetch=prefetch, depth=prefetch_depth)
+    # The native kernel takes the block whole (hash, parse, records) and
+    # hands back no parsed block: the graph and the nonce census read
+    # one, so a scan that co-emits them keeps the Python road. The header
+    # archive needs only what the kernel reports (see `_facts_block`).
+    native = kernel.available() and not emitter and not nonce_emitter
+    kernels = set(state.get("kernels", ())) if state else set()
     for window, hashes, raws in fetcher:
         for h, want, raw in zip(window, hashes, raws):
+            if native:
+                try:
+                    recs, moved, facts = kernel.scan_block(raw, h, want)
+                except kernel.HashMismatch:
+                    raise ScanError(f"height {h}: block bytes do not hash "
+                                    "to the requested block hash") from None
+                if prev_hash is not None and facts["prev_hash"] != prev_hash:
+                    raise ScanError(f"height {h}: prev_hash does not link "
+                                    f"to height {h - 1} (reorg? wrong node?)")
+                prev_hash = facts["hash"]
+                if header_emitter:
+                    header_emitter.add_block(h, _facts_block(facts))
+                if h < start_height:
+                    continue
+                for cat, blob in zip(RUN_CATS, recs):
+                    if blob:
+                        buffers[cat] += _split(blob, rec_width(cat))
+                        buffered += len(blob) // rec_width(cat)
+                for key, n in moved.items():
+                    stats[key] += n
+                continue
             # The hash BEFORE the parse: until these bytes are known to
             # be the block that was asked for, they are input from the
             # other end of a wire, and there is no reason to walk them
@@ -1316,6 +1365,12 @@ def run_merge(archive_dir):
                       "fingerprint": identity_fingerprint(proof_identity)}
     build["unproven"] = {cat: proof_build["files"][PROVED_BY[cat][1]]
                          ["records"] for cat in PROVED_BY}
+    # The roads that scanned the runs fused here (nodsig.kernel): the
+    # native kernel, the Python reference, or both across resumes.
+    # Information about how the bytes were made, never about what they
+    # are: the two roads write the same bytes, and the suite holds them
+    # to it.
+    build["kernels"] = state.get("kernels", ["python"])
     build["seconds"] = clock.stamp(state)
     build["wall"] = clock.wall()
     new_manifest = seal_manifest(FORMAT_TAG, identity, build)
