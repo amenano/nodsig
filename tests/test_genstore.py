@@ -898,3 +898,27 @@ def test_ladder_writer_samples_a_blob_as_it_samples_records(tmp):
               and lad_sha == hashlib.sha256(ladder).hexdigest(),
               f"case {case}: the blob road and the record road disagree")
     print("ok  ladder writer: blobs and records sample the same ladder")
+
+
+def test_split_is_slicing_and_keeps_a_bounded_cache():
+    """`_split` must give exactly the records slicing gives, for every
+    length around the chunk sizes and with a prefix format, and its
+    cache of compiled formats must stay at a handful per shape whatever
+    lengths it saw: a format per length was 295 MB per shape."""
+    rng = random.Random(3)
+    before = len(genstore._unpackers)
+    for rec, unit in ((24, None), (36, None), (24, "20s4x"), (36, "32s4x")):
+        width = rec if unit is None else int(unit.split("s")[0])
+        for n in list(range(0, 70)) + [4095, 4096, 4097, 8191, 8192, 8193,
+                                       12345, 20000]:
+            blob = bytes(rng.randrange(256) for _ in range(n * rec))
+            want = [blob[i:i + width] for i in range(0, n * rec, rec)]
+            check(genstore._split(blob, rec, unit=unit) == want,
+                  f"_split differs from slicing at n={n}, rec={rec}, "
+                  f"unit={unit}")
+            check(genstore._split(blob, rec, n, unit) == want,
+                  f"_split with n given differs at n={n}")
+    grown = len(genstore._unpackers) - before
+    check(grown <= 4 * genstore._SPLIT_BITS,
+          f"the cache grew by {grown} formats: it must stay bounded")
+    print(f"ok  _split: slicing's answers, {grown} formats cached for 4 shapes")

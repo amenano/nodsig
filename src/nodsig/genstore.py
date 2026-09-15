@@ -378,12 +378,15 @@ class _BaseCursor:
             for i in range(off, end, rec):
                 yield slab[i:i + rec]
 
-# Records leave a blob as bytes objects through struct, by chunks of a
-# fixed count: one compiled format per (record shape, count) is cheaper
-# than slicing by hand (0.14 against 0.36 µs per record, measured), and
-# a fixed chunk keeps the cache of formats bounded whatever lengths the
-# pieces of a round happen to have.
-_SPLIT_CHUNK = 4096
+# Records leave a blob as bytes objects through struct. One compiled
+# format per (record shape, count) is cheaper than slicing by hand (0.14
+# against 0.36 µs per record, measured), but a format per count is a
+# cache that grows with every length a piece happens to have: 4,096 of
+# them cost 295 MB per shape, measured, and the first real fusion peaked
+# at 4.2 GB resident. So a piece is split by the powers of two of its
+# length: at most _SPLIT_BITS formats per shape, ever, and at most
+# _SPLIT_BITS calls per piece.
+_SPLIT_BITS = 13                      # chunks of up to 4,096 records
 _unpackers = {}
 
 
@@ -397,14 +400,16 @@ def _split(blob, rec, n=None, unit=None):
     if unit is None:
         unit = f"{rec}s"
     out = []
-    full, tail = divmod(n, _SPLIT_CHUNK)
-    if full:
-        u = _unpacker(unit, _SPLIT_CHUNK)
-        step = _SPLIT_CHUNK * rec
-        for i in range(full):
-            out += u(blob, i * step)
-    if tail:
-        out += _unpacker(unit, tail)(blob, full * _SPLIT_CHUNK * rec)
+    off = 0
+    bit = _SPLIT_BITS - 1
+    while n:
+        count = 1 << bit
+        if n >= count:
+            out += _unpacker(unit, count)(blob, off)
+            off += count * rec
+            n -= count
+        else:
+            bit -= 1
     return out
 
 
