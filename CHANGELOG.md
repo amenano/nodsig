@@ -53,6 +53,19 @@ implementation can run.
   (`--graph`, `--graph-digest`) or the nonce census (`--nonces`) reads the
   parsed block and keeps the Python road; `--headers` rides on either.
 
+**A correction to 3.0.2.** It projected the first `archive merge` of a full
+scan at about two hours. The first one done, on the 3.0.x pile of 5,300 runs
+(145 GB), took 5 h 04 min: 2.1 minutes per GB of pile, the same rate as
+2.1.0's 2 h 19 min on 68 GB. The 16-run measurement behind the projection
+did not see what a pile of 1,200 runs per category does to the sort-based
+stage: with the read budget shared by 1,200 sources a slab holds 18,000
+records and a round gathers them in 1,200 pieces of about 15, below the
+natural-run length timsort merges cheaply, so the sort pays per record what
+the heap paid, and 1,200 gallops a round on top. The bytes were the same,
+the speed was not; the fix is a stage that keeps the pieces long (a
+two-level fusion, or the k-way merge in the native kernel) and it is not in
+this release.
+
 ### Command line
 
 Nothing changed. One environment variable is new: `NODSIG_NATIVE=0`.
