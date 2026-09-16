@@ -5,14 +5,17 @@ with the files on a network mount rather than a local disk, so the timings are
 a pessimistic case rather than a flattering one. Nothing here is a mock-up, and
 nothing here contacted a node: these are lookups in files.
 
-> **Which artifacts these are, stated up front.** They were sealed by 1.0.0 and
-> 1.1.0, so they are `outpoint-index-v2`, `outpoint-derived-v2` and
-> `nonces-v2`. Version 1.2.0 **reads all three** — that is what the transcripts
-> below show — but it **emits** `outpoint-index-v3`, `outpoint-derived-v3` and
-> `nonces-v3`, which are different bytes and therefore different fingerprints.
-> A file name in a transcript (`spends_g0002.bin`) is the v2 name for that
-> reason. See [the changelog](../CHANGELOG.md) for what moved and what it
-> costs; this page will be re-shot from v3 artifacts once they exist.
+> **This page is a historical record, stated up front.** The artifacts were
+> sealed by 1.0.0 and 1.1.0, so they are `outpoint-index-v2`,
+> `outpoint-derived-v2` and `nonces-v2`, and the transcripts were taken with
+> 1.2.0, which still read them. **No release since 2.0.0 reads those formats**:
+> run these commands against these artifacts today and the tool refuses by
+> name. What the commands print has not changed in shape, which is why the page
+> is still the best answer to "what does this actually look like"; the
+> fingerprints, the file names (`spends_g0002.bin` is a v2 name) and the sizes
+> belong to formats two majors old. See [the changelog](../CHANGELOG.md) for
+> what moved and what it cost. Re-shooting the page from current artifacts is
+> open work, not a promise with a date.
 
 The output is text and CSV. The figures further down are what a plotting
 script makes of those CSVs; nodsig does not draw, it counts. The two on the

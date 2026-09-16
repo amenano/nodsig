@@ -198,7 +198,7 @@ archive); and a release at which it is not run is the release it comes out.
 | └ `firstspend_gNNNN.bin`, `manifest.json` | records / `firstspend-v1` | One row per lock ever spent from; the parent derivatives are **declared** in `build` | `firstspend build` | `firstspend between/verify` |
 | `<firstreveal>/` | `firstreveal-v2` | The first revelation of every key, ordered by that moment (20 B per row in `keys.bin`, one u40 offset per height in `first_off.bin`; was 23 B: `first_height` \| `key`) | `firstreveal build` | `firstreveal between` |
 | └ `keys.bin`, `first_off.bin`, `manifest.json` | records / `firstreveal-v2` | One row per revealed key, a 1:1 restatement of the archive's keys partition; the parent archive is **declared** in `build` | `firstreveal build` | `firstreveal between/verify` |
-| `*.lad` (inside index, derived, firstspend and firstreveal) | ladders | Search caches: one sample every few thousand keys. **Outside the fingerprint**; without them a search falls back to a blind bisection, slower and with the same answer | the builders | the readers, when present |
+| `*.lad` (inside the archive and its proof, the census, the index, the derivatives and firstspend; **not** firstreveal, whose height column is its own offset table) | ladders | Search caches: one sample every few thousand keys. **Outside the fingerprint**; without them a search falls back to a blind bisection, slower and with the same answer | the builders | the readers, when present |
 | `<checkpoint>/` | `reuse-scan-v2` | The burnt set: a `hits_<type>.bin` bitmap of which locks history has opened, plus `state.json` (the locks, the height and the perimeter the `reuse-hits-v2` fingerprint names) and, from the scan, its own sealed `curve.csv` | `reuse scan`, `archive derive --checkpoint` | itself (resume), `reuse stats`, `archive crosscheck` |
 
 ## What the scan checks while it reads
@@ -269,16 +269,18 @@ held to within half a percent, which is what fixed-width records buy.
 | `<graph>/` | ~301 GB |
 | `<index>/` | ~230 GB |
 | `<derived>/` | ~185 GB |
-| `<archive>/` | ~98 GB |
-| `<nonces>/` | ~60 GB |
+| `<archive>/` | ~105 GB measured on a 3.0.x run, of which the sealed archive is ~51 GB |
+| └ `<archive>/proof/` | ~54 GB of that: no query reads it, and `archive scan` refuses to grow an archive without it |
+| `<nonces>/` | ~55-60 GB |
 | `<firstspend>/` | ~37 GB (optional; 1.48 G locks ever spent from × 25 B) |
-| `<firstreveal>/` | ~37 GB (optional; 1.61 G revealed keys × 23 B) |
+| `<firstreveal>/` | ~34 GB (optional; 1.70 G revealed keys × 20 B) |
 | `<locks>/`, `<checkpoint>/`, CSVs | small enough not to plan for |
 
 Add headroom on top: a fusion writes a new generation before deleting the old.
 The FIRST fusion of a scan is the largest: it fuses the whole run pile, which
-holds every sighting and is about twice the size of what it will seal (on the
-real chain 7.7 G revelations in the runs against 3.6 G records sealed). `merge`
+holds every sighting and is far larger than what it will seal (a 3.0.x run
+measured 8.02 G revelations in a 145 GB pile of 5,300 runs against 2.19 G
+records sealed, and took 5 h 04). `merge`
 prints both numbers and refuses before the first byte if the space is not free.
 
 ## All of it is shareable

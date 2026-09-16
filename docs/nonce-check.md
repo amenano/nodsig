@@ -234,8 +234,10 @@ never sees `s`, cannot.
 
 The figures and outputs published with this project come from artifacts sealed
 at height 957,301, and those were built before this census existed. Printing a
-chain-scale example here would mean inventing one. When the rescan that produces
-the v2 artifacts has run, this page gets real output and the real sizes.
+chain-scale example here would mean inventing one. A scan that co-emits the
+census has since been run at chain scale; this page gets real output and real
+sizes when that census has been read back and the numbers can be quoted as
+measurements rather than as recollection.
 
 There is a second reason the chain-scale example will stay narrow: a real
 repeated nonce on a single-key lock names a specific address whose key can be

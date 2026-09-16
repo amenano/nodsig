@@ -31,6 +31,8 @@ bitcoin-cli dumptxoutset /path/snapshot.dat        # note the height it reports
 
 Required for anything about the **current** UTXO set (the census, the reuse
 figures). Not needed if you only want history: the chain scan does not read it.
+**Bitcoin Core 28 or later, mainnet**: the readers take the snapshot format
+Core 28 writes and refuse an older one by name.
 
 ## 1. From the snapshot, offline
 
@@ -57,6 +59,11 @@ to produce what they produce: a later pass cannot reconstruct them.
 One command, and the only one on this page that is: everything in brackets is
 an optional flag of *this* invocation, not a separate step.
 
+**`--end <H>` is the snapshot's height** if you did step 0, and the reuse
+steps refuse the pair outright when it is not: the locks were photographed at
+one block, and counting them against an archive that stops at another answers
+about neither. Pick the height once and use it in every command on this page.
+
 ```sh
 nodsig archive scan --rpc <url> --cookie-file <path/.cookie> \
                     --end <H> --archive <archive> \
@@ -66,10 +73,10 @@ nodsig archive scan --rpc <url> --cookie-file <path/.cookie> \
 
 | flag | cost | without it |
 |---|---|---|
-| (none) | ~98 GB | you still get the revelation archive: the exposure question |
+| (none) | ~145 GB of runs, ~105 GB once merged | you still get the revelation archive: the exposure question |
 | `--graph` | 300-400 GB | no index, no derivatives, no block statistics: they are all built from it |
 | `--headers` | ~150 MB | dates need the node, and the scan's integrity checks cannot be repeated offline |
-| `--nonces` | ~60 GB, ~10% CPU | the nonce census does not exist and no later pass can rebuild it |
+| `--nonces` | ~55-60 GB, ~10% CPU | the nonce census does not exist and no later pass can rebuild it |
 | `--rest` | none, saves ~half the bytes on the wire | JSON-RPC instead: correct, slower, needs a credential |
 
 `--graph-digest <graph>` replaces `--graph` when you already have one: it
@@ -115,9 +122,12 @@ that really did run one after another.
 
 ## 3. Seal what the pass produced
 
-Five separate commands, one per artifact the pass wrote: run the ones whose
-flags you passed. Each turns a directory into a citable artifact by writing its
-manifest and printing its fingerprint.
+Four of these seal an artifact the pass wrote: run the ones whose flags you
+passed. Each turns a directory into a citable artifact by writing its manifest
+and printing its fingerprint. The fifth, `archive derive`, is not one of them:
+it reads the sealed archive against the locks of step 1, so it applies only if
+you did step 1, and it is listed here because this is where it belongs in the
+order.
 
 ```sh
 nodsig archive merge  --archive <archive>

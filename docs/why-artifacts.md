@@ -18,7 +18,8 @@ set has discarded.
 
 So the query that objection imagines is not a query. It is a pass over block
 history: fetch every block, parse every input, reconstruct every scriptSig and
-witness, hash. That pass is in the README's cost table at about **three days**
+witness, hash. That pass is in the README's cost table at about **two and a
+half days**
 on a slow setup.
 
 | | one exposure question |
@@ -83,8 +84,8 @@ nodsig archive verify --archive <archive-dir>          # bytes, ladders, fingerp
 nodsig archive verify --archive <archive-dir> --deep   # …and every record
 ```
 
-So the cost is not necessarily "three days of scanning plus 98 GB". It can be
-"98 GB copied from removable media and verified locally". Determinism is what
+So the cost is not necessarily "days of scanning plus a hundred gigabytes". It can be
+"a hundred gigabytes copied from removable media and verified locally". Determinism is what
 makes accepting a file from a stranger safe: you do not trust the sender, you
 recompute the fingerprint.
 

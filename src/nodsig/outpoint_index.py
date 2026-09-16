@@ -952,7 +952,7 @@ def _phase_seal(index_dir, state, graph_dir, clock):
                 f"not {ge.FORMAT_TAG}: its fingerprint comes from a "
                 "recipe this major does not compute and cannot be named "
                 "as a parent. Re-seal the graph first with "
-                "`graph fingerprint --reseal` (the bytes do not change).")
+                "`manifest reseal <graph-dir>` (the bytes do not change).")
         sealed_to = graph_manifest["identity"]["coverage"]["to"]
         if sealed_to < state["last_height"]:
             # The graph grows after `fingerprint` without invalidating

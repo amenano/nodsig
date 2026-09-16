@@ -58,8 +58,9 @@ instead of restating them.
 
 10. **A commit is additive: write beside, name it, only then delete.** Every
     artifact that grows by generations — `outpoint-index-v3`,
-    `outpoint-derived-v3` and `nonces-v3` through `genstore`,
-    `reveal-archive-v2` by hand —
+    `outpoint-derived-v3`, `nonces-v3` and `firstspend-v1` through
+    `genstore`, `reveal-archive-v4` through its own orchestration around
+    the same stage —
     MUST write the next generation of a file **beside** the current one, then
     commit the state/manifest that names it, and only then delete what is no
     longer named. What the state or the manifest does not name **does not

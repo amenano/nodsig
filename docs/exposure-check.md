@@ -73,7 +73,7 @@ $ nodsig check --archive <archive-dir> --stdout \
       1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa \
       12c6DSiU4Rq3P4ZxziKxzrL5LmMBrzjrJX \
       bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh
-# exposure: reveal-archive-v2 (confirmed blocks 1..957,301, sealed aacaf02dca2fc5ba8532e54fa75159041fc99051efa68eb63e59bc9537369ced)
+# exposure: reveal-archive-v4 (confirmed blocks 1..957,301, sealed aacaf02dca2fc5ba8532e54fa75159041fc99051efa68eb63e59bc9537369ced)
 # history: not configured (pluggable: outpoint-index derivatives (--index + --derived))
 # co-inputs: not configured (pluggable: outpoint-index derivatives (--index + --derived))
 
@@ -154,7 +154,7 @@ to prevent:
 ## Inheriting an archive instead of building one
 
 Building the archive means one pass over block history against your own node,
-about three days on a slow setup. You may not want to pay that, and you do not
+about two and a half days on a slow setup. You may not want to pay that, and you do not
 have to: the archive is a function of public chain data, contains nothing about
 the machine that built it and nothing about what anyone ever looked up in it,
 so it is safe to publish and safe to accept.
@@ -175,15 +175,15 @@ the highest height its records prove. It reads the archive a second time, which
 on a full one is not free, and it is worth it once when you accept an archive
 from someone else.
 
-The third confronts the archive with an *older* published one: it strips
-everything this format gained since v1 (the first-seen height, the count of
-keys inside a script, the key's serialized form) and prints one sha256 per
-category over what is left, which must be the digest the sealed v1 archive
-recorded for that category. Same chain, different code, one number each: it
-costs a read and it is the cheapest statement anyone can make that two
-independent builds of this archive describe the same history.
+The 1.x releases had a third check, `archive v1-digests`, which stripped an
+archive back to what v1 recorded and printed one sha256 per category to
+compare with a published v1 archive. It is gone since 2.0.0: the formats have
+moved twice more, and a digest over a subset of today's records answered a
+question about a shape that no longer exists. What replaces it is the ordinary
+one — two builds of the same chain to the same height seal the same
+fingerprint — which is stronger, and costs a rebuild rather than a read.
 
-The recipe both follow is written out in
+The recipe the two follow is written out in
 [`formats/RevealArchive-v4.md`](formats/RevealArchive-v4.md), for anyone who
 would rather check by hand or from another implementation.
 

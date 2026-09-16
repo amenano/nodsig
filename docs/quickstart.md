@@ -5,8 +5,14 @@ The full build costs days of machine and hundreds of gigabytes, and the
 pay them. This page is the smaller first contact: two exercises, one that
 answers a question about **today** in well under an hour, and one that walks
 **every mechanism of the project** on a slice of the chain small enough to
-finish in an afternoon. Both need your own Bitcoin Core node. Neither needs
-the disk, or the days.
+finish in an afternoon. Both need your own Bitcoin Core node, not pruned,
+and the first needs Core 28 or later for the snapshot. Neither needs the
+disk, or the days.
+
+This page writes `nodsig …`. If you have not installed it, the
+[README](../README.md#try-it-before-building-anything) shows the two ways to
+get it: `pip install .` from a clone, or `export PYTHONPATH=src` in the clone
+and `python3 -m nodsig …` in place of `nodsig …` everywhere below.
 
 One thing this page is not, stated up front: a way to analyze the recent
 chain cheaply. The artifacts are cumulative by nature, because a transaction

@@ -71,13 +71,15 @@ the contract.
 (blocks/txids/tx_first_out/txid_index/outputs/spends), `OutpointDerived-v3`
 (history/tx_inputs/fees), `RevealArchive-v4`, `Nonces-v3`,
 `Nonces-witness-v2`, `FirstSpend-v1`, `FirstReveal-v2`, `BlockStats-v3`,
-`ReuseScan-v2`. Each:
+`ReuseScan-v2`, `DerivedTimeline-v2`. Each:
 record layout + ordering rule + canonical fingerprint + ancestry (every
 manifest names its parent).
 
-Four documents in that directory are **not artifacts** and say so in their
+Five documents in that directory are **not artifacts** and say so in their
 first line: [`AddressBook-v2`](formats/AddressBook-v2.md), the input of
-`check`; [`CheckReport-v3`](formats/CheckReport-v3.md), its complete output;
+`check`; [`CheckReport-v3`](formats/CheckReport-v3.md), its complete output,
+with [`CheckReport-v2`](formats/CheckReport-v2.md) beside it for a tool that
+still parses the older one;
 [`PriceSeries-v2`](formats/PriceSeries-v2.md), a publisher's price series in
 one canonical shape; and [`BlockPrice-v2`](formats/BlockPrice-v2.md), one
 price per block derived from it and from the index. None is a function of the
@@ -181,7 +183,9 @@ something else. An audit finds what it looks for; a test looks every time.
 
 - The k-way **merge** is one function (`genstore.merge_to_file`) with three
   rules for equal keys — keep-last (the index), keep-both-and-count (the
-  spends), reduce (the archive ORs its flags and keeps the lowest height) —
+  spends), reduce (the archive's two combiners: OR the flags or take the
+  larger byte, and keep the lowest height, which is why the kernel enumerates
+  four) —
   and two roads that the suite pins to the same bytes: the previous
   generation gallops (stretches nothing interleaves move whole), the runs go
   through a k-way stage by slabs, in rounds bounded to about 64,000 records
@@ -351,5 +355,8 @@ cannot lie.
   written IDL-ready (the vocabulary maps 1:1 to protobuf).
 - **Private extensions:** a private backend/analysis is a private instance of a
   public interface; the public repo never names it (one-way dependency).
-- **Language of the native kernels** (if/when): Rust or C with a C ABI (the lingua
-  franca for Python/Java/… bindings). To be decided on demand.
+- ~~**Language of the native kernels**~~ — **decided and shipped**: plain C99
+  with the CPython API around it, no library and no build dependency beyond a
+  compiler and Python's headers (§4, §6). Kept here because the reasoning is
+  the one a second port should reuse: a C ABI is the lingua franca for
+  Python/Java/… bindings.

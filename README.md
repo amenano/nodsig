@@ -12,7 +12,7 @@ them to someone else and they check them by recomputing that fingerprint.
 Building every one of them costs about 110 hours and 950 GB at today's
 height; most questions need a fraction of that, and the table under
 *Building the artifacts* says which. Nothing has to be installed or built to
-see how it behaves: the first command under *Try it* runs from a clone, with
+see how it behaves: the first commands under *Try it* run from a clone, with
 no node.
 
 ## What you can ask it
@@ -57,14 +57,21 @@ like once drawn, are in [`docs/gallery.md`](docs/gallery.md).
 
 ## Try it before building anything
 
-Nothing has to be installed. From a clone, the package runs where it lies:
+Nothing has to be installed. From a clone, the package runs where it lies,
+once `src` is on the import path:
 
 ```sh
 git clone https://github.com/amenano/nodsig.git
 cd nodsig
+export PYTHONPATH=src                   # the package lives in src/
 python3 -m nodsig --version
 python3 -m nodsig                       # the map of commands
 ```
+
+That `export` is the whole of it: the code is laid out with the package under
+`src/`, which keeps a stray directory from shadowing it, and a clone therefore
+has to say where it is. Everything below that writes `python3 -m nodsig …`
+assumes it, for the rest of the shell session.
 
 If you would rather have `nodsig` on your PATH, install it from the clone with
 `pip install .`, or skip the clone entirely and let pip build it from the
@@ -79,7 +86,7 @@ installs the current tip of `main`. Installed or run from the clone, it is the
 same program. This README writes `nodsig …`; substitute `python3 -m nodsig …`
 if you did not install. Reading the code while it runs is a supported way to
 use this repository, which is why `python3 -m nodsig.<module>` also runs a
-single tool directly.
+single tool directly, under the same `PYTHONPATH`.
 
 Now run the tool with nothing built and no node, on any address you do not mind
 typing:
@@ -284,9 +291,17 @@ Five ideas, each of which shows up everywhere in the code.
   roads to the same blobs), about four times faster on the block and
   2.7 times on the fusion's round. It is built by `pip install` when a
   compiler is there and skipped when it is not, or by hand from a checkout with
-  `python3 -m nodsig.native.build`; a package without it runs the reference,
-  unchanged. The archive's manifest says which road scanned it, outside the
+  `PYTHONPATH=src python3 -m nodsig.native.build`; a package without it runs
+  the reference, unchanged. The scan takes the C road only when it is not
+  co-emitting: a scan with `--graph`, `--graph-digest` or `--nonces` reads the
+  parsed block for the other artifact and keeps the Python road, so the block
+  figure above is what a scan of the archive alone gains. `--headers` rides on
+  either road, and the fusion's stage is native whenever the kernel is built. The archive's manifest says which road scanned it, outside the
   fingerprint. `NODSIG_NATIVE=0` forces the reference road.
+- **Bitcoin Core 28 or later** if you want the snapshot-based steps
+  (`census`, `reuse prepare`): they read the `dumptxoutset` format that Core 28
+  writes, and refuse an older one by name. Mainnet only. The rest of the
+  toolkit talks to any node that answers RPC.
 - **Your own Bitcoin node**, not pruned, with RPC reachable (and `-rest=1` if
   you want the faster block fetch described below). Pruned nodes
   cannot serve the block history these tools read. The node is contacted while
@@ -312,19 +327,21 @@ are wall times measured at height 957,301. Most rows come from one run,
 completed by 1.3.0 in August 2026 with every artifact on one local USB disk;
 the few steps that run did not repeat (`census`, `nonces resolve`, `archive
 curve`, the headers crosscheck) keep their measured times from the earlier
-run on the same machine. Sizes are for that height. The rows that 2.0.0
-rebuilds (the archive's scan and merge, `firstreveal build`, `nonces
-resolve`, the reuse table, the timeline) are the 1.x measurements until the
-2.0.0 run replaces them; the changelog gives the 2.0.0 estimates:
+run on the same machine. Sizes are for that height. **Read the rows that
+touch the archive as the older formats' figures**: the archive's scan and
+merge, `firstreveal build`, `nonces resolve`, the reuse table. 2.1.2 and
+3.0.0 each force a rebuild of the archive (the changelog says why), and a
+3.0.x run has since been done: its two measured figures are named beside the
+rows below. Everything else still comes from the run described above:
 
 | Step | Time | Writes |
 |---|---|---|
 | `bitcoin-cli dumptxoutset` | minutes to an hour, on the node | the snapshot |
 | `census` | ~18 min | a CSV |
 | `reuse prepare` | ~20 min | `<locks>`, ~1.4 GB (one record per *distinct* lock, not per output), sealed with the snapshot's height |
-| `archive scan --graph` | **~56 h** | `<archive>` ~98 GB **and** `<graph>` ~301 GB |
-| `archive scan --nonces` | included in the 56 h above, which was measured with the census co-emitted | `<nonces>` ~60 GB |
-| `archive merge` | ~5 h | seals the archive in place |
+| `archive scan --graph` | **~56 h** | `<archive>` as runs, ~145 GB on a 3.0.x run **and** `<graph>` ~301 GB |
+| `archive scan --nonces` | included in the 56 h above, which was measured with the census co-emitted | `<nonces>` ~55-60 GB |
+| `archive merge` | ~5 h (a 3.0.x run measured 5 h 04 on a 145 GB run pile) | seals the archive in place, **and writes `<archive>/proof/`**: the candidates and the programs that prove them, sealed with its own fingerprint |
 | `nonces merge` | ~3 h 20 | seals the census in place |
 | `nonces resolve` | ~1.5 h | a few MB: the evidence that resolves each repeated point (**needs the node and the index**, optional) |
 | `graph fingerprint` | ~1 h 11 | nothing: it re-reads and prints |
@@ -380,7 +397,10 @@ figures are the artifacts' own rather than a transcription.
 
 Composed honestly, with the shared pass counted once: **~110 h of machine**
 (about four and a half days if run back to back) and **~950 GB** if you build
-all of it and keep everything. The section below on what to keep is worth
+all of it and keep everything. The sealed archive of a 3.0.x run measured
+105 GB of that, of which 54 GB is the proof that `archive merge` writes beside
+it and `archive scan` needs in order to grow the archive later; the scan's run
+pile, ~145 GB, is transient and the fusion deletes it. The section below on what to keep is worth
 reading before you size the disk, because the largest artifact is the one no
 query reads.
 
@@ -600,11 +620,19 @@ chain forward; delete it if this was a one-time question.
 
 The `<nonces>` census is a fourth, and its trade-off is its own. Its *answer* is
 small: `nonces groups` writes every repeated nonce point to a CSV, and that file
-outlives the 60 GB it came from. What deleting the census costs is not the
+outlives the tens of gigabytes it came from. What deleting the census costs is not the
 answer but the future: a later append can no longer notice that a signature at
 the chain tip reuses a nonce from years ago, because the single sighting it
 would have matched is gone. Keep it if you intend to watch the chain forward,
 delete it once you have the CSV if this was a one-time question.
+
+**`<archive>/proof/` is not optional if you intend to grow the archive.** It
+is the larger half of the archive directory (54 GB of the 105 measured on a
+3.0.x run), no query reads it, and deleting it looks harmless — but `archive
+scan` refuses to extend an archive whose proof is missing, because the proof
+is what lets a later run decide a candidate the same way the first one did.
+Delete it only if this height is the last you will ever ask about, and keep
+in mind that rebuilding it means the whole scan again.
 
 The snapshot and `<locks>` are inputs to `census`, `reuse prepare` and `archive
 derive`. Once you have the numbers, only a new snapshot at a new height would
@@ -691,11 +719,11 @@ moving codebase. `nodsig --version` prints it.
 
 That number and the formats' numbers are **two different scales**, and the
 artifacts settle it rather than merely claiming it: every one of them carries
-`nodsig-identity-v3`, the recipe its fingerprint is taken over, while this
-package has never been at 3. A format tag answers *what does this artifact
+`nodsig-identity-v3`, the recipe its fingerprint is taken over, which reached
+its third revision on a clock of its own. A format tag answers *what does this artifact
 capture*, which is what lets a reader tell an absence from a blind spot; a
 release number answers *what does the command line promise until the next
-major*. They move for different reasons, so `reveal-archive-v4` inside a 3.0.0
+major*. They move for different reasons, so `reveal-archive-v4` inside a 3.2.0
 tool is not a discrepancy: the reveal archive really is at its fourth format,
 and the tool at its third major. Internal module names carry no promise at
 all: they are free to move, and they have.
@@ -799,9 +827,12 @@ one day and are context, not a commitment.
 
 **Public since 1.0.0.** The artifacts named in this README and in
 [`docs/gallery.md`](docs/gallery.md) were built by the 1.x releases, from the
-chain through height 957,301, and sealed with the fingerprints printed there;
-2.0.0 rebuilds the ones whose format moved (the changelog says which), and
-their figures here follow that run. Rebuild
+chain through height 957,301, and sealed with the fingerprints printed there.
+Two releases have since forced the archive to be rebuilt — 2.1.2, because
+2.0.0 and 2.1.0 dropped keys the chain had published, and 3.0.0, because the
+archive now keeps a script when the chain proves it one — and a 3.0.x run has
+been completed against them. The changelog says, release by release, which
+artifacts each one invalidates. Rebuild
 from the same chain to the same height and the same numbers come back: that is
 the only claim this project makes, and it is checkable rather than persuasive.
 

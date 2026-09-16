@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-kernel.py — the native kernel of the scan, when there is one.
+kernel.py — the native kernel, when there is one.
 
 The reveal archive's scan has two roads to the same bytes: the Python
 reference (`blockparse.parse_block` + `reveal_archive.block_records`),

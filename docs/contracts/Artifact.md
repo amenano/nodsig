@@ -446,8 +446,9 @@ coverage is a word given about the last few blocks only".
 recorded digest. The digest alone proves only that the sidecar has not rotted on
 disk: the seal wrote it by hashing the samples it had just built, so the
 comparison is with itself, and a ladder sampled by the wrong rule would pass the
-audit while making lookups enter the wrong bucket and answer short, invariant 9
-broken silently, which invariant 4 forbids. Rebuilding costs no extra read: the
+audit while making lookups enter the wrong bucket and answer short: invariant 9
+broken silently, which invariant 3 of [INVARIANTS.md](../INVARIANTS.md)
+forbids. Rebuilding costs no extra read: the
 data file is being streamed for its sha anyway, and the samples fall out of that
 pass. An implementation that declares no sampling projection for a cache MUST say
 which caches it therefore checks only for integrity.

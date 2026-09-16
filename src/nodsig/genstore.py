@@ -522,7 +522,7 @@ class _BulkFusion:
                             else None)
 
     def _round(self):
-        """(pieces, threshold) for the next round, or None when every
+        """The pieces of the next round, or None when every
         source is spent; the cursors that reached the threshold are
         refilled here, so the caller only sorts."""
         rec, dl = self.rec, self.dedup_len

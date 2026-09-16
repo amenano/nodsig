@@ -262,7 +262,9 @@ The order matters, because each step is what makes the next one honest:
    have to be read.
 
 1. **bump** `__version__`, and the tag name in the comment beside it;
-2. **commit** as `release: <version>, <what it is>`, with a body that says what
+2. **commit** as `<version>: <what it is>` (the 1.x releases wrote
+   `release: <version>, …`; the form changed at 2.1.0 and the shorter one is
+   what the log now holds), with a body that says what
    changed *for the reader* rather than listing the commits, which the log
    already holds. The one thing worth naming explicitly is anything that
    changes the BYTES an artifact will hold, because that is what makes this

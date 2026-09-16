@@ -68,8 +68,10 @@ missing more than speed.
   bounded Python round (1.63 µs) and cost 0.4 GB more, and it is not in this
   release. The full-scan fusion of 3.0.x (5 h 04 min for 145 GB of pile)
   has not been repeated: the next full scan will say what the two changes
-  do to it, and the reading of the pile (about 80 MB/s from a USB disk, some
-  50 minutes for that one) is the floor they cannot move.
+  do to it. The floor they cannot move is the disk, and it is smaller than it
+  first looks: at the 80 MB/s that disk sustains, reading a 145 GB pile is
+  about half an hour, and about fifty minutes once the 105 GB it writes is
+  counted with it — against the five hours the fusion took.
 
 **A correction to 3.1.0.** It attributed the 4.2 GB the first real fusion
 peaked at to the cache of struct formats, and bounded the cache. The cache
@@ -133,7 +135,9 @@ implementation can run.
 - **The fusion's memory**: 3.0.2's sort-based stage compiled one struct
   format per length of piece it met, and the first real fusion peaked at
   4.2 GB resident on an 8 GB machine; the pieces are now split by powers of
-  two, at most thirteen formats per record shape. Same bytes.
+  two, at most thirteen formats per record shape. Same bytes. **3.2.0 corrects
+  the attribution**: the cache was real, but most of that peak was the round
+  itself, which had no bound.
 
 **A correction to 3.0.2.** It projected the first `archive merge` of a full
 scan at about two hours. The first one done, on the 3.0.x pile of 5,300 runs
@@ -199,7 +203,8 @@ sha256 of every file written under both releases:
 | proof of the candidates | 2.72 per candidate | 1.49 |
 
 Projected on the pile of a full scan, the first `archive merge` goes from
-about four to five hours to about two. The index's, the derivatives', the
+about four to five hours to about two. **That projection was wrong, and 3.1.0
+says by how much**: the first real fusion took 5 h 04 min. The index's, the derivatives', the
 nonces' and the first-spend fusions take the same road, unmeasured.
 
 ### Command line
@@ -391,7 +396,8 @@ option, the sets were counted by a script outside the tool. `FirstReveal-v2`,
 ## 2.1.2 — a key is archived wherever it sits: 2.0.0 and 2.1.x lose 707,356 of them
 
 A fix, and the defect it fixes is the one this toolkit exists to avoid:
-**2.0.0, 2.1.0 and 2.1.1 answer "protected" about keys the chain published.**
+**Every 2.x release before this one answers "protected" about keys the chain
+published.**
 Anyone holding an archive built by them should rebuild it.
 
 2.0.0 stopped archiving the witness items a taproot spend could put a Schnorr
@@ -433,9 +439,9 @@ Nothing changed.
 ### Formats
 
 Nothing changed: `reveal-archive-v3` holds what it always said it held. What
-changed is that the code now writes it. An archive built by 2.0.0, 2.1.0 or
-2.1.1 is missing records, so its fingerprint is not the one this release
-produces from the same chain.
+changed is that the code now writes it. An archive built by any earlier 2.x is
+missing records, so its fingerprint is not the one this release produces from
+the same chain.
 
 ### Do your artifacts still work?
 
@@ -508,6 +514,11 @@ it.
 Nothing changed. `reveal-archive-v3` and every other tag are the 2.0.0 ones.
 
 ### Do your artifacts still work?
+
+**Superseded by 2.1.2, which you should read instead if you hold an archive
+built by this release: it must be rebuilt.** What follows was true of what
+2.1.0 itself changed, and false as a conclusion about the release, because the
+defect 2.1.2 names was already in 2.0.0 and nobody had found it yet.
 
 Yes, and nothing here needs rebuilding. The fix changes which blocks a scan
 accepts, never what it extracts from a block it accepted, so an archive

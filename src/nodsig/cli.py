@@ -128,8 +128,9 @@ def _usage():
         "",
         "Every command is also reachable without installing anything, "
         "straight",
-        "from a clone: `python3 -m nodsig.<module>` (see docs/"
-        "ARCHITECTURE.md).",
+        "from a clone, with the package's directory on the import path:",
+        "    PYTHONPATH=src python3 -m nodsig.<module>   "
+        "(see docs/ARCHITECTURE.md).",
     ]
     return "\n".join(lines)
 

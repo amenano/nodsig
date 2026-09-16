@@ -141,7 +141,7 @@ draws. A lock never spent from has no row.
 
 ### first reveal (FirstReveal-v2)
 When a public key was **first revealed**, ordered by that moment: the reveal
-archive's keys partition restated in time order, one 23-byte row per revealed
+archive's keys partition restated in time order, one 20-byte row per revealed
 key. The temporal twin of the entry above, on the exposure side: the archive
 answers it one digest at a time, this sixth artifact makes "which keys were
 first revealed between H1 and H2" a contiguous read (`firstreveal between`).
