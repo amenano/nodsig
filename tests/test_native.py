@@ -335,3 +335,122 @@ def test_the_extension_answers_as_the_kernel_and_as_the_reference():
             assert str(e.value) == str(want)
     finally:
         kernel._native = real
+
+
+# ---------------------------------------------------------------------------
+# The fusion's k-way stage (nodsig_kway.h).
+
+def _fuse_reference(pieces, rec, dedup_len, rule):
+    """What one round must produce, the obvious way: every record in
+    order, the equal dedup prefixes grouped, the rule applied. Rule 0
+    keeps everything, 1 the last of a group, 2 and 3 fold the group onto
+    its first record with the byte at rec-4 OR-ed / maxed and the last
+    three bytes the minimum — the reveal archive's two rules."""
+    rows = sorted(p[i:i + rec] for p in pieces for i in range(0, len(p), rec))
+    out, dups, i = [], 0, 0
+    while i < len(rows):
+        j = i
+        while j + 1 < len(rows) and rows[j + 1][:dedup_len] == rows[i][:dedup_len]:
+            j += 1
+        dups += j - i
+        if rule == 0:
+            out += rows[i:j + 1]
+        elif rule == 1:
+            out.append(rows[j])
+        else:
+            w = rec - 4
+            kept = rows[i]
+            for r in rows[i + 1:j + 1]:
+                byte = (kept[w] | r[w]) if rule == 2 else max(kept[w], r[w])
+                kept = kept[:w] + bytes([byte]) + min(kept[w + 1:], r[w + 1:])
+            out.append(kept)
+        i = j + 1
+    return b"".join(out), dups
+
+
+def _random_pieces(rng, rec, dedup_len):
+    """Sorted pieces of a few records each from a narrow alphabet, so
+    equal prefixes are the rule and a group often spans pieces."""
+    span = rng.choice((2, 3, 5, 256))
+    pieces = []
+    for _ in range(rng.randint(0, 40)):
+        rows = []
+        for _ in range(rng.choice((0, 1, 2, 5, 30))):
+            key = bytes(rng.randrange(span) for _ in range(dedup_len))
+            rows.append(key + bytes(rng.randrange(256)
+                                    for _ in range(rec - dedup_len)))
+        pieces.append(b"".join(sorted(rows)))
+    return pieces
+
+
+def test_native_kway_fuse_matches_the_reference_under_every_rule():
+    """`nodsig_kway_fuse` on random sorted pieces, under the four rules,
+    at every width the artifacts use and some they do not; then the
+    refusals: an unsorted piece is -1 (the caller's cue to take the
+    reference road), a width the rule cannot take is -2."""
+    lib = native()
+    fn = lib.nodsig_kway_fuse
+    fn.restype = ctypes.c_int64
+    rng = random.Random(20260916)
+
+    def call(pieces, rec, dedup_len, rule):
+        k = len(pieces)
+        ptrs = (ctypes.c_char_p * k)(*pieces) if k else None
+        counts = (ctypes.c_size_t * k)(*[len(p) // rec for p in pieces]) if k else None
+        total = sum(len(p) for p in pieces)
+        out = ctypes.create_string_buffer(max(total, 1))
+        dups = ctypes.c_uint64(0)
+        n = fn(ptrs, counts, ctypes.c_size_t(k), ctypes.c_size_t(rec),
+               ctypes.c_size_t(dedup_len), ctypes.c_int(rule), out,
+               ctypes.byref(dups))
+        return n, out.raw[:max(n, 0)], dups.value
+
+    cases = 0
+    for _ in range(400):
+        rec = rng.choice((4, 5, 8, 10, 16, 24, 36, 40))
+        dedup_len = rng.randint(1, rec)
+        rule = rng.randrange(4)
+        pieces = _random_pieces(rng, rec, dedup_len)
+        want, dups = _fuse_reference(pieces, rec, dedup_len, rule)
+        n, got, d = call(pieces, rec, dedup_len, rule)
+        assert n == len(want) and got == want and d == dups, \
+            (rec, dedup_len, rule, pieces)
+        cases += 1
+    assert cases == 400
+    # An unsorted piece is refused, not merged wrong.
+    n, _, _ = call([b"\x02\x00\x01\x00", b"\x00\x00"], 2, 2, 0)
+    assert n == -1
+    # The combining rules need four bytes to combine.
+    assert call([b"\x01\x02\x03"], 3, 3, 2)[0] == -2
+    assert call([b"\x01\x02\x03\x04"], 4, 5, 0)[0] == -2
+    assert call([], 4, 4, 0)[0] == 0
+
+
+def test_the_extension_fuses_pieces_as_the_stage_does():
+    """`nodsig._native.fuse_pieces` through `nodsig.kernel`: the blob and
+    the count of every rule on random pieces, None for an unsorted
+    piece, ValueError for a piece that is not whole records."""
+    from nodsig import kernel
+    ext = extension()
+    rng = random.Random(20260917)
+    for _ in range(200):
+        rec = rng.choice((4, 8, 24, 36))
+        dedup_len = rng.randint(1, rec)
+        rule = rng.randrange(4)
+        pieces = _random_pieces(rng, rec, dedup_len)
+        want = _fuse_reference(pieces, rec, dedup_len, rule)
+        assert ext.fuse_pieces(pieces, rec, dedup_len, rule) == want
+        assert ext.fuse_pieces([memoryview(p) for p in pieces], rec,
+                               dedup_len, rule) == want
+    assert ext.fuse_pieces([b"\x02\x00\x01\x00"], 2, 2, 0) is None
+    with pytest.raises(ValueError):
+        ext.fuse_pieces([b"\x01\x02\x03"], 2, 2, 0)
+    with pytest.raises(ValueError):
+        ext.fuse_pieces([b"\x01\x02"], 2, 3, 0)
+    # The rule names the archive's combiners declare are the kernel's.
+    from nodsig import reveal_archive as ra
+    assert kernel.fuse_rule(None, ra._combine_or) == kernel.FUSE_OR_MIN
+    assert kernel.fuse_rule(None, ra._combine_scripts) == kernel.FUSE_MAX_MIN
+    assert kernel.fuse_rule("last", None) == kernel.FUSE_LAST
+    assert kernel.fuse_rule(None, None) == kernel.FUSE_COUNT
+    assert kernel.fuse_rule(None, lambda a, b: a) is None

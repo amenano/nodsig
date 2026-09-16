@@ -560,6 +560,12 @@ def _archive_like(a, b):
     return a[:4] + bytes([a[4] | b[4]]) + min(a[5:], b[5:])
 
 
+# The same slicing as the archive's `_combine_or` on an 8-byte record, so
+# the k-way stage may hand it to the native kernel when one is built: the
+# matrix below then exercises that road as well as the reference's.
+_archive_like.native = "or_min"
+
+
 def test_gallop_combines_equal_keys_as_the_archive_does(tmp):
     """The third rule for equal keys: reduce them. The reveal archive
     used to fuse by hand, record by record through three generator
@@ -860,6 +866,87 @@ def test_bulk_stage_answers_exactly_as_the_per_record_roads(tmp):
           ": a matrix that never reaches it proves nothing about it")
     print(f"ok  bulk stage: 200 randomized fusions match the reference "
           f"({len(rounds)} rounds, up to {max(rounds)} sources in one)")
+
+
+def test_bulk_stage_native_road_answers_as_the_reference_road(tmp):
+    """The k-way stage with the kernel's `fuse_pieces` and without it,
+    in one process, on the same random matrix under every rule the
+    kernel knows: the same blobs and the same count, and the native
+    road must actually have been taken. Skipped, and said so, where
+    the kernel is not built."""
+    import pytest
+    from nodsig import kernel
+    if not kernel.available():
+        pytest.skip("the native kernel is not built: one road only")
+    calls = []
+    real = kernel.fuse_pieces
+
+    def counting(pieces, rec, dl, rule):
+        got = real(pieces, rec, dl, rule)
+        calls.append(got is not None)
+        return got
+
+    rng = random.Random(20260916)
+    d = os.path.join(tmp, "native")
+    os.makedirs(d, exist_ok=True)
+    kernel.fuse_pieces = counting
+    try:
+        for case in range(120):
+            rule = rng.choice(("last", None, "or", "max"))
+            if rule in ("or", "max"):
+                rec, key_len = 8, rng.choice((3, 4))
+                combine = _archive_like if rule == "or" else _scripts_like
+                dedup = None
+            else:
+                rec = rng.choice((4, 6, 12, 24))
+                key_len = rng.randint(1, rec)
+                combine, dedup = None, rule
+            span = rng.choice((2, 3, 5, 256))
+            slab = rng.choice((rec, rec * 7, rec * 64, 8 << 20))
+            files = []
+            for i in range(rng.randint(0, 12)):
+                rows = []
+                for _ in range(rng.choice((0, 1, 3, 30, 200))):
+                    key = bytes(rng.randrange(span) for _ in range(key_len))
+                    rows.append(key + bytes(rng.randrange(256)
+                                            for _ in range(rec - key_len)))
+                p = os.path.join(d, f"src{i}.bin")
+                _, sha = write_run(p, rows)
+                files.append((p, sha))
+            answers = []
+            for road in ("native", "python"):
+                saved = kernel._native
+                if road == "python":
+                    kernel._native = None
+                try:
+                    stage = genstore._BulkFusion(
+                        [_BaseCursor(p, rec, sha, slab, StoreError)
+                         for p, sha in files], rec, key_len, dedup, combine,
+                        None)
+                    check((stage.native_rule is not None) == (road == "native"),
+                          f"case {case}: the {road} road was not the one taken")
+                    answers.append((b"".join(stage.blobs()), stage.dups))
+                finally:
+                    kernel._native = saved
+            check(answers[0] == answers[1],
+                  f"case {case} (rule={rule} rec={rec} key={key_len} "
+                  f"span={span} slab={slab}): the two roads differ")
+    finally:
+        kernel.fuse_pieces = real
+    check(len(calls) > 200 and all(calls),
+          f"the kernel took {len(calls)} rounds and declined "
+          f"{calls.count(False)}: sorted pieces are never declined")
+    print(f"ok  native road: 120 randomized stages match the reference road "
+          f"({len(calls)} kernel rounds)")
+
+
+def _scripts_like(a, b):
+    """The archive's `_combine_scripts` on an 8-byte record: the larger
+    byte, the lowest height."""
+    return a[:4] + bytes([max(a[4], b[4])]) + min(a[5:], b[5:])
+
+
+_scripts_like.native = "max_min"
 
 
 def test_ladder_writer_samples_a_blob_as_it_samples_records(tmp):

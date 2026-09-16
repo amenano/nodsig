@@ -88,6 +88,7 @@ import re
 import struct
 import sys
 
+from nodsig import kernel
 from nodsig.recio import (IO_CHUNK, atomic_json, budgeted_slab, checked_name,
                           preflight_space, durable_replace,
                           read_fixed, read_slabs)
@@ -456,7 +457,16 @@ class _BulkFusion:
     not matter), "last" keeps its last record, None keeps every record
     and counts the pairs, and `dup_log` receives (kept so far, next)
     per pair as the per-record road logs it. `dups` is the number of
-    reductions, readable once the blobs are exhausted."""
+    reductions, readable once the blobs are exhausted.
+
+    THE NATIVE ROAD. The sort and the reduction of a round are the
+    stage's whole cost, and with ~1,200 sources the pieces are ~15
+    records each: below timsort's minrun, so the sort degenerates
+    (measured ~3 µs a record on the first real 3.0.x fusion). When the
+    kernel is built (`nodsig.kernel`) and knows the rule, a round goes
+    to `fuse_pieces`: a k-way merge over the sorted pieces with the
+    reduction on the way out, log2(k) memcmp's a record. Same blobs,
+    same count; the suite holds the two roads to it."""
 
     def __init__(self, cursors, rec, dedup_len, dedup, combine, dup_log):
         self.cursors = list(cursors)
@@ -466,6 +476,12 @@ class _BulkFusion:
         self.combine = combine
         self.dup_log = dup_log
         self.dups = 0
+        # The native road for the sort-and-reduce of a round, when the
+        # kernel is built and knows the rule; the pairs a caller logs
+        # are the reference's business, so a log keeps the round here.
+        self.native_rule = (kernel.fuse_rule(dedup, combine)
+                            if dup_log is None and kernel.available()
+                            else None)
 
     def _round(self):
         """(pieces, threshold) for the next round, or None when every
@@ -494,12 +510,24 @@ class _BulkFusion:
     def blobs(self):
         rec, dl = self.rec, self.dedup_len
         combine, keep_last, log = self.combine, self.keep_last, self.dup_log
+        rule = self.native_rule
         while True:
             pieces = self._round()
             if pieces is None:
                 return
             if not pieces:
                 continue
+            if rule is not None:
+                # The kernel merges the sorted pieces and reduces on the
+                # way out (nodsig_kway.h); it declines a piece that is
+                # not sorted, and the round then takes the road below.
+                got = kernel.fuse_pieces(pieces, rec, dl, rule)
+                if got is not None:
+                    blob, d = got
+                    self.dups += d
+                    if blob:
+                        yield blob
+                    continue
             if len(pieces) == 1:
                 records = _split(pieces[0], rec)
             else:

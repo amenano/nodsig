@@ -22,7 +22,7 @@ import sysconfig
 HERE = os.path.dirname(os.path.abspath(__file__))
 PACKAGE = os.path.dirname(HERE)
 SOURCES = ["nodsig_hash.c", "nodsig_extract.c", "nodsig_scan.c",
-           "nodsig_native.c"]
+           "nodsig_kway.c", "nodsig_native.c"]
 
 
 def compiler():

@@ -303,6 +303,14 @@ def _combine_scripts(a, b):
     return a[:w] + bytes([max(a[w], b[w])]) + min(a[w + 1:], b[w + 1:])
 
 
+# What the native kernel of the fusion's k-way stage knows the two rules
+# as (nodsig_kway.h: the byte at rec-4 combined, the last three bytes the
+# minimum, the group folded onto its first record — the same slicing as
+# above). A rule without this name keeps the reference road.
+_combine_or.native = "or_min"
+_combine_scripts.native = "max_min"
+
+
 def _combiner(cat):
     return _combine_or if cat in _OR_CATS else _combine_scripts
 

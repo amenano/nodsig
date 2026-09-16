@@ -1,6 +1,6 @@
 /* nodsig_native.c — the CPython face of the kernel: `nodsig._native`.
  *
- * One function, `scan_block(raw, height, expect_hash=None)`, returning
+ * Two functions. `scan_block(raw, height, expect_hash=None)`, returning
  *   (0, records, stats, facts)   records: a tuple of five bytes objects
  *                                 in reveal_archive.RUN_CATS order;
  *                                 stats: dict; facts: dict
@@ -11,11 +11,14 @@
  * (`nodsig.kernel`) turns the codes into the scan's own exceptions, so
  * this module knows nothing of them. The scan context is created per
  * call: its buffers are what `records` copies out of, and a scan holds
- * one block at a time.
+ * one block at a time. And `fuse_pieces(pieces, rec, dedup_len, rule)`,
+ * one round of a fusion's k-way stage (nodsig_kway.h), described at its
+ * definition.
  */
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
 
+#include "nodsig_kway.h"
 #include "nodsig_scan.h"
 
 static PyObject *py_scan_block(PyObject *self, PyObject *args)
@@ -118,10 +121,95 @@ done:
     return result;
 }
 
+/* fuse_pieces(pieces, rec, dedup_len, rule) -> (blob, dups) or None.
+ * One round of the fusion's k-way stage (nodsig_kway.h): `pieces` is a
+ * sequence of bytes-like objects, each a whole number of sorted records.
+ * None means a piece was not sorted and the caller takes the reference
+ * road for this round; a wrong width or rule is a ValueError. */
+static PyObject *py_fuse_pieces(PyObject *self, PyObject *args)
+{
+    PyObject *seq, *fast = NULL, *blob = NULL, *result = NULL;
+    Py_ssize_t rec, dedup_len, k, i, got = 0;
+    int rule;
+    Py_buffer *bufs = NULL;
+    const uint8_t **ptrs = NULL;
+    size_t *counts = NULL, total = 0;
+    uint64_t dups = 0;
+    int64_t written;
+
+    (void)self;
+    if (!PyArg_ParseTuple(args, "Onni", &seq, &rec, &dedup_len, &rule))
+        return NULL;
+    if (rec <= 0 || dedup_len < 0 || dedup_len > rec) {
+        PyErr_SetString(PyExc_ValueError, "rec must be positive and dedup_len within it");
+        return NULL;
+    }
+    fast = PySequence_Fast(seq, "pieces must be a sequence");
+    if (fast == NULL)
+        return NULL;
+    k = PySequence_Fast_GET_SIZE(fast);
+    if (k > 0) {
+        bufs = calloc((size_t)k, sizeof *bufs);
+        ptrs = malloc((size_t)k * sizeof *ptrs);
+        counts = malloc((size_t)k * sizeof *counts);
+        if (bufs == NULL || ptrs == NULL || counts == NULL) {
+            PyErr_NoMemory();
+            goto done;
+        }
+    }
+    for (i = 0; i < k; i++) {
+        PyObject *item = PySequence_Fast_GET_ITEM(fast, i);
+        if (PyObject_GetBuffer(item, &bufs[got], PyBUF_SIMPLE) < 0)
+            goto done;
+        got++;
+        if (bufs[i].len % rec != 0) {
+            PyErr_SetString(PyExc_ValueError, "a piece is not a whole number of records");
+            goto done;
+        }
+        ptrs[i] = bufs[i].buf;
+        counts[i] = (size_t)(bufs[i].len / rec);
+        total += (size_t)bufs[i].len;
+    }
+    blob = PyBytes_FromStringAndSize(NULL, (Py_ssize_t)total);
+    if (blob == NULL)
+        goto done;
+    written = nodsig_kway_fuse(ptrs, counts, (size_t)k, (size_t)rec,
+                               (size_t)dedup_len, rule,
+                               (uint8_t *)PyBytes_AS_STRING(blob), &dups);
+    if (written == -1) {
+        result = Py_None;
+        Py_INCREF(result);
+        goto done;
+    }
+    if (written == -2) {
+        PyErr_SetString(PyExc_ValueError, "rule or widths the kernel does not take");
+        goto done;
+    }
+    if (written < 0) {
+        PyErr_NoMemory();
+        goto done;
+    }
+    if (_PyBytes_Resize(&blob, (Py_ssize_t)written) < 0)
+        goto done;
+    result = Py_BuildValue("(OK)", blob, (unsigned long long)dups);
+done:
+    for (i = 0; i < got; i++)
+        PyBuffer_Release(&bufs[i]);
+    free(bufs);
+    free(ptrs);
+    free(counts);
+    Py_XDECREF(blob);
+    Py_XDECREF(fast);
+    return result;
+}
+
 static PyMethodDef methods[] = {
     {"scan_block", py_scan_block, METH_VARARGS,
      "scan_block(raw, height, expect_hash=None) -> (code, ...): one block "
      "in, the reveal archive's records out (see nodsig.kernel)."},
+    {"fuse_pieces", py_fuse_pieces, METH_VARARGS,
+     "fuse_pieces(pieces, rec, dedup_len, rule) -> (blob, dups) or None: "
+     "one round of the fusion's k-way stage (see nodsig.kernel)."},
     {NULL, NULL, 0, NULL}
 };
 

@@ -65,3 +65,28 @@ def scan_block(raw, height, expect_hash=None):
     if out[0] == 1:
         raise ParseError(out[1])
     raise HashMismatch()
+
+
+# The rules of the fusion's k-way stage the kernel knows, by the name a
+# combining function declares on itself (`native = "or_min"`) or by the
+# stage's own dedup rule; nodsig_kway.h numbers them.
+FUSE_COUNT, FUSE_LAST, FUSE_OR_MIN, FUSE_MAX_MIN = 0, 1, 2, 3
+_FUSE_RULES = {"or_min": FUSE_OR_MIN, "max_min": FUSE_MAX_MIN}
+
+
+def fuse_rule(dedup, combine):
+    """The kernel's number for a fusion rule, or None when the kernel has
+    no such rule (a combining function that declares nothing takes the
+    reference road, as it must: the kernel cannot call it)."""
+    if combine is not None:
+        return _FUSE_RULES.get(getattr(combine, "native", None))
+    return FUSE_LAST if dedup == "last" else FUSE_COUNT
+
+
+def fuse_pieces(pieces, rec, dedup_len, rule):
+    """One round of the k-way stage on the native road: the sorted
+    `pieces` (bytes, whole records of `rec` bytes each) merged into one
+    sorted blob with the equal dedup prefixes reduced by `rule`. Returns
+    (blob, reductions), or None when a piece was not sorted and the
+    reference road must take the round (`genstore._BulkFusion`)."""
+    return _native.fuse_pieces(pieces, rec, dedup_len, rule)
