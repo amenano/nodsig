@@ -52,6 +52,10 @@ implementation can run.
 - **Where the reference stays**: a scan that co-emits the graph
   (`--graph`, `--graph-digest`) or the nonce census (`--nonces`) reads the
   parsed block and keeps the Python road; `--headers` rides on either.
+- **The fusion's memory**: 3.0.2's sort-based stage compiled one struct
+  format per length of piece it met, and the first real fusion peaked at
+  4.2 GB resident on an 8 GB machine; the pieces are now split by powers of
+  two, at most thirteen formats per record shape. Same bytes.
 
 **A correction to 3.0.2.** It projected the first `archive merge` of a full
 scan at about two hours. The first one done, on the 3.0.x pile of 5,300 runs
