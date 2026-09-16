@@ -177,9 +177,9 @@ linked at the bottom.
 type, the filled part the value with its key in view (hatched = exposed by
 construction)](figures/ledger-map.svg)
 
-*From `census` (the floor: P2PK and Taproot, exposed by construction) and
-`archive derive --locks` (the filled part: locks whose key the chain has
-already shown).*
+*From `census` (the bar: what each type holds, and the floor for P2PK and
+Taproot, exposed by construction) and the last row of `archive derive
+--curve` (the filled part: locks whose key the chain has already shown).*
 
 ![BTC spendable today whose key was revealed by the block on the x-axis, by
 lock type](figures/reuse-curve.svg)
@@ -187,6 +187,14 @@ lock type](figures/reuse-curve.svg)
 *From `archive derive --curve` for the series, and `curve dates` for the
 calendar years, which is the one step here that asks the node for something
 files cannot hold.*
+
+Both were drawn by [`tools/plot_ledger.py`](../tools/plot_ledger.py), which
+reads those CSVs and writes the SVG with nothing but python3, on the same
+footing as the figures further down. They were the last two in that directory
+with no script behind them, and it showed: the P2PK and Taproot bars carried
+round numbers, 1,720,000 and 217,000 BTC, where the census says 1,715,819 and
+216,699. Those are the figures' own numbers now. The chain under them is still
+the one the rest of this page shows, at height 957,301.
 
 ## Which nonce points repeat, over the whole chain
 

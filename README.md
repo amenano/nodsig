@@ -45,8 +45,9 @@ explicit UNDETERMINED that names the flag which would enable it:
 Each question is taken up at more length under *The questions, one at a
 time*, after the part you can run.
 
-The output is text and CSV. Here is what the chain looks like when a spreadsheet
-draws one of those CSVs, at height 957,301:
+The output is text and CSV. Here is what the chain looks like when
+[`tools/plot_ledger.py`](tools/plot_ledger.py) draws two of those CSVs, at
+height 957,301:
 
 ![All coins in circulation, type by type: bar length is the value held by that
 type, the filled part the value with its key in view (hatched = exposed by
