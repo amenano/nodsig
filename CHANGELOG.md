@@ -21,6 +21,84 @@ contract, the **CLI** is convenience, and `reveal-archive-v2` inside a tool
 numbered 1.3.0 is not a discrepancy. Artifacts are identified by their
 fingerprint, never by a tag.
 
+## 3.2.0 (the fusion's k-way stage in the kernel, and a bounded round)
+
+The second piece of the native kernel, and the closing of the correction
+3.1.0 made to 3.0.2: the stage that sorts and reduces the runs of a first
+fusion now exists in C as well as in Python, held to the same bytes, and the
+round it works on is bounded, which is what the first real fusion was
+missing more than speed.
+
+- **The k-way stage in the kernel.** A round of the fusion gathers, from
+  every source, the records below a key every source has reached; with the
+  1,200 sources of a full scan that is 1,200 pieces of a few records each,
+  and sorting them in one list has nothing to bite on. The pieces are each
+  already sorted, so `nodsig_kway.h` merges them over a heap of piece heads
+  and reduces the equal keys on the way out, under the four rules the fusion
+  has (keep-last, count, and the archive's two combiners). A piece that is
+  not sorted is refused and the round takes the reference road, so the two
+  roads agree on every input, not only the well-formed one. The suite holds
+  the C function to a reference under every rule at every width, the
+  extension to it, and the stage's two roads to each other on random
+  matrices. Same kernel, same switch: built with the scan's, `NODSIG_NATIVE=0`
+  forces the reference.
+- **The round is bounded.** The threshold of a round was the smallest last
+  key among the sources, and at the start of a fusion every slab of every
+  source covers the same stretch of keys (random digests, one slab each), and
+  again each time every source has refilled: such a round gathered the whole
+  read budget, 22.3 million of 22.35 million records on a pile of 1,200
+  sources, into one Python list, followed by a thousand rounds of three
+  records each paying the walk over every source. The threshold now looks a
+  bounded number of records past each source's head, so a round is about
+  64,000 records whatever the pile, every key it emits is still whole, and
+  the bytes are the same.
+- **What it costs, measured** on a synthetic pile of the first fusion's shape
+  (1,200 sources, 89.4 million records of 24 bytes, the archive's reduction
+  rule, 45 % of the records reductions), each road its own process, the
+  same file, ladder and count from all of them:
+
+  | road | µs per record read | peak resident |
+  |---|---|---|
+  | Python, before the bound | not measurable: out of memory at 5.6 GB plus swap on an 8 GB machine | |
+  | Python, bounded round | 1.67 | 1.1 GB |
+  | kernel, bounded round | 0.61 | 1.1 GB |
+
+  A two-level fusion (sources in groups, then the groups) was the other
+  candidate 3.1.0 named; measured on the same pile it gave nothing over the
+  bounded Python round (1.63 µs) and cost 0.4 GB more, and it is not in this
+  release. The full-scan fusion of 3.0.x (5 h 04 min for 145 GB of pile)
+  has not been repeated: the next full scan will say what the two changes
+  do to it, and the reading of the pile (about 80 MB/s from a USB disk, some
+  50 minutes for that one) is the floor they cannot move.
+
+**A correction to 3.1.0.** It attributed the 4.2 GB the first real fusion
+peaked at to the cache of struct formats, and bounded the cache. The cache
+was real (295 MB per record shape, measured), but the peak was mostly the
+round itself, unbounded then: a first round of the whole read budget as
+Python objects. On the pile above the same road went out of memory at
+5.6 GB resident with the swap exhausted, and took the machine with it; with
+the round bounded it peaks at 1.1 GB, the slabs' budget and little else.
+
+### Command line
+
+Nothing changed.
+
+### Formats
+
+Nothing changed, and no artifact byte moves. The manifest's `kernels` field
+still says which road **scanned**; which road fused is not recorded, the
+two writing the same bytes.
+
+### Do your artifacts still work?
+
+Yes, all of them, with the same fingerprints. A pile of runs written under
+3.0.x or 3.1.0 fuses under 3.2.0 to the same bytes on either road; a
+previous generation gallops over the result as before.
+
+### Documentation
+
+README (*Requirements*), `docs/ARCHITECTURE.md` §4.
+
 ## 3.1.0 (the scan has a native kernel, and the same bytes)
 
 The first native kernel, and with it the first proof that the formats are a
