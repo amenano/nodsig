@@ -868,6 +868,51 @@ def test_bulk_stage_answers_exactly_as_the_per_record_roads(tmp):
           f"({len(rounds)} rounds, up to {max(rounds)} sources in one)")
 
 
+def test_bulk_stage_rounds_are_bounded_when_the_sources_are_in_step(tmp):
+    """Sources whose slabs all cover the same stretch of keys (every
+    first fusion: random digests, one slab each at the start) must not
+    be gathered into one round of the whole read budget. With the
+    bound set low, no round may hold much more than it, the answer is
+    the per-record road's, and the rounds are many where the last-key
+    threshold made one."""
+    rng = random.Random(20260916)
+    rec, key_len = 24, 20
+    d = os.path.join(tmp, "instep")
+    os.makedirs(d, exist_ok=True)
+    files, everything = [], []
+    for i in range(8):
+        rows = [bytes(rng.randrange(256) for _ in range(rec)) for _ in range(3000)]
+        everything += rows
+        p = os.path.join(d, f"src{i}.bin")
+        _, sha = write_run(p, rows)
+        files.append((p, sha))
+    bound = genstore._ROUND_RECORDS
+    genstore._ROUND_RECORDS = 256
+    try:
+        stage = genstore._BulkFusion(
+            [_BaseCursor(p, rec, sha, 8 << 20, StoreError) for p, sha in files],
+            rec, key_len, None, None, None)
+        sizes = []
+        while True:
+            pieces = stage._round()
+            if pieces is None:
+                break
+            sizes.append(sum(len(p) for p in pieces) // rec)
+        check(sum(sizes) == 24000, f"the rounds gathered {sum(sizes)} records")
+        check(max(sizes) <= 2 * 256,
+              f"a round held {max(sizes)} records against a bound of 256")
+        check(len(sizes) > 50, f"only {len(sizes)} rounds: the bound did not bite")
+        stage = genstore._BulkFusion(
+            [_BaseCursor(p, rec, sha, 8 << 20, StoreError) for p, sha in files],
+            rec, key_len, None, None, None)
+        check(b"".join(stage.blobs()) == b"".join(sorted(everything)),
+              "the bounded rounds do not give the sorted whole")
+    finally:
+        genstore._ROUND_RECORDS = bound
+    print(f"ok  bounded rounds: {len(sizes)} rounds, the largest {max(sizes)} "
+          f"records, for 24,000 in step")
+
+
 def test_bulk_stage_native_road_answers_as_the_reference_road(tmp):
     """The k-way stage with the kernel's `fuse_pieces` and without it,
     in one process, on the same random matrix under every rule the

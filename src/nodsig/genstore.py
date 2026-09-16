@@ -351,6 +351,22 @@ class _BaseCursor:
         key up to which every record of this source is in memory."""
         return self.slab[self.end - self.rec:self.end - self.rec + dedup_len]
 
+    def key_ahead(self, ahead, dedup_len):
+        """The dedup prefix of the record `ahead` bytes (whole records)
+        past the head of the current slab, or of the slab's last record
+        when that is nearer: a key up to which every record of this
+        source is in memory, like `last_key`, but one the k-way stage
+        can use to bound a round. When the head's own key reaches that
+        far, the last record's key instead: a threshold equal to the
+        head would consume nothing and refill nothing."""
+        slab, off, dl = self.slab, self.off, dedup_len
+        last = self.end - self.rec
+        at = min(off + ahead, last)
+        key = slab[at:at + dl]
+        if at < last and key == slab[off:off + dl]:
+            return slab[last:last + dl]
+        return key
+
     def refill(self):
         """The next slab, with the unconsumed tail of this one kept in
         front of it. The k-way stage consumes each slab up to a
@@ -383,12 +399,19 @@ class _BaseCursor:
 # format per (record shape, count) is cheaper than slicing by hand (0.14
 # against 0.36 µs per record, measured), but a format per count is a
 # cache that grows with every length a piece happens to have: 4,096 of
-# them cost 295 MB per shape, measured, and the first real fusion peaked
-# at 4.2 GB resident. So a piece is split by the powers of two of its
-# length: at most _SPLIT_BITS formats per shape, ever, and at most
-# _SPLIT_BITS calls per piece.
+# them cost 295 MB per shape, measured. So a piece is split by the
+# powers of two of its length: at most _SPLIT_BITS formats per shape,
+# ever, and at most _SPLIT_BITS calls per piece. (The 4.2 GB the first
+# real fusion peaked at were mostly the round itself, unbounded then:
+# see _BulkFusion, THE BOUND.)
 _SPLIT_BITS = 13                      # chunks of up to 4,096 records
 _unpackers = {}
+
+# About how many records the k-way stage gathers in one round, over all
+# its sources (_BulkFusion, THE BOUND): 64 k records of 24 bytes are
+# 1.5 MB of pieces and a few MB of Python objects, and a walk over 1,200
+# sources per round is then paid once per 64 k records, not once per 3.
+_ROUND_RECORDS = 1 << 16
 
 
 def _split(blob, rec, n=None, unit=None):
@@ -442,14 +465,29 @@ class _BulkFusion:
     one list, reduces the equal keys by the fusion's rule, and yields
     one blob.
 
-    THE THRESHOLD is the smallest last key among the sources that
-    still have a slab to read: every record below it, from every
-    source, is in memory (a source's slab reaches at least that key,
-    or the source has no more slabs). Strictly below, so a key shared
-    by a slab's last records and its successor's first is never split
-    across rounds: what a source keeps is carried into its next slab
-    by `refill`. A round therefore holds every record of every key it
-    emits, which is what lets it reduce them.
+    THE THRESHOLD is the smallest, among the sources that still have
+    a slab to read, of the key a bounded number of records past the
+    source's head (its slab's last key when that is nearer): every
+    record below it, from every source, is in memory (a source's slab
+    reaches at least that key, or the source has no more slabs).
+    Strictly below, so a key shared by a slab's last records and its
+    successor's first is never split across rounds: what a source
+    keeps is carried into its next slab by `refill`. A round therefore
+    holds every record of every key it emits, which is what lets it
+    reduce them.
+
+    THE BOUND on the round is what keeps the stage's memory at the
+    size of a round rather than of the read budget. With the last key
+    as the threshold, every slab of every source covers the same
+    stretch of keys at the start, and again each time every source
+    has refilled: such a round gathers the whole budget (22 M records
+    for 512 MB, measured) into one Python list, 4 GB resident on the
+    first real 3.0.x fusion and an out-of-memory on a machine with
+    less. Looking `_ROUND_RECORDS // k` records ahead of each head
+    instead bounds a round at about `_ROUND_RECORDS` records, and the
+    sources then advance in step: the rounds are of one size, where
+    before one huge round was followed by a thousand of a few records
+    each, every one paying the walk over every source.
 
     THE RULES are `merge_to_file`'s, applied once per equal-key group:
     `combine` folds the group left to right (the fold is associative
@@ -491,10 +529,11 @@ class _BulkFusion:
         active = [c for c in self.cursors if c.peek() is not None]
         if not active:
             return None
+        ahead = max(1, _ROUND_RECORDS // len(active)) * rec
         threshold = None
         for c in active:
             if not c.eof:
-                k = c.last_key(dl)
+                k = c.key_ahead(ahead, dl)
                 if threshold is None or k < threshold:
                     threshold = k
         pieces = []
