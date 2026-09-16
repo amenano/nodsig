@@ -184,7 +184,12 @@ something else. An audit finds what it looks for; a test looks every time.
   spends), reduce (the archive ORs its flags and keeps the lowest height) —
   and two roads that the suite pins to the same bytes: the previous
   generation gallops (stretches nothing interleaves move whole), the runs go
-  through a sort-based k-way stage by slabs. The archive keeps its own
+  through a k-way stage by slabs, in rounds bounded to about 64,000 records
+  (the threshold looks a bounded number of records past each source's head,
+  never the slab's last key alone, or a first round gathers the whole read
+  budget as Python objects: 4 GB resident on the first real fusion), each
+  round sorted and reduced in Python or, when the kernel is built, merged
+  and reduced in C (`nodsig_kway.h`), the same blobs. The archive keeps its own
   orchestration around it (the proof's join, its two manifests), and follows
   `genstore`'s **commit discipline** (write generation N+1 beside N, commit
   the manifest, then delete), which is invariant 10 and not a detail either
@@ -195,10 +200,11 @@ something else. An audit finds what it looks for; a test looks every time.
 - The `Index` and `Derived` **readers** still live with their formats. Sharing
   them would mean sharing a query model, which is not the same problem the
   builders had; extracted on demand, not before.
-- **native kernels** — demand-driven, post-publication (see §6). The first
-  one exists since 3.1.0: `src/nodsig/native`, the archive scan's per-block
-  body in C behind `nodsig.kernel`, a proven-identical accelerator of
-  `reveal_archive.block_records` and nothing more.
+- **native kernels** — demand-driven, post-publication (see §6). Two exist:
+  since 3.1.0 the archive scan's per-block body (`src/nodsig/native`, C
+  behind `nodsig.kernel`, a proven-identical accelerator of
+  `reveal_archive.block_records`), since 3.2.0 the fusion's k-way stage
+  (`fuse_pieces`, one round of `genstore._BulkFusion`), and nothing more.
 
 The orchestration (phase state machines, `build`, manifest/source,
 checkpoint/resume, CLI) **stays glue**: it calls the kernels, and is not ported

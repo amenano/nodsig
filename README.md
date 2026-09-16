@@ -276,11 +276,13 @@ Five ideas, each of which shows up everywhere in the code.
   library is the whole runtime, on purpose, so that what you run is what you
   can read.
 - **Optionally, a C compiler and Python's development headers** (`python3-dev`
-  on Debian and Ubuntu), for the native kernel of the archive scan
-  (`src/nodsig/native`): the same walk as the Python reference, in C, proven
-  to write the same bytes (the conformance vectors in `tests/fixtures/scan`
-  and the suite hold the two to the same records, counters and refusals), and
-  about four times faster on the block. It is built by `pip install` when a
+  on Debian and Ubuntu), for the native kernel (`src/nodsig/native`): the
+  archive scan's walk of a block and the fusion's k-way stage over the runs,
+  the same as the Python reference, in C, proven to write the same bytes
+  (the conformance vectors in `tests/fixtures/scan` and the suite hold the
+  two to the same records, counters and refusals, and the fusion's two
+  roads to the same blobs), about four times faster on the block and
+  2.7 times on the fusion's round. It is built by `pip install` when a
   compiler is there and skipped when it is not, or by hand from a checkout with
   `python3 -m nodsig.native.build`; a package without it runs the reference,
   unchanged. The archive's manifest says which road scanned it, outside the
