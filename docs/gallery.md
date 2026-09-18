@@ -409,6 +409,13 @@ and rest on the external input the previous section stated. No number in
 any caption is typed in: each is the CSVs' own output, and where an
 independent total exists the figure is checked against it.
 
+All five are drawn by [`tools/plot_timeline.py`](../tools/plot_timeline.py),
+which reads those CSVs and writes the SVG with nothing but python3, like the
+other figures on this page. Those checks live in the script rather than in a
+reviewer's attention: the balance stack has to re-add to the sealed unspent
+total and the waves to the unspent value recounted another way, or nothing
+is written.
+
 ### Balance bands over time
 
 ![Stacked bands: all unspent BTC at each checkpoint, split by the size of
