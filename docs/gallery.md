@@ -238,22 +238,31 @@ nothing has to: it is twelve bytes compared with a public constant.
 ```console
 $ nodsig nonces witness-verify --witness <witness-dir> --nonces <nonces-dir>
 
-ok  5,149 point(s) re-resolved from the rows themselves
-          471  exposed
-        1,209  distinct-keys
-          209  one-signature
-            1  prefix-collision
-        3,259  undetermined
+ok  5,151 scalar(s) re-resolved from the rows themselves
+          472  exposed
+        1,211  distinct-keys
+          397  one-signature
+        3,071  undetermined
+            1  census prefix(es) covering more than one scalar (a column, not a resolution)
 ok  witness.bin
 ..  coverage 121,343..957,290 taken on trust
-ok  parent nonces-v2 8aa19fba72a482958b61ddc6ef315fec40a275237d705f8e85cd15a8df8da8a1
-fingerprint verified: 7d4823f419306ff4b25757e47e365498cb8f3d165361b8ecc82ed0cf47ab5bf8
+ok  parent nonces-v3 f4f534eeeb13741ab2533af4d6d0741f78037178b3f624bb64bbd60705cdae70
+fingerprint verified: 99f255ed5048979a128ae3b4967f5fca7c84c4980cc9e132d53442d4f9c9d08d
 ```
 
 The audit does two separate things and prints both. The digests prove the
 file has not rotted; re-deriving every resolution from the rows proves it
 still *means* what it meant, which is the part a checksum cannot say. Passing
 the census confronts the declared parent instead of taking it on trust.
+
+These counts moved when the table became `nonces-witness-v2`, and the move is
+worth naming: v1 resolved a point by a **prefix** of it, v2 by the **whole
+scalar**. On the whole scalar, 188 points that could not be told apart before
+turn out to carry a single signature each, so `one-signature` goes from 209
+to 397 and `undetermined` falls by the same 188. The old `prefix-collision`
+row is gone from the resolutions and appears instead as what it always was:
+a note that one census prefix covers more than one scalar, which is a fact
+about the column, not about the point.
 
 The largest number is `undetermined`, and it is meant to be first thing seen:
 for most repeated points the signer is not identifiable from the input, so
@@ -265,8 +274,8 @@ Two more figures, from two CSVs the tool writes. Same rule as the two above:
 they show the shape of an output, and the reading of these numbers belongs to
 a write-up rather than to a chart.
 
-![Bars, widest first: undetermined 3,259, distinct-keys 1,209, exposed 471,
-one-signature 209, prefix-collision 1](figures/nonce-resolutions.svg)
+![Bars, widest first: undetermined 3,071, distinct-keys 1,211, exposed 472,
+one-signature 397](figures/nonce-resolutions.svg)
 
 *From `nonces witness-verify --csv`. The bar worth looking at is the first
 one: for most repeated points the signer is not identifiable from the input,

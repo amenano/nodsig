@@ -64,28 +64,34 @@ actually covers the lookup you are making.
 
 ## The run
 
-> **Transcript pending.** The block below is re-taken from the build this
-> release describes; until then the fingerprint and the per-line heights carry
-> a placeholder.
-
 ```console
 $ nodsig check --archive <archive-dir> --stdout \
       1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa \
       12c6DSiU4Rq3P4ZxziKxzrL5LmMBrzjrJX \
       bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh
-# exposure: reveal-archive-v4 (confirmed blocks 1..957,301, sealed aacaf02dca2fc5ba8532e54fa75159041fc99051efa68eb63e59bc9537369ced)
+# exposure: reveal-archive-v4 (confirmed blocks 1..957,301, sealed a4b678c5…04f7)
+# balance: not configured (pluggable: bitcoin-core-rpc scantxoutset (--rpc))
 # history: not configured (pluggable: outpoint-index derivatives (--index + --derived))
 # co-inputs: not configured (pluggable: outpoint-index derivatives (--index + --derived))
+# linkage: not configured (pluggable: outpoint-index derivatives (--index + --derived))
+# nonce-exposure: not configured (pluggable: nonces-witness-v2 (--witness))
+
+overview (each line counts only what the capability naming it actually checked):
+- input: 3 address(es) checked of 3 given (2 p2pkh, 1 p2wpkh)
+- exposure (up to height 957,301): 3 exposed by reuse, 0 by construction, 0 protected, 0 undetermined
+- not answered: balance, history, co-inputs, nonce-exposure — the source lines above name what would plug each one in. Not answered is not a negative
+
+links: the co-spend search did not run, and no two of these addresses are the same key
 
 1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa
     p2pkh: EXPOSED (by reuse)
-    seen inside a revealed script (co-signer exposure counts)
+    seen inside a revealed script (co-signer exposure counts); published in an output (pay-to-pubkey or bare multisig: public from the block that created it), first seen at height 172,165
 12c6DSiU4Rq3P4ZxziKxzrL5LmMBrzjrJX
-    p2pkh: PROTECTED until first spend
-    not revealed in confirmed blocks up to height 957,301
+    p2pkh: EXPOSED (by reuse)
+    published in an output (pay-to-pubkey or bare multisig: public from the block that created it), first seen at height 1
 bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh
     p2wpkh: EXPOSED (by reuse)
-    key seen in a witness
+    key seen in a witness, first seen at height 639,413
 
 caveats (the perimeter of every answer above):
 - off-chain exposure is invisible here: an xpub shared with a service
@@ -100,11 +106,18 @@ Three public addresses, real archive, **under a second** including the
 interpreter start, with the files on a network mount rather than a local disk.
 The banner names the artifact that answered, the range of blocks it covers and
 the exact bytes that were read, and each exposed line ends with the height the
-key was first seen at, which the archive records per digest. This page keeps
+key was first seen at, which the archive records per digest.
+
+All three come back exposed, and the second one is the reason this page shows
+real output instead of a chosen example: its key was paid to directly, in the
+pay-to-pubkey form of the earliest blocks, so it has been public since height
+1 without its owner ever spending anything. Exposure is not only what a spend
+reveals; sometimes it is how the coin was paid in the first place. This page keeps
 the output it actually got rather than an edited prediction, so it is re-taken
 whenever the artifacts are rebuilt.
-A lookup is a binary search over a sorted file: about 35 seeks on a 34 GB
-partition, and fewer when the search ladder is present. Nothing is loaded into
+A lookup is a binary search over a sorted file: about 31 seeks over the
+1,700,173,027 rows of the 41 GB key partition, and fewer when the search
+ladder is present. Nothing is loaded into
 memory, so the cost does not grow with how much of the archive you keep.
 
 The first line of the report is the point of the whole design: the answer names
