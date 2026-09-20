@@ -73,10 +73,10 @@ nodsig archive scan --rpc <url> --cookie-file <path/.cookie> \
 
 | flag | cost | without it |
 |---|---|---|
-| (none) | ~145 GB of runs, ~105 GB once merged | you still get the revelation archive: the exposure question |
+| (none) | ~145 GB of runs, 111.8 GB once merged | you still get the revelation archive: the exposure question |
 | `--graph` | 300-400 GB | no index, no derivatives, no block statistics: they are all built from it |
 | `--headers` | ~150 MB | dates need the node, and the scan's integrity checks cannot be repeated offline |
-| `--nonces` | ~55-60 GB, ~10% CPU | the nonce census does not exist and no later pass can rebuild it |
+| `--nonces` | 59.7 GB, ~10% CPU | the nonce census does not exist and no later pass can rebuild it |
 | `--rest` | none, saves ~half the bytes on the wire | JSON-RPC instead: correct, slower, needs a credential |
 
 `--graph-digest <graph>` replaces `--graph` when you already have one: it

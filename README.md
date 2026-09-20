@@ -9,8 +9,8 @@ file: no block explorer, no third-party index, no network. Each answer names
 the artifact it came from, the height that artifact covers, and a fingerprint
 anyone else can recompute from the same chain. The artifacts are files: hand
 them to someone else and they check them by recomputing that fingerprint.
-Building every one of them costs about 110 hours and 950 GB at today's
-height; most questions need a fraction of that, and the table under
+Building every one of them costs about 130 hours and 960 GB at today's
+height, measured rather than projected; most questions need a fraction of that, and the table under
 *Building the artifacts* says which. Nothing has to be installed or built to
 see how it behaves: the first commands under *Try it* run from a clone, with
 no node.
@@ -341,22 +341,40 @@ rows below. Everything else still comes from the run described above:
 | `census` | ~18 min | a CSV |
 | `reuse prepare` | ~20 min | `<locks>`, ~1.4 GB (one record per *distinct* lock, not per output), sealed with the snapshot's height |
 | `archive scan --graph` | **~56 h** | `<archive>` as runs, ~145 GB on a 3.0.x run **and** `<graph>` ~301 GB |
-| `archive scan --nonces` | included in the 56 h above, which was measured with the census co-emitted | `<nonces>` ~55-60 GB |
-| `archive merge` | ~5 h (a 3.0.x run measured 5 h 04 on a 145 GB run pile) | seals the archive in place, **and writes `<archive>/proof/`**: the candidates and the programs that prove them, sealed with its own fingerprint |
-| `nonces merge` | ~3 h 20 | seals the census in place |
-| `nonces resolve` | ~1.5 h | a few MB: the evidence that resolves each repeated point (**needs the node and the index**, optional) |
+| `archive scan --nonces` | included in the 56 h above, which was measured with the census co-emitted | `<nonces>` 59.7 GB |
+| `archive merge` | **4 h 43** (sealed; 5 h 04 on the wall, on a 145 GB run pile) | seals the archive in place, **and writes `<archive>/proof/`**: the candidates and the programs that prove them, sealed with its own fingerprint |
+| `nonces merge` | **3 h 27** | seals the census in place |
+| `nonces resolve` | **3 h 10** | a few MB: the evidence that resolves each repeated point (**needs the node and the index**, optional) |
 | `graph fingerprint` | ~1 h 11 | nothing: it re-reads and prints |
-| `archive derive` | ~4 h | the reuse table, and its `curve.csv` |
-| `archive curve` | ~2 h | `revelations.csv`: first revelations per window |
-| `index build` | ~23 h | `<index>` ~230 GB |
-| `derived build` | ~15 h | `<derived>` ~185 GB |
-| `firstspend build` | ~3 h 15 | `<firstspend>` ~37 GB: the first spend of every lock, ordered by time (optional, from `<derived>` alone) |
-| `firstreveal build` | ~2 h 30 (measured: a 39 GB read of the archive's keys plus the fusion) | `<firstreveal>` ~37 GB: the first revelation of every key, ordered by time (optional, from the merged `<archive>` alone) |
+| `archive derive` | **2 h 52** | the reuse table, and its `curve.csv` |
+| `archive curve` | **40 min** | `revelations.csv`: first revelations per window |
+| `index build` | **20 h 39** | `<index>` 229.6 GB |
+| `derived build` | **21 h 52** | `<derived>` 185.3 GB |
+| `derived timeline --price` | **4 h 28** | `<timeline>`, three small CSVs: balance bands, the (creation, spend) windows, and the priced third table |
+| `blockstats build` | **3 h 26** | `blockstats.csv`, 46.5 MB: one row per block, read from `<graph>` |
+| `firstspend build` | **2 h 22** | `<firstspend>` 37.0 GB: the first spend of every lock, ordered by time (optional, from `<derived>` alone) |
+| `firstreveal build` | **3 h 08** | `<firstreveal>` 34.0 GB: the first revelation of every key, ordered by time (optional, from the merged `<archive>` alone) |
+
+The bold rows were measured over 16-20 September 2026, rebuilding every one of
+them from the archive up, and they are the figures the builders **sealed**:
+`nodsig report` prints these same numbers off your own manifests. A wall clock
+around the same step reads longer — the interpreter start, the preflight, the
+script waiting on the builder — by half a minute on a short step and by up to
+an hour and a half on `derived build`. The sealed figure is the one quoted
+here, because it is the one anybody can read back out of the artifact.
+
+They replace projections taken from short stretches, and they miss in both
+directions: `derived build` was given 15 h and sealed 21 h 52, `index build`
+was given 23 and sealed 20 h 39. A per-record cost measured on the first
+blocks does not survive the last ones, where the blocks are heaviest, and that
+is the whole lesson of the two numbers.
 
 The audits are cheap next to the builds, and that is the point of them. From
 the same run: `archive verify --deep` ~1 h 20, `nonces verify --deep` ~1 h 10,
-`index verify` ~1 h, `headers crosscheck --index` ~1 h, `derived verify
---index` ~45 min, `nonces witness-verify` seconds. Checking everything you
+`index verify --graph` **59 min**, `headers crosscheck --index` ~1 h, `derived
+verify --index` **45 min**, `firstspend verify` **28 min**, `firstreveal
+verify` **26 min**, `nonces witness-verify` and `derived timeline-verify`
+seconds. (The audits seal nothing, so those are wall times.) Checking everything you
 built costs about a twentieth of building it, so there is no version of this
 where verifying is the step you skip.
 
@@ -396,12 +414,21 @@ have built anything, `nodsig report` prints what **yours** cost beside what they
 are: it reads the durations out of the manifests the builders sealed, so the
 figures are the artifacts' own rather than a transcription.
 
-Composed honestly, with the shared pass counted once: **~110 h of machine**
-(about four and a half days if run back to back) and **~950 GB** if you build
-all of it and keep everything. The sealed archive of a 3.0.x run measured
-105 GB of that, of which 54 GB is the proof that `archive merge` writes beside
-it and `archive scan` needs in order to grow the archive later; the scan's run
-pile, ~145 GB, is transient and the fusion deletes it. The section below on what to keep is worth
+Composed honestly, with the shared pass counted once: **~129 h of machine**
+(about five and a half days if run back to back) and **~960 GB** if you build
+all of it and keep everything. That total is now a sum of measurements rather
+than of projections, and it grew: the projected one said ~110 h. `nodsig
+report` composes the part it can see — the artifacts that seal a duration —
+and printed **115 h 30 min** for this set; the rest is the steps that seal
+none (the census, the lock set, the reuse table and its two CSVs, the graph's
+fingerprint pass). One caveat the tool cannot state: the scan it counts is the
+56 h one that co-emitted the nonce census, while this archive and these
+headers came from a 31 h 49 pass that did not. Taking the longer one keeps the
+total on the safe side of the truth. The archive
+of a 3.0.x run measured 111.8 GB of that, of which **57.9 GB is the proof**
+that `archive merge` writes beside it and `archive scan` needs in order to
+grow the archive later; the scan's run pile, ~145 GB, is transient and the
+fusion deletes it. The section below on what to keep is worth
 reading before you size the disk, because the largest artifact is the one no
 query reads.
 
@@ -628,7 +655,7 @@ would have matched is gone. Keep it if you intend to watch the chain forward,
 delete it once you have the CSV if this was a one-time question.
 
 **`<archive>/proof/` is not optional if you intend to grow the archive.** It
-is the larger half of the archive directory (54 GB of the 105 measured on a
+is the larger half of the archive directory (57.9 GB of the 111.8 measured on a
 3.0.x run), no query reads it, and deleting it looks harmless — but `archive
 scan` refuses to extend an archive whose proof is missing, because the proof
 is what lets a later run decide a candidate the same way the first one did.

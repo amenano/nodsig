@@ -21,6 +21,92 @@ contract, the **CLI** is convenience, and `reveal-archive-v2` inside a tool
 numbered 1.3.0 is not a discrepancy. Artifacts are identified by their
 fingerprint, never by a tag.
 
+## 3.3.0 (every artifact rebuilt, and four fingerprints that did not move)
+
+No command changed, no format changed, and nothing here asks you to rebuild
+anything. What this release carries is the rebuild itself: every artifact
+from the archive up was built again, from scratch, on a chain whose tip had
+not moved, and held against the ones a 1.x release had sealed a year and two
+majors earlier.
+
+**Four fingerprints came back identical.** `headers-v2`, `outpoint-index-v3`,
+`outpoint-derived-v3` and `firstspend-v1` reproduce byte for byte: 229.6 GB
+of index and 185.3 GB of derivatives, rebuilt from a 301 GB graph by code two
+majors newer, sealing the same names. 2.0.0's format table had promised
+exactly this, listing those tags as *unchanged, bytes and fingerprints
+alike*; now the promise has been executed rather than asserted. The artifacts
+whose tag did change — `firstreveal-v2`, `nonces-witness-v2`,
+`derived-timeline-v2`, `blockprice-v2` — are exactly the ones whose
+fingerprint moved, each for a reason the format table already gave.
+
+- **What it costs, measured end to end.** The table under *Building the
+  artifacts* in the README no longer holds projections. Every row is a figure
+  the builder sealed, which is the same figure `nodsig report` reads back out
+  of your own manifests: index 20 h 39, derivatives 21 h 52, timeline 4 h 28,
+  block stats 3 h 26, first-reveal 3 h 08, first-spend 2 h 22, the reuse table
+  2 h 52, the nonce witness 3 h 10. Composed, with the shared pass counted
+  once, **~129 h and ~960 GB** against the ~110 h and ~950 GB the projections
+  gave. The projections missed in both directions — the derivatives were given
+  15 h and took 21 h 52, the index was given 23 h and took 20 h 39 — because a
+  per-record cost measured on early blocks does not survive the late ones.
+- **The archive is bigger than it was said to be**: 111.8 GB, of which 57.9 GB
+  is the proof beside it, against the ~105 and ~54 carried until now.
+- **The reuse curve moved, and the archive is why.** At the same height the
+  v4 archive strikes 36,316 more locks and exposes 681 more BTC under P2PKH
+  than the 1.x generation, because it sees revelations the earlier scans
+  missed. The ledger map's percentages do not shift; its bars do.
+- **The nonce resolutions moved, and the format is why.** `nonces-witness-v2`
+  resolves a point by the whole scalar where v1 resolved it by a prefix: on
+  the whole scalar, 188 points that could not be told apart each turn out to
+  carry a single signature, so `one-signature` goes 209 to 397 and
+  `undetermined` falls by the same 188. The old `prefix-collision` row was
+  never a resolution and is now reported as what it is, a note about one
+  census prefix covering more than one scalar.
+- **The exposure page carried a written transcript, and the run contradicts
+  it.** That page had shipped with an explicit *pending* note and a
+  placeholder fingerprint; it now carries the run. The address it showed as
+  PROTECTED until first spend is exposed, and has been since height 1: its
+  key was paid to directly, in the pay-to-pubkey form of the earliest blocks.
+  A transcript is captured here, never composed, and this is why.
+- **Every figure in the gallery has a script in `tools/` now.**
+  `plot_ledger.py` draws the ledger map and the reuse curve, `plot_timeline.py`
+  the five timeline figures; both were held to the published images and
+  reproduce them byte for byte from the same CSVs. Two of the eleven had no
+  script at all before this, which is how the P2PK and Taproot bars came to
+  carry typed round numbers (1,720,000 and 217,000 BTC) where the census says
+  1,715,819 and 216,699. Redrawn from the rebuilt chain, **eight of the eleven
+  figures come out byte for byte identical**; the three that move are the two
+  above and the nonce resolutions.
+- **The price table is a single public series now.** The block price rests on
+  CoinMetrics community alone, dropping the hourly exchange series: a CSV in a
+  public git repository that anybody can fetch and re-import to the same
+  digest — verified, a month later, to the byte — is worth more to a project
+  that sells reproducibility than an hour of look-ahead instead of a day. The
+  cost is stated: that series ends on 2026-05-23, so the last priced block is
+  951,046 and the final 6,255 blocks carry no price.
+
+### Do your artifacts still work?
+
+Yes, and this is the release that proves it rather than promising it. An
+index, a set of derivatives, a first-spend table or a header archive sealed
+by a 1.x release carries the same fingerprint the current code produces from
+the same blocks: they were rebuilt side by side and compared. Nothing here
+needs rebuilding. If you rebuild anyway, the hours above are what it costs.
+
+The artifacts whose format changed before this release — `firstreveal-v2`,
+`nonces-witness-v2`, `derived-timeline-v2`, `blockprice-v2` — still need the
+rebuild their own entries described; that has not changed, and their
+fingerprints differ for the reasons those entries give.
+
+### Documentation
+
+README (*Building the artifacts*, the cost table and the composed total),
+`docs/ARTIFACTS.md` (*Rough sizes*, measured), `docs/gallery.md` (the witness
+transcript and the resolution figure), `docs/exposure-check.md` (the run,
+replacing a composed transcript), `docs/build-and-query.md`,
+`docs/nonce-check.md`, `docs/why-artifacts.md`, and `tools/plot_ledger.py`
+and `tools/plot_timeline.py` for the figures that had no script.
+
 ## 3.2.0 (the fusion's k-way stage in the kernel, and a bounded round)
 
 The second piece of the native kernel, and the closing of the correction

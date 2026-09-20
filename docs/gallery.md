@@ -37,9 +37,8 @@ a1075db55d416d3ca199f55b6084e2115b9345e16c5cf302fc80e9d5fbf5d48d:0
   spent    height 57,044 (2010-05-22 18:26 UTC) by cca7507897abc89628f450e8b1e0c6fca4ec3f7b34cccf55f3f531c659ff4d79
 ```
 
-That is the pizza, and it took 4.5 seconds. Two binary searches and two record
-reads over a 248 GB index (the v2 pair this was measured on; the v3 index is
-230): the txid becomes an ordinal, the ordinal is a
+That is the pizza, and it took 2.6 seconds. Two binary searches and two record
+reads over the 229.6 GB index: the txid becomes an ordinal, the ordinal is a
 position, and the spend was resolved once at build time instead of being hunted
 for now.
 
@@ -94,21 +93,23 @@ which is what makes an exposure dateable rather than merely known.
 ```console
 $ nodsig archive lookup --archive <archive-dir> 62e907b15cbf27d5425399ebf6f0fb50ebb88f18
 archive covers heights 1..957,301
-62e907b15cbf27d5425399ebf6f0fb50ebb88f18: REVEALED — keys (inside a redeem script)
+archive covers heights 1..957,301
+62e907b15cbf27d5425399ebf6f0fb50ebb88f18: REVEALED at height 172,165, keys (inside a redeem script, published in an output, uncompressed form)
 ```
 
-Half a second, on 87 GB. Note *where*: that key did not become public by
+Just under half a second, on the 53.9 GB the sealed archive holds. Note *where*: that key did not become public by
 spending its own coins, it surfaced inside somebody else's revealed script. The
 per-address form of this question, with its perimeter and its caveats, is
 [`exposure-check.md`](exposure-check.md).
 
-That answer was printed by the build that sealed the archive quoted at the
-foot of this page, and the record has gained two fields since: the line now
-carries the height the digest was **first** seen at, and, for a key pushed in
-the 65-byte serialization, that it was uncompressed. The shape of the answer
-is in [`formats/RevealArchive-v4.md`](formats/RevealArchive-v4.md); this page
-keeps the output it actually got, and will be re-taken from the next build
-rather than edited into a prediction.
+The line carries two fields an earlier archive could not give: the height the
+digest was **first** seen at, and, for a key pushed in the 65-byte
+serialization, that it was uncompressed. It also names every way the key
+surfaced rather than the first one found, which is why this answer lists a
+redeem script *and* an output. The shape of it is in
+[`formats/RevealArchive-v4.md`](formats/RevealArchive-v4.md); this page keeps
+the output it actually got, and was re-taken from the build that sealed the
+archive quoted at the foot of the page rather than edited into a prediction.
 
 ## Where a build got to
 
@@ -118,10 +119,11 @@ phase: sealed   heights 1..957,301
   transactions    1,393,498,473
   outputs         3,819,356,162
   inputs seen     3,417,883,234
-  spends_g0002.bin          3,417,883,234 records
+  spend_extra_g0002.bin                 0 records
+  spender_of_g0002.bin      3,819,356,162 records
   txid_index_g0001.bin      1,393,498,471 records
   overwritten txids: 2, duplicate spends: 0, unresolved: 0
-fingerprint: 338c6c48f6e6c806c6d0a494bb9ca5060adcb83167c0db45328d39b40b14a69d
+fingerprint: c5ab330944162f2a70df92d2163210742fa8bb11c66e6211b017cf4058471f70
 ```
 
 Instant, because it reads the manifest and nothing else. The two overwritten
@@ -137,17 +139,17 @@ its own fingerprint. Reading it back is arithmetic on a few kilobytes:
 ```console
 $ nodsig curve deltas curve.csv
 checkpoints: 96  span: ..957,301
-cumulative:  reuse >= 5,084,725.41 BTC (8,784,364 locks)
-  p2pkh      3,925,128 locks   >=     1,185,751.57 BTC
-  p2sh       1,155,896 locks   >=     1,283,224.01 BTC
-  p2wpkh     3,612,318 locks   >=     1,924,332.48 BTC
+cumulative:  reuse >= 5,085,431.67 BTC (8,820,680 locks)
+  p2pkh      3,960,884 locks   >=     1,186,433.03 BTC
+  p2sh       1,156,108 locks   >=     1,283,247.05 BTC
+  p2wpkh     3,612,666 locks   >=     1,924,334.24 BTC
   p2wsh         91,022 locks   >=       691,417.35 BTC
 
-top 5 intervals by newly revealed locks (diffuse behaviour):
-    830,000 →   840,000      294,087 locks   >=     124,214.97 BTC
-    870,000 →   880,000      243,162 locks   >=     237,014.60 BTC
-    930,000 →   940,000      237,865 locks   >=     261,316.71 BTC
-    940,000 →   950,000      230,418 locks   >=     169,205.65 BTC
+top 5 intervals by locks still unspent at the snapshot, by era of their revelation:
+    830,000 →   840,000      294,132 locks   >=     124,215.13 BTC
+    870,000 →   880,000      243,191 locks   >=     237,012.23 BTC
+    930,000 →   940,000      237,871 locks   >=     261,318.32 BTC
+    940,000 →   950,000      230,413 locks   >=     169,205.62 BTC
     580,000 →   590,000      222,634 locks   >=      15,470.90 BTC
 
 top 5 intervals by newly revealed BTC (whale steps):
@@ -342,6 +344,7 @@ supply identity over heights 1..957,301 (genesis is not in the index: its 50 BTC
   fees           300,477.64560047 BTC
   unclaimed           28.95844904 BTC in 1,124 block(s) that claimed less than subsidy + fees
   ok  coinbase <= subsidy + fees on every block
+  coinbase counts every output the coinbase transactions created, both BIP30 instances (100 BTC) and unspendable outputs included: it is not circulating supply; issued supply is coinbase minus fees. subsidy is the schedule's allowance; unclaimed cannot be split between subsidy and fees, because a coinbase claims one sum
   fees           4,425,115,735.65 USD over 882,267 priced block(s), block by block; 75,034 block(s) had no price (161.67056235 BTC of fees not converted)
 
 per halving epoch:

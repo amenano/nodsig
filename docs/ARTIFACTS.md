@@ -180,10 +180,10 @@ archive); and a release at which it is not run is the release it comes out.
 | ├ `headers.bin` | records | The 80 header bytes verbatim, then the block's size and weight | `archive scan --headers` | as above |
 | ├ `coinbase.bin`, `coinbase_off.bin` | records | Each block's coinbase scriptSig, and where it starts | `archive scan --headers` | as above |
 | └ `manifest.json` | `headers-v2` | Fingerprint and coverage `0..H`; no parent, it comes from the blocks | `headers fingerprint` | verification |
-| `<nonces>/` | `nonces-v3` | Every signature nonce point ever published, with the height. Off by default, enabled with `--nonces` (~55-60 GB): the repeated ones are the candidates for a key recoverable from public data, which a block re-read confirms or rules out | `archive scan --nonces` | `nonces groups/lookup/verify/rewind`, `nonces address` (with the index and a node) |
+| `<nonces>/` | `nonces-v3` | Every signature nonce point ever published, with the height. Off by default, enabled with `--nonces` (59.7 GB measured): the repeated ones are the candidates for a key recoverable from public data, which a block re-read confirms or rules out | `archive scan --nonces` | `nonces groups/lookup/verify/rewind`, `nonces address` (with the index and a node) |
 | ├ `nonces_gNNNN.bin` | records | One 16-byte record per signature: point, height, scheme, and the sighash mode it committed to | `archive scan --nonces` | as above |
 | └ `manifest.json` | `nonces-v3` | Fingerprint and coverage; no parent, it comes from the blocks | `nonces merge` | `nonces verify` |
-| `<witness>/` | `nonces-witness-v2` | The evidence that resolves each repeated point: per (nonce point, key, attribution class), the signatures that decide whether a key follows, the key being the one the unlocking data or the spent output names (a key beside the signature that hashes to the lock, a position in an m-of-m script or a tapscript template, a P2PK or taproot key-path output). Optional, built after the census (~1.5 h over the whole chain plus the index lookups, a few MB) | `nonces resolve` (needs the node and the index) | `nonces witness-verify`, `check --witness` |
+| `<witness>/` | `nonces-witness-v2` | The evidence that resolves each repeated point: per (nonce point, key, attribution class), the signatures that decide whether a key follows, the key being the one the unlocking data or the spent output names (a key beside the signature that hashes to the lock, a position in an m-of-m script or a tapscript template, a P2PK or taproot key-path output). Optional, built after the census (3 h 10 over the whole chain, most of it index lookups; a few MB) | `nonces resolve` (needs the node and the index) | `nonces witness-verify`, `check --witness` |
 | `<graph>/` | `graph-v2` | The raw transaction graph. Off by default, enabled with `--graph` | `archive scan --graph` | `graph`, `blockstats`, `index build` |
 | block-stats CSV | `block-stats-v3` | Per-block series (transactions, inputs, outputs, value, time, and the outputs no key can spend with their value) derived from the graph, sealed by a meta beside it | `blockstats build` | `blockstats summary/verify`, a human |
 | `<index>/` | `outpoint-index-v3` | The chain numbered once: a record per output, its spend already resolved | `index build` | `index lookup`, `derived build`, `check` |
@@ -267,14 +267,17 @@ held to within half a percent, which is what fixed-width records buy.
 | Artifact | Size |
 |---|---|
 | `<graph>/` | ~301 GB |
-| `<index>/` | ~230 GB |
-| `<derived>/` | ~185 GB |
-| `<archive>/` | ~105 GB measured on a 3.0.x run, of which the sealed archive is ~51 GB |
-| └ `<archive>/proof/` | ~54 GB of that: no query reads it, and `archive scan` refuses to grow an archive without it |
-| `<nonces>/` | ~55-60 GB |
-| `<firstspend>/` | ~37 GB (optional; 1.48 G locks ever spent from × 25 B) |
-| `<firstreveal>/` | ~34 GB (optional; 1.70 G revealed keys × 20 B) |
-| `<locks>/`, `<checkpoint>/`, CSVs | small enough not to plan for |
+| `<index>/` | 229.6 GB |
+| `<derived>/` | 185.3 GB |
+| `<archive>/` | 111.8 GB measured on a 3.0.x run, of which the sealed archive is 53.9 GB |
+| └ `<archive>/proof/` | 57.9 GB of that: no query reads it, and `archive scan` refuses to grow an archive without it |
+| `<nonces>/` | 59.7 GB |
+| `<firstspend>/` | 37.0 GB (optional; 1.48 G locks ever spent from × 25 B) |
+| `<firstreveal>/` | 34.0 GB (optional; 1.70 G revealed keys × 20 B) |
+| `<locks>/` | 1.5 GB |
+| `<timeline>/`, `<witness>/`, `blockstats.csv`, `<checkpoint>/`, CSVs | tens of MB in all: small enough not to plan for |
+
+All of them together are ~960 GB, and the graph is a third of it.
 
 Add headroom on top: a fusion writes a new generation before deleting the old.
 The FIRST fusion of a scan is the largest: it fuses the whole run pile, which

@@ -25,7 +25,7 @@ door:
 | artifacts | the archive alone (38.7 GB for single-key addresses) | the outpoint index **and** its derivatives (~415 GB) |
 | a node | no | **yes** |
 | offline | yes | no |
-| optional extra | none | the census (~55-60 GB) for the chain-wide view |
+| optional extra | none | the census (59.7 GB) for the chain-wide view |
 
 **Why it cannot be offline.** No artifact keeps unlocking data. The graph is
 flow, not unlocking; the reveal archive keeps hashes; the census keeps 12 bytes

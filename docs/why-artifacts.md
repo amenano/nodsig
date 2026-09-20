@@ -45,7 +45,7 @@ get built.
 
 ## 3. What you actually keep
 
-The ~950 GB in the README is the case where you build everything and keep
+The ~960 GB in the README is the case where you build everything and keep
 everything. What a given question needs is smaller, sometimes zero:
 
 | To ask | Keep | Size at height 957,301 |
