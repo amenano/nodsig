@@ -23,6 +23,13 @@ fingerprint, never by a tag.
 
 ## 3.3.0 (every artifact rebuilt, and four fingerprints that did not move)
 
+> **Not tagged yet.** The rebuild and these pages are done; the release waits
+> on the second road's cross-check (`reuse scan` then `archive crosscheck`,
+> a full extra pass over the chain) and on re-sealing the two artifacts this
+> run did not rebuild, the nonce census and the graph. Until the tag is
+> pushed, this entry describes what is on `main`, not a version you can check
+> out.
+
 No command changed, no format changed, and nothing here asks you to rebuild
 anything. What this release carries is the rebuild itself: every artifact
 from the archive up was built again, from scratch, on a chain whose tip had
