@@ -123,7 +123,9 @@ the address `17SkEw2md5avVNyYgj6RiXuQKNwkXaxFyQ` encodes) or the hash of a
 script. That key entered the chain with the spend at height 57,044, inside
 the slice, so this archive already holds it. `nodsig check` decodes an
 address into the right digest for every backend, which is why it is the
-command to reach for with an address in hand.
+command to reach for with an address in hand: with the index and the
+derivatives plugged in, it also prints the lock of every address that has
+events, in the form `derived history --lock` takes.
 
 If you want the statistical pass too, it is hours at full height and minutes
 here:

@@ -728,6 +728,14 @@ def test_report_with_index(pipeline, tmp):
     check("/" not in text.split("\n")[0].split("(")[0],
           "a source header must never carry a filesystem path")
     check("history: received 6×" in text, "lock A history line missing")
+    lock_a = rs.hash160(ca.script_pubkey(ca.decode_address(addr_a))).hex()
+    check(f"nodsig derived history --lock {lock_a}" in text,
+          "a lock with events must be named, so that `derived history`, "
+          "which takes no address, can be asked about it")
+    check(text.count("derived history --lock")
+          == text.count("history: received"),
+          "the lock is named once per lock that has events, and never "
+          "for one that has none")
     check("co-inputs: spent in 2 tx(s)" in text,
           "co-inputs line missing")
     check("UNDETERMINED" in text,
@@ -741,6 +749,8 @@ def test_report_with_index(pipeline, tmp):
     check(rows[1][-3].startswith("history: received")
           and rows[2][-2].startswith("co-inputs: spent"),
           "CSV rows must carry the capability summaries")
+    check(not any("--lock" in cell for row in rows for cell in row),
+          "naming the lock is the text report's: the CSV is unchanged")
     check(rows[1][-1] == "",
           "a capability nobody plugged in leaves its cell empty: a "
           "value there would be an answer nobody gave")

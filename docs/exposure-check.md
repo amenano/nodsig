@@ -370,7 +370,10 @@ chain.
 
 The yes/no needs the archive alone. Dates need the outpoint index and its
 derivatives, which is another 415 GB (229.6 + 185.3 at this height) and about
-37 hours of building. What they buy is the lock's story in order:
+37 hours of building. What they buy is the lock's story in order. `derived
+history` takes a lock, the hash160 of the scriptPubKey, and not an address:
+`check --index --derived` is the tool that decodes addresses, so beside each
+history summary it prints the lock, already in the form this command takes:
 
 ```console
 $ nodsig derived history --index <index-dir> --derived <derived-dir> \

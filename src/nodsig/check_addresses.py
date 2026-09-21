@@ -1558,8 +1558,21 @@ def render_text(report, out=sys.stdout):
         if e.balance_sats is not None:
             line += f"\n    balance: {e.balance_sats:,} sats"
         for cap in PER_ADDRESS_CAPABILITIES:
-            if cap in e.capabilities:
-                line += f"\n    {e.capabilities[cap].text}"
+            if cap not in e.capabilities:
+                continue
+            got = e.capabilities[cap]
+            line += f"\n    {got.text}"
+            # The summary is all this report says about the lock's
+            # events. The events themselves are `derived history`'s,
+            # which takes a lock and not an address on purpose (the
+            # boundary stated in derivatives._lock_from_args), so the
+            # lock is named here, by the one tool that decodes
+            # addresses. Text only: the CSV and the JSON are unchanged.
+            if (cap == "history" and got.status == Status.OK
+                    and got.value is not None):
+                lock = hash160(script_pubkey(e.address)).hex()
+                line += ("\n    its events, in order: nodsig derived "
+                         f"history --lock {lock}")
         print(line, file=out)
 
     print(file=out)
