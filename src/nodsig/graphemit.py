@@ -121,6 +121,7 @@ import json
 import os
 import sys
 
+from nodsig import home
 from nodsig.artifact import (WallClock, identity_fingerprint,
                              make_identity, producer, seal_manifest)
 from nodsig.blockparse import read_compactsize, write_compactsize
@@ -984,10 +985,10 @@ def main(argv=None):
     pf.add_argument("--graph", required=True, help="archive directory")
 
     pt = sub.add_parser("stats", help="watermark and totals (instant)")
-    pt.add_argument("--graph", required=True)
+    pt.add_argument("--graph", **home.required("graph"))
 
     ps = sub.add_parser("show", help="decode a height range, human-readable")
-    ps.add_argument("--graph", required=True)
+    ps.add_argument("--graph", **home.required("graph"))
     ps.add_argument("--from", dest="from_height", type=int, required=True)
     ps.add_argument("--to", dest="to_height", type=int, required=True)
 

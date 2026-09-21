@@ -112,6 +112,7 @@ import time
 from collections import Counter
 
 from nodsig import blockparse
+from nodsig import home
 from nodsig.artifact import (WallClock, make_identity, producer,
                              seal_manifest, verify_sealed)
 from nodsig.blockparse import scriptsig_pushes
@@ -2144,7 +2145,7 @@ def main(argv=None):
     m.add_argument("--nonces", required=True, help="the nonce archive")
 
     v = sub.add_parser("verify", help="audit a sealed artifact")
-    v.add_argument("--nonces", required=True)
+    v.add_argument("--nonces", **home.required("nonces"))
     v.add_argument("--deep", action="store_true",
                    help="also pass over every record (order, one scheme "
                         "bit each, no undefined flag bit, no Schnorr "
@@ -2156,7 +2157,7 @@ def main(argv=None):
     r.add_argument("--to-height", type=int, required=True)
 
     g = sub.add_parser("groups", help="the points sighted more than once")
-    g.add_argument("--nonces", required=True)
+    g.add_argument("--nonces", **home.required("nonces"))
     g.add_argument("--min-count", type=int, default=2,
                    help="how many sightings make a group (default 2)")
     g.add_argument("--limit", type=int, default=20,
@@ -2164,7 +2165,7 @@ def main(argv=None):
     g.add_argument("--csv", help="write every group to this file")
 
     lk = sub.add_parser("lookup", help="was this nonce point published?")
-    lk.add_argument("--nonces", required=True)
+    lk.add_argument("--nonces", **home.required("nonces"))
     lk.add_argument("points", nargs="+",
                     help="hex of the point, or of a whole r")
 
@@ -2175,10 +2176,10 @@ def main(argv=None):
                    help="a public key (33 or 65 bytes) or a hash160 (20): "
                         "the question asked of the point, under every "
                         "address form it can stand behind; may repeat")
-    a.add_argument("--index", required=True,
-                   help="outpoint index: which heights to read")
-    a.add_argument("--derived", required=True,
-                   help="its derivatives: which outputs were spent, by whom")
+    a.add_argument("--index", **home.required(
+        "index", help="outpoint index: which heights to read"))
+    a.add_argument("--derived", **home.required(
+        "derived", help="its derivatives: which outputs were spent, by whom"))
     add_node_args(a)
     a.add_argument("--nonces",
                    help="a census, to also say whether the same point was "
@@ -2204,7 +2205,7 @@ def main(argv=None):
 
     wv = sub.add_parser("witness-verify",
                         help="audit a sealed witness table")
-    wv.add_argument("--witness", required=True)
+    wv.add_argument("--witness", **home.required("witness"))
     wv.add_argument("--nonces",
                     help="the census it declares as its parent, to confirm "
                          "the ancestry instead of trusting it")

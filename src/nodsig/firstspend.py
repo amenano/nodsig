@@ -25,6 +25,7 @@ import sys
 import time
 
 from nodsig import derivatives as dv
+from nodsig import home
 from nodsig.artifact import (WallClock, declared_parent, identity_fingerprint,
                              make_identity, producer, seal_manifest,
                              verify_sealed)
@@ -654,20 +655,20 @@ def main(argv=None):
                    help="buffered rows before a run flush (memory knob)")
 
     s = sub.add_parser("stats", help="read a sealed table's manifest")
-    s.add_argument("--firstspend", required=True)
+    s.add_argument("--firstspend", **home.required("firstspend"))
 
     v = sub.add_parser("verify", help="audit a sealed table; --derived adds "
                                       "the second road")
-    v.add_argument("--firstspend", required=True)
+    v.add_argument("--firstspend", **home.required("firstspend"))
     v.add_argument("--derived",
                    help="the parent derivatives, to confront the declared "
                         "parent and re-derive a sample of first spends")
 
     bt = sub.add_parser("between", help="locks first spent in a height "
                                         "window (a contiguous read)")
-    bt.add_argument("--firstspend", required=True)
-    bt.add_argument("--index", required=True,
-                    help="the parent index, to turn heights into ordinals")
+    bt.add_argument("--firstspend", **home.required("firstspend"))
+    bt.add_argument("--index", **home.required(
+        "index", help="the parent index, to turn heights into ordinals"))
     bt.add_argument("--from", dest="from_h", type=int, required=True)
     bt.add_argument("--to", dest="to_h", type=int, required=True)
 

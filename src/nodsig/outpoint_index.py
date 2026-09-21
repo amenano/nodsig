@@ -218,6 +218,7 @@ from array import array
 from datetime import datetime, timezone
 
 from nodsig import graphemit as ge
+from nodsig import home
 from nodsig.progress import Pace
 from nodsig.artifact import (WallClock, declared_parent,
                              identity_fingerprint, make_identity, producer,
@@ -1836,18 +1837,18 @@ def main(argv=None):
 
     pt = sub.add_parser("stats", help="phase, watermark and counts "
                                       "(instant)")
-    pt.add_argument("--index", required=True)
+    pt.add_argument("--index", **home.required("index"))
 
     pv = sub.add_parser("verify", help="re-read everything against "
                                        "the manifest (full audit)")
-    pv.add_argument("--index", required=True)
+    pv.add_argument("--index", **home.required("index"))
     pv.add_argument("--graph",
                     help="the sealed graph this index declares as its "
                          "parent: confirms the ancestry instead of "
                          "taking it on trust")
 
     pl = sub.add_parser("lookup", help="TXID:VOUT → its whole story")
-    pl.add_argument("--index", required=True)
+    pl.add_argument("--index", **home.required("index"))
     pl.add_argument("outpoints", nargs="+", metavar="TXID:VOUT",
                     help="txid in display order, colon, output number")
 

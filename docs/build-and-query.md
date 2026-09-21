@@ -285,7 +285,32 @@ nodsig blockstats summary block-stats.csv
 
 `derived history` takes the lock, not the address: `--lock <hash160 of the
 scriptPubKey>` or `--spk <raw scriptPubKey>`. `nodsig check` is the one command
-that decodes addresses for you.
+that decodes addresses for you, and with the index and the derivatives plugged
+in it prints the lock of every address that has events, in that form.
+
+**Not naming the directories every time.** Set `NODSIG_HOME` to a directory
+that holds your artifacts under their roles' names (`archive`, `graph`,
+`headers`, `nonces`, `witness`, `index`, `derived`, `firstspend`,
+`firstreveal`, `locks`, `timeline`; a symlink does for one kept on another
+disk) and the reading commands find them:
+
+```sh
+export NODSIG_HOME=/srv/artifacts
+nodsig check --stdout <address> [<address> …]
+nodsig derived history --lock <hash160>
+nodsig index lookup <txid>:<vout>
+```
+
+The variable fills in a directory a reading command would otherwise refuse to
+run without, and nothing else. An explicit flag always wins. A command that
+**writes** an artifact takes no default, for its output or for its inputs:
+everything in sections 1 to 4 names what it reads and what it writes, every
+time. An **optional** flag takes none either, because there the flag is the
+request (`index verify --graph` asks for the parent to be confirmed, `nonces
+address --nonces` for a second question to be answered). The two exceptions are the commands that speak about the artifacts as a
+set: `check` plugs in every backend it finds there, `report` describes every
+artifact it finds, and each says in its output what it found. `--rpc` is never
+filled in: a balance query tells the node which addresses were asked about.
 
 `derived supply` is the one command above that reads whole files: one
 sequential pass over `fees.bin` plus one small read per block of the index's

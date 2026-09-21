@@ -117,6 +117,7 @@ import urllib.request
 from nodsig import address_book as ab
 from nodsig import check_report as cr
 from nodsig import derivatives as dvm
+from nodsig import home
 from nodsig import linkage as lk
 from nodsig import outpoint_index as oi
 from nodsig import reveal_archive as ra
@@ -1636,20 +1637,24 @@ def main(argv=None):
                         "addresses you MEANT to keep apart, and "
                         "without that claim a sentence about "
                         "separation would mean nothing")
-    p.add_argument("--archive", help="reveal-archive directory "
-                                     "(enables the exposure capability)")
-    p.add_argument("--index", help="outpoint-index-v3 directory "
-                                   "(with --derived enables history "
-                                   "and co-inputs)")
-    p.add_argument("--derived", help="outpoint-derived-v3 directory "
-                                     "built from that same index")
-    p.add_argument("--witness",
-                   help=f"{wit.FORMAT_TAG} directory (enables "
-                        "nonce-exposure: 1 MB read once, offline, for "
-                        "the whole list. It answers only about the "
-                        "repeated-nonce points its census resolved, "
-                        "which is a different and much cheaper "
-                        "question than `nodsig nonces address`)")
+    p.add_argument("--archive", **home.optional(
+        "archive", help="reveal-archive directory "
+                        "(enables the exposure capability)"))
+    p.add_argument("--index", **home.optional(
+        "index", help="outpoint-index-v3 directory "
+                      "(with --derived enables history "
+                      "and co-inputs)"))
+    p.add_argument("--derived", **home.optional(
+        "derived", help="outpoint-derived-v3 directory "
+                        "built from that same index"))
+    p.add_argument("--witness", **home.optional(
+        "witness",
+        help=f"{wit.FORMAT_TAG} directory (enables "
+             "nonce-exposure: 1 MB read once, offline, for "
+             "the whole list. It answers only about the "
+             "repeated-nonce points its census resolved, "
+             "which is a different and much cheaper "
+             "question than `nodsig nonces address`)"))
     add_node_args(p, rest=False, rpc_default=None,
                   rpc_help="node RPC URL (enables balance; the node is only "
                            "contacted if given)")
@@ -1716,7 +1721,10 @@ def main(argv=None):
 
     if bool(args.index) != bool(args.derived):
         p.error("--index and --derived go together (the derivatives are "
-                "bound to the index they were built from)")
+                "bound to the index they were built from)"
+                + (f"; {home.ENV} is set, so one of the two was found "
+                   "there and the other was not"
+                   if os.environ.get(home.ENV) else ""))
 
     # The expected failures of this tool are an archive/index directory
     # that is not one, or a node that will not answer: they get the

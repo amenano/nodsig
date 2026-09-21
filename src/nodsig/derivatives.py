@@ -175,6 +175,7 @@ from bisect import bisect_right
 from datetime import datetime, timezone
 
 from nodsig import outpoint_index as oi
+from nodsig import home
 from nodsig.artifact import (WallClock, declared_parent,
                              identity_fingerprint, make_identity, producer,
                              seal_manifest, sha_and_ladder, verify_sealed)
@@ -2367,18 +2368,18 @@ def main(argv=None):
     pr.add_argument("--derived", required=True)
 
     pt = sub.add_parser("stats", help="phase and counts (instant)")
-    pt.add_argument("--derived", required=True)
+    pt.add_argument("--derived", **home.required("derived"))
 
     pv = sub.add_parser("verify", help="re-read everything against "
                                        "the manifest (full audit)")
-    pv.add_argument("--derived", required=True)
+    pv.add_argument("--derived", **home.required("derived"))
     pv.add_argument("--index", help="the parent index, so the declared "
                                     "coverage can be confronted with the "
                                     "heights it actually holds")
 
     ph = sub.add_parser("history", help="one lock's whole story")
-    ph.add_argument("--derived", required=True)
-    ph.add_argument("--index", required=True)
+    ph.add_argument("--derived", **home.required("derived"))
+    ph.add_argument("--index", **home.required("index"))
     g = ph.add_mutually_exclusive_group(required=True)
     g.add_argument("--lock", help="hash160 of the scriptPubKey, hex")
     g.add_argument("--spk", help="raw scriptPubKey, hex (hashed here)")
@@ -2387,22 +2388,22 @@ def main(argv=None):
                          "always complete)")
 
     pf = sub.add_parser("fee", help="TXID → its fee")
-    pf.add_argument("--derived", required=True)
-    pf.add_argument("--index", required=True)
+    pf.add_argument("--derived", **home.required("derived"))
+    pf.add_argument("--index", **home.required("index"))
     pf.add_argument("txids", nargs="+", metavar="TXID",
                     help="txid in display order")
 
     pc = sub.add_parser("cospends", help="TXID or TXID:VOUT → what "
                                          "was spent together")
-    pc.add_argument("--derived", required=True)
-    pc.add_argument("--index", required=True)
+    pc.add_argument("--derived", **home.required("derived"))
+    pc.add_argument("--index", **home.required("index"))
     pc.add_argument("target", metavar="TXID[:VOUT]")
 
     psu = sub.add_parser("supply", help="check coinbase <= subsidy + "
                                         "fees on every block; fees, "
                                         "subsidy and coinbase per epoch")
-    psu.add_argument("--derived", required=True)
-    psu.add_argument("--index", required=True)
+    psu.add_argument("--derived", **home.required("derived"))
+    psu.add_argument("--index", **home.required("index"))
     psu.add_argument("--epoch", type=int, default=SUBSIDY_HALVING,
                      help="blocks per bucket (default: the halving "
                           "epoch, 210,000)")
@@ -2437,8 +2438,8 @@ def main(argv=None):
                          help="audit a sealed timeline: the two chain "
                               "tables against the meta, the parent and "
                               "the price table when given")
-    ptv.add_argument("--timeline", required=True,
-                     help="the directory `derived timeline` wrote")
+    ptv.add_argument("--timeline", **home.required(
+        "timeline", help="the directory `derived timeline` wrote"))
     ptv.add_argument("--derived", help="the derivatives it declares, to "
                                        "confirm the parent")
     ptv.add_argument("--price", metavar="DIR",

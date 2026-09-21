@@ -31,6 +31,7 @@ import sys
 import time
 
 from nodsig import reveal_archive as ra
+from nodsig import home
 from nodsig.artifact import (WallClock, declared_parent, identity_fingerprint,
                              make_identity, producer, seal_manifest,
                              verify_sealed)
@@ -610,18 +611,18 @@ def main(argv=None):
                    help="buffered rows before a run flush (memory knob)")
 
     s = sub.add_parser("stats", help="read a sealed table's manifest")
-    s.add_argument("--firstreveal", required=True)
+    s.add_argument("--firstreveal", **home.required("firstreveal"))
 
     v = sub.add_parser("verify", help="audit a sealed table; --archive adds "
                                       "the second road")
-    v.add_argument("--firstreveal", required=True)
+    v.add_argument("--firstreveal", **home.required("firstreveal"))
     v.add_argument("--archive",
                    help="the parent archive, to confront the declared "
                         "parent, the 1:1 row count and a sample of heights")
 
     bt = sub.add_parser("between", help="keys first revealed in a height "
                                         "window (a contiguous read)")
-    bt.add_argument("--firstreveal", required=True)
+    bt.add_argument("--firstreveal", **home.required("firstreveal"))
     bt.add_argument("--from", dest="from_h", type=int, required=True)
     bt.add_argument("--to", dest="to_h", type=int, required=True)
 

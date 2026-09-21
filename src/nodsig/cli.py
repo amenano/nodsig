@@ -54,6 +54,12 @@ what a machine holds and what building it cost. A verb per artefact is
 the rule because artefacts are what the formats promise; a question that
 ranges over all of them has nowhere else to live.
 
+One thing this dispatcher deliberately does NOT own: `NODSIG_HOME`, the
+directory a reading command looks in for an artifact nobody named. It
+lives in `home.py` and each command opts in where it declares the flag,
+so the arguments a tool sees are still exactly the ones typed here, and
+the same default holds from `python3 -m nodsig.<module>`.
+
 `nodsig curve` is the only group that is not one module: `deltas` and
 `dates` both work on the reuse curve (one differentiates it, the other
 puts real block dates on its heights), so they read as one noun even

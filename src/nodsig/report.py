@@ -44,6 +44,7 @@ import platform
 import sys
 
 from nodsig import __version__
+from nodsig import home
 from nodsig.recio import read_json
 
 MANIFEST_NAME = "manifest.json"
@@ -392,7 +393,8 @@ def main(argv=None):
         description="describe the artifacts you hold: identity, cost, "
                     "ancestry, and the machine that built them")
     for role in ROLES:
-        p.add_argument(f"--{role}", help=f"a sealed {role} directory")
+        p.add_argument(f"--{role}", **home.optional(
+            role, help=f"a sealed {role} directory"))
     args = p.parse_args(argv)
 
     try:

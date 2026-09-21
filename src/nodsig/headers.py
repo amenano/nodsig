@@ -135,6 +135,7 @@ import os
 import sys
 
 from nodsig import blockparse
+from nodsig import home
 from nodsig.artifact import (WallClock, identity_fingerprint,
                              make_identity, producer, seal_manifest,
                              verify_sealed)
@@ -947,18 +948,19 @@ def main(argv=None):
     pf.add_argument("--headers", required=True, help="archive directory")
 
     pv = sub.add_parser("verify", help="audit a sealed archive (every byte)")
-    pv.add_argument("--headers", required=True)
+    pv.add_argument("--headers", **home.required("headers"))
 
     pc = sub.add_parser("crosscheck",
                         help="recompute the Merkle roots from an index")
-    pc.add_argument("--headers", required=True)
-    pc.add_argument("--index", required=True, help="a sealed outpoint index")
+    pc.add_argument("--headers", **home.required("headers"))
+    pc.add_argument("--index", **home.required(
+        "index", help="a sealed outpoint index"))
 
     pt = sub.add_parser("stats", help="watermark and totals (instant)")
-    pt.add_argument("--headers", required=True)
+    pt.add_argument("--headers", **home.required("headers"))
 
     ps = sub.add_parser("show", help="decode a height range, human-readable")
-    ps.add_argument("--headers", required=True)
+    ps.add_argument("--headers", **home.required("headers"))
     ps.add_argument("--from", dest="from_height", type=int, required=True)
     ps.add_argument("--to", dest="to_height", type=int, required=True)
 

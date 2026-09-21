@@ -212,6 +212,7 @@ from nodsig import nonces
 # written here again, because they are what the cross-check is meant to
 # check.
 from nodsig import curve as cv
+from nodsig import home
 from nodsig.reuse_scan import (add_coemission_args, add_node_args,
                                add_window_args,
                                LOCK_TYPES, TYPE_ORDER, SAT, BlockFetcher, LockSet,
@@ -2460,7 +2461,7 @@ def main(argv=None):
 
     pv = sub.add_parser("verify", help="re-read a sealed archive "
                                        "against its manifest (full audit)")
-    pv.add_argument("--archive", required=True)
+    pv.add_argument("--archive", **home.required("archive"))
     pv.add_argument("--deep", action="store_true",
                     help="also read every record: order, uniqueness, the "
                          "record counts, the flag bits, and every "
@@ -2479,9 +2480,9 @@ def main(argv=None):
     pc = sub.add_parser("crosscheck",
                         help="derive the burnt locks from the archive "
                              "and compare with reuse_scan")
-    pc.add_argument("--archive", required=True)
-    pc.add_argument("--locks", required=True,
-                    help="directory produced by reuse_scan.py prepare")
+    pc.add_argument("--archive", **home.required("archive"))
+    pc.add_argument("--locks", **home.required(
+        "locks", help="directory produced by reuse_scan.py prepare"))
     pc.add_argument("--reuse-state",
                     help="reuse_scan state.json to compare against "
                          "(the cross-check proper)")
@@ -2530,7 +2531,7 @@ def main(argv=None):
                     help="narrow perimeter, as in crosscheck")
 
     pl = sub.add_parser("lookup", help="membership check of hex digests")
-    pl.add_argument("--archive", required=True)
+    pl.add_argument("--archive", **home.required("archive"))
     pl.add_argument("digests", nargs="+",
                     help="hex digests, 20 bytes (hash160) or 32 (sha256)")
 
