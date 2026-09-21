@@ -21,15 +21,26 @@ not the graph, not the snapshot, not the locks. The archive is a sorted set of
 every digest the chain has ever revealed, in three partitions, and a lookup is
 a membership check inside one of them.
 
-Measured on the real 1.x artifact at height 957,301 (the 2.0.0 archive drops
-the records that were never scripts and is measured again after its run):
+Measured on the sealed `reveal-archive-v4` artifact at height 957,301:
 
 | Partition | Records | Size | Consulted for |
 |---|---|---|---|
-| `archive_keys.bin` | 1,613,342,055 | 38.7 GB | `1…` (P2PKH) and 20-byte `bc1q…` (P2WPKH) |
-| `archive_scripts20.bin` | 976,147,552 | 23.4 GB | `3…` (P2SH) |
-| `archive_scripts32.bin` | 986,793,535 | 35.5 GB | 32-byte `bc1q…` (P2WSH) |
-| **whole archive** | **3.58 billion** | **97.7 GB** | |
+| `archive_keys_gNNNN.bin` | 1,700,173,027 | 40.8 GB | `1…` (P2PKH) and 20-byte `bc1q…` (P2WPKH) |
+| `archive_scripts20_gNNNN.bin` | 382,442,956 | 9.2 GB | `3…` (P2SH) |
+| `archive_scripts32_gNNNN.bin` | 108,390,278 | 3.9 GB | 32-byte `bc1q…` (P2WSH) |
+| **whole archive** | **2.19 billion** | **53.9 GB** | |
+
+`NNNN` is the generation the last fusion wrote, `0001` on an archive merged
+once. Each file has a small `.lad` ladder beside it, a search cache worth
+copying with it.
+
+The 1.x archive measured 97.7 GB for the same height, and the difference is
+all in the two script partitions: they held every candidate script (976 M and
+987 M records), where v4 keeps a candidate only when the chain proves it a
+script, which is what `<archive>/proof/` is for. That directory sits beside
+these files and is larger than they are (57.9 GB), but no lookup reads it: it
+matters for growing the archive, not for asking it, so a copy made to answer
+questions leaves it behind.
 
 **A public key is not an address, and `--key` says so.** Given a key
 (33/65-byte hex) or its bare hash160, `check --key` asks about the **point**:
@@ -51,8 +62,8 @@ partition answers with already cover that cosigner case at the key level.
 **An address kind consults exactly one partition.** That is the mapping in
 `check_addresses.KINDS`, and it has a consequence worth knowing before you size
 a disk: if the addresses you care about are single-key ones, which is what a
-modern wallet hands you, the file that answers them is `archive_keys.bin`
-alone, **38.7 GB** of the 97.7. A Taproot address (`bc1p…`) needs no file at
+modern wallet hands you, the file that answers them is `archive_keys_gNNNN.bin`
+alone, **40.8 GB** of the 53.9. A Taproot address (`bc1p…`) needs no file at
 all: the program *is* the key, so the answer is settled by the encoding.
 
 Keeping one partition instead of three costs you one thing, and it is worth
@@ -116,7 +127,7 @@ reveals; sometimes it is how the coin was paid in the first place. This page kee
 the output it actually got rather than an edited prediction, so it is re-taken
 whenever the artifacts are rebuilt.
 A lookup is a binary search over a sorted file: about 31 seeks over the
-1,700,173,027 rows of the 41 GB key partition, and fewer when the search
+1,700,173,027 rows of the 40.8 GB key partition, and fewer when the search
 ladder is present. Nothing is loaded into
 memory, so the cost does not grow with how much of the archive you keep.
 

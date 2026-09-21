@@ -25,7 +25,7 @@ on a slow setup.
 | | one exposure question |
 |---|---|
 | node plus a script | a full rescan of block history, every time you ask |
-| nodsig | ~35 seeks in a sorted file, **under a second**, offline |
+| nodsig | ~31 seeks in a sorted file, **under a second**, offline |
 
 One case the script cannot reach at all: a key revealed as a cosigner inside
 **somebody else's** script is not in your address's history, because there is no
@@ -37,11 +37,11 @@ not a history of locks.
 The chain is ordered by time. Every question here is ordered by something else:
 by lock, by outpoint, by digest, by nonce.
 
-Sorting 3.58 billion digests is the expensive part. The artifact is that
-ordering, materialised once instead of recomputed per question. That is also the
-rule this project uses to decide whether an artifact deserves to exist: it must
-materialise an ordering that is missing, otherwise it is a cache and does not
-get built.
+Sorting 2.19 billion digests, out of 8.02 billion sightings, is the expensive
+part. The artifact is that ordering, materialised once instead of recomputed
+per question. That is also the rule this project uses to decide whether an
+artifact deserves to exist: it must materialise an ordering that is missing,
+otherwise it is a cache and does not get built.
 
 ## 3. What you actually keep
 
@@ -51,14 +51,15 @@ everything. What a given question needs is smaller, sometimes zero:
 | To ask | Keep | Size at height 957,301 |
 |---|---|---|
 | A Taproot address (`bc1p…`) | nothing: the program is the key | **0** |
-| Exposure, single-key addresses (`1…`, 20-byte `bc1q…`) | `archive_keys.bin` | **38.7 GB** |
-| Exposure, any address kind | the whole archive | **97.7 GB** |
+| Exposure, single-key addresses (`1…`, 20-byte `bc1q…`) | `archive_keys_gNNNN.bin` | **40.8 GB** |
+| Exposure, any address kind | the whole archive, without its `proof/` | **53.9 GB** |
 | …plus dated history, fees, co-spends | the index and its derivatives | +415 GB |
 | Which locks were first spent in a height window | `<firstspend>` (from the derivatives) | +37 GB |
-| Which keys were first revealed in a height window | `<firstreveal>` (from the archive) | +37 GB |
+| Which keys were first revealed in a height window | `<firstreveal>` (from the archive) | +34 GB |
 
-The archive figures are the 1.x archive's; the 2.0.0 archive drops the
-records that were never scripts and is measured again after its run.
+The archive figures are the sealed `reveal-archive-v4`'s. `<archive>/proof/`
+adds 57.9 GB beside it, which no query reads and only growing the archive
+needs: [`exposure-check.md`](exposure-check.md) has the partitions one by one.
 
 The largest artifact, `<graph>` at ~301 GB, answers none of the questions above:
 it is the material the index is built from, read only by `blockstats` and by a
