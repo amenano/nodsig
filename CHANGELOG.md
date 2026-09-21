@@ -23,13 +23,6 @@ fingerprint, never by a tag.
 
 ## 3.3.0 (every artifact rebuilt, and four fingerprints that did not move)
 
-> **Not tagged yet.** The rebuild and these pages are done; the release waits
-> on the second road's cross-check (`reuse scan` then `archive crosscheck`,
-> a full extra pass over the chain) and on re-sealing the two artifacts this
-> run did not rebuild, the nonce census and the graph. Until the tag is
-> pushed, this entry describes what is on `main`, not a version you can check
-> out.
-
 No command changed, no format changed, and nothing here asks you to rebuild
 anything. What this release carries is the rebuild itself: every artifact
 from the archive up was built again, from scratch, on a chain whose tip had
@@ -84,6 +77,16 @@ fingerprint moved, each for a reason the format table already gave.
   1,715,819 and 216,699. Redrawn from the rebuilt chain, **eight of the eleven
   figures come out byte for byte identical**; the three that move are the two
   above and the nonce resolutions.
+- **The second road was walked again, and the two roads meet.** `reuse scan`
+  crossed the whole chain from the node in 25 h 04, counting reuse with
+  different code and different structures from the archive's, and
+  `archive crosscheck` put the two results side by side: the same
+  fingerprint, `353300dd…`, on the same perimeter, down to the last satoshi
+  of each of the four lock types (8,820,680 locks struck, 5,085,431.66987009
+  BTC). The curve was not compared on totals but row by row, all 96 of them
+  on the 10,000-block grid, replayed from the archive. This is the check that
+  keeps the second road alive, and it is the reason the reuse figures in
+  these pages can be read as a result rather than as one program's opinion.
 - **The price table is a single public series now.** The block price rests on
   CoinMetrics community alone, dropping the hourly exchange series: a CSV in a
   public git repository that anybody can fetch and re-import to the same
