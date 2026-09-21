@@ -181,9 +181,15 @@ Building the archive means one pass over block history against your own node,
 about two and a half days on a slow setup. You may not want to pay that, and you do not
 have to: the archive is a function of public chain data, contains nothing about
 the machine that built it and nothing about what anyone ever looked up in it,
-so it is safe to publish and safe to accept.
+so it can be published, and it can be accepted from someone else.
 
-What you should not do is accept it on someone's word. Check it:
+What you should not do is accept it on someone's word, and it is worth being
+exact about what each check buys. The two commands below establish that the
+file is the artifact it says it is, whole and well built. That it is *what the
+chain contains* comes from somewhere else: the fingerprint they print has to
+match one published by a builder independent of whoever gave you the file, or
+one you obtained yourself. [`trust-model.md`](trust-model.md) draws that line
+for every artifact. Check it:
 
 ```sh
 nodsig archive verify --archive <archive-dir>          # bytes, ladders, fingerprint

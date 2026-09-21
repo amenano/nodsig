@@ -85,10 +85,14 @@ nodsig archive verify --archive <archive-dir>          # bytes, ladders, fingerp
 nodsig archive verify --archive <archive-dir> --deep   # …and every record
 ```
 
-So the cost is not necessarily "days of scanning plus a hundred gigabytes". It can be
-"a hundred gigabytes copied from removable media and verified locally". Determinism is what
-makes accepting a file from a stranger safe: you do not trust the sender, you
-recompute the fingerprint.
+So the cost is not necessarily "days of scanning plus tens of gigabytes". It can
+be "tens of gigabytes copied from removable media and verified locally".
+Determinism is what makes that possible, and it is worth saying exactly how:
+`verify` tells you the file is the artifact it claims to be, and the
+fingerprint it prints is what you hold against one published by a builder
+independent of the sender. You do not trust the sender; you do need that second
+fingerprint, or your own build. [`trust-model.md`](trust-model.md) says what
+each check buys.
 
 ## 5. Three things an ad hoc script does not give you
 
@@ -187,6 +191,8 @@ node. Those solve a different problem: script history, to serve a wallet.
 
 - [`exposure-check.md`](exposure-check.md): the exposure question end to end,
   including the smallest disk that answers it.
+- [`trust-model.md`](trust-model.md): what a fingerprint proves and what it does
+  not, artifact by artifact.
 - [`ARTIFACTS.md`](ARTIFACTS.md): what each artifact is, who reads it, how large
   it gets, and which parts you can skip.
 - [`../README.md`](../README.md): the build sequence and its measured costs.

@@ -172,6 +172,13 @@ about what the blocks cost, so why pay for the disk twice.
 a node can and cannot be asked, how little you actually have to keep, and when
 none of this is worth building.
 
+And the sentence above has a limit worth reading before citing a number: a
+fingerprint says *which* bytes, and that they are what the chain contains is
+established by rebuilding them or by an independent builder who did.
+[`docs/trust-model.md`](docs/trust-model.md) draws that line artifact by
+artifact: what is bound to the chain, by what, and what can be re-checked from
+the files that are kept.
+
 ## The questions, one at a time
 
 The same seven, with what the answer contains and where its edges are.
