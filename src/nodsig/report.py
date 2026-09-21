@@ -35,6 +35,19 @@ property of the tool.
 An artifact whose directory holds no manifest is reported as unsealed
 rather than skipped: a report silent about what it could not read is a
 report that looks complete.
+
+WHAT YOU CAN ASK, AND WHAT IS MISSING
+=====================================
+Which artifacts a question needs, in which order they are built, which
+heights have to agree: that logic lived in the documents only, and a
+reader found out by reading. The page now says it about the set in
+hand: each question with its command when its artifacts are sealed, with
+what it waits on when they are not, and what builds the missing ones.
+It PRINTS a build and never runs one: a pass of days over the chain is
+not something a describing command starts, and an orchestrator would be
+a second thing to keep correct. Costs are left to the documents, which
+measure them; a figure typed into this file would be one machine's, and
+stale at the next rebuild.
 """
 
 import argparse
@@ -57,6 +70,67 @@ MANIFEST_NAME = "manifest.json"
 # directory ever reaches the output.
 ROLES = ("graph", "headers", "archive", "nonces", "witness", "index",
          "derived", "firstspend", "firstreveal")
+
+# What a reader can ask of the artifacts in hand: the question, the
+# roles its command reads, the command. Reading commands only, written
+# the way they are typed with NODSIG_HOME set (see home.py), so no line
+# here has a directory to name; every command and flag below is held
+# against the real parsers by tests/test_report.py.
+QUESTIONS = (
+    ("Has this address's public key already appeared on the chain?",
+     ("archive",), "`nodsig check --stdout <address>`"),
+    ("…and the lock's dated history, fees and co-spends with it?",
+     ("archive", "index", "derived"),
+     "`nodsig check --stdout <address>`, then the "
+     "`nodsig derived history --lock <hash160>` line it prints"),
+    ("What is this outpoint's whole story?",
+     ("index",), "`nodsig index lookup <txid>:<vout>`"),
+    ("What fee did this transaction pay, and what was spent with it?",
+     ("index", "derived"),
+     "`nodsig derived fee <txid>` and `nodsig derived cospends <txid>`"),
+    ("Which nonce points repeat, over the whole chain?",
+     ("nonces",), "`nodsig nonces groups`"),
+    ("What did each repeated point turn out to be?",
+     ("witness",), "`nodsig nonces witness-verify`"),
+    ("Did one of this address's signatures reuse its nonce point?",
+     ("index", "derived"),
+     "`nodsig nonces address <address>` (asks your node for the blocks)"),
+    ("Which locks were first spent in a height window?",
+     ("firstspend", "index"),
+     "`nodsig firstspend between --from <height> --to <height>`"),
+    ("Which keys were first revealed in a height window?",
+     ("firstreveal",),
+     "`nodsig firstreveal between --from <height> --to <height>`"),
+    ("Do these headers still chain, and do they commit to the index?",
+     ("headers", "index"),
+     "`nodsig headers verify` and `nodsig headers crosscheck`"),
+)
+
+# What builds a role that is missing. These DO name directories, as
+# placeholders: a command that writes an artifact takes no default, and
+# this page prints a build, it never runs one.
+BUILT_BY = {
+    "archive": "`nodsig archive scan --end <H> --archive <archive>`, then "
+               "`nodsig archive merge --archive <archive>`",
+    "graph": "the `--graph <graph>` co-emission of `nodsig archive scan`, "
+             "the one pass over the chain, then "
+             "`nodsig graph fingerprint --graph <graph>`",
+    "headers": "the `--headers <headers>` co-emission of "
+               "`nodsig archive scan`, then "
+               "`nodsig headers fingerprint --headers <headers>`",
+    "nonces": "the `--nonces <nonces>` co-emission of "
+              "`nodsig archive scan`, then "
+              "`nodsig nonces merge --nonces <nonces>`",
+    "witness": "`nodsig nonces resolve --nonces <nonces> --witness <witness> "
+               "--index <index>` (asks your node)",
+    "index": "`nodsig index build --graph <graph> --index <index> "
+             "--end <H>`",
+    "derived": "`nodsig derived build --index <index> --out <derived>`",
+    "firstspend": "`nodsig firstspend build --derived <derived> "
+                  "--out <firstspend>`",
+    "firstreveal": "`nodsig firstreveal build --archive <archive> "
+                   "--out <firstreveal>`",
+}
 
 
 class ReportError(RuntimeError):
@@ -316,6 +390,56 @@ def _ancestry(found):
     return lines
 
 
+def _askable(found):
+    """(rows, the roles something is waiting on). A role counts when it
+    is SEALED: a directory with no manifest answers nothing yet, and a
+    page that listed its questions as ready would claim a build that has
+    not finished."""
+    sealed = {role for role, _d, m in found if m is not None}
+    there = {role for role, _d, _m in found}
+    rows, wanted = [], []
+    for question, roles, command in QUESTIONS:
+        missing = [r for r in roles if r not in sealed]
+        if not missing:
+            rows.append((question, command))
+            continue
+        wanted += [r for r in missing if r not in wanted]
+        rows.append((question, "needs " + ", ".join(
+            f"**{r}**" + (" (here, not sealed)" if r in there else "")
+            for r in missing)))
+    return rows, wanted
+
+
+def _caveats(found):
+    """What is cheap to see from the manifests and expensive to find out
+    later. Observations, not judgements: two heights in one set is
+    legitimate, and the reader has to know it is the case."""
+    lines = []
+    heights = {}
+    for role, _d, m in found:
+        if m is not None:
+            heights.setdefault(int(m["identity"]["coverage"]["to"]),
+                               []).append(role)
+    if len(heights) > 1:
+        spans = "; ".join(f"{', '.join(roles)} through {h:,}"
+                          for h, roles in sorted(heights.items()))
+        lines.append(
+            f"- **More than one height in this set** ({spans}). An answer "
+            "assembled from them carries each artifact's own perimeter, "
+            "and says so; an artifact and its parent must still share "
+            "one, which the section on ancestry checks.")
+    for role, directory, m in found:
+        if (role == "archive" and m is not None and not os.path.exists(
+                os.path.join(directory, "proof", MANIFEST_NAME))):
+            lines.append(
+                "- **The archive has no `proof/` beside it.** Every lookup "
+                "still answers, but `archive scan` will refuse to extend "
+                "this archive: the proof is what lets a later run decide a "
+                "candidate the way the first one did, and rebuilding it is "
+                "the whole scan again.")
+    return lines
+
+
 def _table(head, rows):
     out = ["| " + " | ".join(head) + " |",
            "|" + "|".join("---" for _ in head) + "|"]
@@ -333,6 +457,26 @@ def render(found, out=sys.stdout):
     p("## What these are\n\n")
     p("\n".join(_table(("Artifact", "Format", "Heights", "On disk",
                         "Fingerprint"), _artifact_rows(found))) + "\n\n")
+
+    rows, wanted = _askable(found)
+    p("## What you can ask of them\n\n")
+    p("\n".join(_table(("Question", "Command, or what it waits on"),
+                       rows)) + "\n\n")
+    p(f"The commands are written as they are typed with `{home.ENV}` "
+      "naming the directory that holds these artifacts under their "
+      "roles' names; without it, each takes its artifact's flag "
+      "(`--archive <dir>`, `--index <dir>`, …).\n\n")
+    if wanted:
+        p("What builds the ones that are missing, in the order the work "
+          "is done. A build names what it reads and what it writes, so "
+          "these carry placeholders; `docs/build-and-query.md` has the "
+          "sequence, its costs and the three ordering rules.\n\n")
+        p("\n".join(f"- **{role}**: {BUILT_BY[role]}"
+                    for role in BUILT_BY if role in wanted) + "\n\n")
+    caveats = _caveats(found)
+    if caveats:
+        p("## Worth knowing before you rely on them\n\n")
+        p("\n".join(caveats) + "\n\n")
 
     cost, shared = _cost_rows(found)
     p("## What they cost\n\n")

@@ -143,6 +143,82 @@ def test_the_shared_pass_is_flagged_where_it_appears(pair):
     assert "51 h 56 min" in out.getvalue()
 
 
+def test_it_says_what_can_be_asked_and_what_is_missing(pair):
+    """With an index and its derivatives in hand, the questions they
+    answer come with their command; the ones that wait on something
+    name it, and the page says what builds it."""
+    graph, index, derived = pair
+    page = _page(graph=graph, index=index, derived=derived)
+    assert "## What you can ask of them" in page
+    assert "`nodsig index lookup <txid>:<vout>`" in page
+    assert "`nodsig derived fee <txid>`" in page
+    row = next(line for line in page.splitlines()
+               if line.startswith("| Has this address's public key"))
+    assert "needs **archive**" in row and "nodsig check" not in row
+    assert "- **archive**: `nodsig archive scan" in page
+    # what is there is not offered as something to build
+    assert "- **index**:" not in page and "- **derived**:" not in page
+
+
+def test_an_unsealed_artifact_answers_nothing_yet(tmp, pair):
+    _graph, index, _derived = pair
+    unsealed = os.path.join(tmp, "derived-in-progress")
+    os.makedirs(unsealed)
+    page = _page(index=index, derived=unsealed)
+    row = next(line for line in page.splitlines()
+               if line.startswith("| What fee did this transaction pay"))
+    assert "needs **derived** (here, not sealed)" in row
+
+
+def test_two_heights_in_one_set_are_said_not_judged(tmp, pair):
+    """An index rewound below its derivatives' height is a set with two
+    perimeters in it: legitimate for `check`, and worth a line."""
+    graph, index, derived = pair
+    page = _page(index=index, derived=derived)
+    assert "More than one height" not in page
+    blocks, _txids = toi.index_chain()
+    short_index = os.path.join(tmp, "short-index")
+    oi.run_build(graph, short_index, end_height=max(blocks) - 1)
+    page = _page(index=short_index, derived=derived)
+    assert "**More than one height in this set**" in page
+
+
+def test_every_command_the_page_prints_exists(pair):
+    """The page tells people what to type. Each `nodsig …` span in the
+    two tables is held against the real parser: the group and the
+    subcommand resolve, and every flag named is one that `-h` lists."""
+    import re
+    import subprocess
+    import sys
+    src = os.path.join(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))), "src")
+    env = {**os.environ, "PYTHONPATH": os.pathsep.join(
+        [src, os.environ.get("PYTHONPATH", "")])}
+    texts = [c for _q, _r, c in rp.QUESTIONS] + list(rp.BUILT_BY.values())
+    spans = [span for text in texts
+             for span in re.findall(r"`(nodsig [^`]+)`", text)]
+    assert len(spans) >= len(rp.QUESTIONS)
+    helps = {}
+    for span in spans:
+        words = span.split()[1:]
+        verb = [w for w in words[:2] if not w.startswith(("-", "<"))]
+        if verb[0] in ("check",):
+            verb = verb[:1]
+        key = tuple(verb)
+        if key not in helps:
+            got = subprocess.run(
+                [sys.executable, "-m", "nodsig", *verb, "-h"],
+                env=env, capture_output=True, text=True)
+            assert got.returncode == 0, (span, got.stderr)
+            helps[key] = got.stdout
+        for flag in re.findall(r"(--[a-z-]+)", span):
+            assert flag in helps[key], f"{span}: {flag} is not a flag of it"
+    for role in rp.BUILT_BY:
+        assert role in rp.ROLES
+    for _q, roles, _c in rp.QUESTIONS:
+        assert set(roles) <= set(rp.ROLES)
+
+
 def test_naming_no_artifact_is_an_error():
     with pytest.raises(rp.ReportError):
         rp.run_report({})

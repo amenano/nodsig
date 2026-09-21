@@ -254,9 +254,14 @@ nodsig report --graph <graph> --headers <headers> --archive <archive> \
 ```
 
 Markdown on stdout, read out of the manifests: what each artifact is and covers,
-its fingerprint, what each step cost in wall time, which artifact each one
-descends from and whether the artifacts in hand confirm it, and the machine that
-did the work. It names no directory and asks the host for nothing that
+its fingerprint, **which questions the set in hand answers, each with its
+command, and for the ones that wait on something, what is missing and what
+builds it** (printed, never run), what each step cost in wall time, which
+artifact each one descends from and whether the artifacts in hand confirm it,
+and the machine that did the work. Two things that are cheap to see here and
+expensive to find out later get a line of their own: a set that holds more than
+one height, and an archive whose `proof/` is gone. With `NODSIG_HOME` set,
+`nodsig report` with no flag describes everything it finds there. It names no directory and asks the host for nothing that
 identifies it, so the page can be published as it comes out. What only a person
 knows (the device the artifacts sit on, where the node runs, over which
 transport) comes out as blank lines to fill in, because those decide the
