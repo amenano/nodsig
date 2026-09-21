@@ -94,11 +94,26 @@ WHAT BECOMES REPEATABLE OFFLINE (AND WHAT DOES NOT)
        full pass. Said here so that "three of four" is never read as
        four
 
-Proof of work is not checked either, and that is a different kind of
-absence: it would be easy (the id must be under the target `bits`
-encodes) but it would be a consensus opinion, and this toolkit takes its
-chain from a node it is run beside. What the archive attests is that
-these headers are a chain and that they are the ones the scan saw.
+Proof of work is MEASURED, and the line between measuring it and
+holding a consensus opinion is drawn on purpose. Whether a header's id
+is under the target its own `bits` encode is arithmetic on the 80 bytes
+kept here, the same kind of fact as check 1, and so is the work that
+target stands for: `verify` and `fingerprint` count the headers that
+meet their target and add the work up, into the `chainwork` a node
+prints for the same tip. Whether `bits` is the RIGHT value for its
+height is the retarget rule, which is consensus, and is not
+reimplemented here: a mistake in it would raise a false alarm over a
+true chain. It is not needed for what the number is for. A forged chain
+that declares an easy target adds up to a chainwork that gives it away,
+and one that declares a real target has to pay for it.
+
+So what the archive attests is that these headers are a chain, that
+they are the ones the scan saw, and how much work it took to make them:
+the one number here that nobody could afford to fabricate, and the one
+to compare with any independent source. It is reported, never raised,
+for the reason the BIP 34 tally is: a test chain does not mine its
+blocks, and an audit that refused it would say nothing about the chain
+that matters.
 
 THE FORMAT — headers-v2
 =======================
@@ -630,6 +645,27 @@ def coinbase_scripts(headers_dir):
 # The audit: the chain, rebuilt from the bytes
 # ---------------------------------------------------------------------------
 
+def target_of(bits):
+    """The target a header's compact `bits` encode, or None when they
+    encode none a block can carry (the sign bit set, zero, or past 256
+    bits). Arithmetic on four bytes of the header, not a rule about
+    which value a height should have."""
+    exponent, mantissa = bits >> 24, bits & 0x007FFFFF
+    if bits & 0x00800000 or not mantissa:
+        return None
+    target = (mantissa >> 8 * (3 - exponent) if exponent <= 3
+              else mantissa << 8 * (exponent - 3))
+    if not target or target >> 256:
+        return None
+    return target
+
+
+def work_of(target):
+    """The expected number of hashes a header under `target` stands
+    for: 2^256 / (target + 1), the figure a node sums into chainwork."""
+    return (1 << 256) // (target + 1)
+
+
 def audit_chain(headers_dir):
     """Re-derive from the file alone what the scan checked once: every
     block id, and every link.
@@ -639,12 +675,27 @@ def audit_chain(headers_dir):
     seal and `verify` call it, so the number they print is produced by
     one implementation and they cannot disagree.
 
-    Returns (records, last height, last id, BIP 34 tally).
+    The proof of work is measured in the same pass and reported, never
+    raised (see the note at the top of this module): the work of a
+    header that misses its own target is not added, so the chainwork of
+    a chain that was not mined is the small number it should be.
+
+    Returns (records, last height, last id, BIP 34 tally, proof-of-work
+    tally).
     """
     prev_id = None
     records = 0
     height = None
+    met = chainwork = 0
+    first_miss = None
     for height, rec in iter_records(headers_dir):
+        target = target_of(rec["bits"])
+        if (target is not None
+                and int.from_bytes(rec["hash"], "little") <= target):
+            met += 1
+            chainwork += work_of(target)
+        elif first_miss is None:
+            first_miss = height
         if prev_id is not None and rec["prev_hash"] != prev_id:
             raise HeaderError(
                 f"height {height:,} does not link to {height - 1:,}: its "
@@ -663,7 +714,10 @@ def audit_chain(headers_dir):
             continue
         declared += 1
         agreed += (claim == h)
-    return records, height, prev_id, {"declared": declared, "agreed": agreed}
+    pow_tally = {"met": met, "of": records,
+                 "chainwork": f"{chainwork:064x}", "first_miss": first_miss}
+    return (records, height, prev_id,
+            {"declared": declared, "agreed": agreed}, pow_tally)
 
 
 def _print_bip34(tally):
@@ -683,6 +737,25 @@ def _print_bip34(tally):
              "rule's activation"))
 
 
+def _print_pow(tally, last_id):
+    """The proof-of-work line. The chainwork is printed the way a node
+    prints it, so the comparison is between two strings."""
+    met, of = tally["met"], tally["of"]
+    if met == of:
+        print(f"ok  proof of work: all {of:,} headers are under the target "
+              "their own bits encode")
+    else:
+        print(f"..  proof of work: {met:,} of {of:,} headers are under the "
+              f"target their own bits encode, the first that is not at "
+              f"height {tally['first_miss']:,} — not a mined chain, or not "
+              "this one")
+    print(f"    chainwork {tally['chainwork']}")
+    print(f"    compare with `bitcoin-cli getblockheader "
+          f"{blockparse.hash_hex(last_id)}`, field `chainwork`, on any "
+          "node you trust: the retarget rule is the node's to check, the "
+          "sum is anybody's")
+
+
 # ---------------------------------------------------------------------------
 # fingerprint — the seal
 # ---------------------------------------------------------------------------
@@ -697,7 +770,7 @@ def run_fingerprint(headers_dir):
     ancestry starts, not something that hangs off one.
     """
     state = _load_state(headers_dir)
-    records, last, last_id, bip34 = audit_chain(headers_dir)
+    records, last, last_id, bip34, pow_tally = audit_chain(headers_dir)
 
     covered_from = state["from_height"]
     if state["last_height"] != last:
@@ -731,6 +804,7 @@ def run_fingerprint(headers_dir):
             "blocks": records,
             "coinbase_bytes": state["sizes"]["coinbase"],
             "bip34": bip34,
+            "pow": pow_tally,
             "files": files,
             "caches": {},
             "reconstruction": (
@@ -746,6 +820,7 @@ def run_fingerprint(headers_dir):
           f"({records:,} blocks)")
     print(f"  coinbase scripts {state['sizes']['coinbase']:>16,} bytes")
     _print_bip34(bip34)
+    _print_pow(pow_tally, last_id)
     print(f"fingerprint: {fingerprint}")
     return fingerprint
 
@@ -760,11 +835,12 @@ def run_verify(headers_dir):
     chain proves they are a chain — two independent roads, and the
     second one is the whole reason this artifact exists."""
     manifest = _load_manifest(headers_dir)
-    records, last, _id, bip34 = audit_chain(headers_dir)
+    records, last, last_id, bip34, pow_tally = audit_chain(headers_dir)
     covered_from = manifest["identity"]["coverage"]["from"]
     print(f"ok  {records:,} headers, each linking to the one before it"
           + (" (from genesis)" if covered_from == GENESIS else ""))
     _print_bip34(bip34)
+    _print_pow(pow_tally, last_id)
     verify_sealed(headers_dir, manifest, FORMAT_TAG, HeaderError,
                   fp_order=[name for name, _ in FILES],
                   coverage_from_data=lambda: ("exact", last))

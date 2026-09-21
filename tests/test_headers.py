@@ -50,6 +50,7 @@ import tempfile
 import pytest
 
 from nodsig import block_dates as bd
+from nodsig import blockparse as bp
 from nodsig import headers as hd
 from nodsig import outpoint_index as oi
 from nodsig import reveal_archive as ra
@@ -259,7 +260,7 @@ def test_coinbase_scripts(archive, chain):
     check(hd.bip34_height(GENESIS_SCRIPT) == 486604799,
           "the genesis-style script declares a number that is not a height")
 
-    _records, _last, _id, tally = hd.audit_chain(archive)
+    _records, _last, _id, tally, _pow = hd.audit_chain(archive)
     check(tally == {"declared": 6, "agreed": 5},
           f"BIP 34 tally: {tally}, expected 6 declared and 5 agreeing")
     print("ok  coinbase scripts: read back through the offsets, BIP 34 "
@@ -294,6 +295,70 @@ def test_seal_and_verify(archive, capsys):
               f"verify must state the chain it rebuilt, got:\n{out}")
     print("ok  seal and verify: fingerprint pinned, coverage rebuilt from "
           "the data, chain rebuilt from the bytes")
+
+
+# The real genesis header: the one place the suite can hold the proof of
+# work arithmetic against figures everybody knows. Its id, and the
+# chainwork a node reports for it, 2^256 / (target + 1) = 0x100010001.
+GENESIS_HEADER = bytes.fromhex(
+    "01000000" + "00" * 32
+    + "3ba3edfd7a7b12b27ac72c3e67768f617fc81bc3888a51323a9fb8aa4b1e5e4a"
+    + "29ab5f49" + "ffff001d" + "1dac2b7c")
+
+
+def test_the_target_and_the_work_are_the_ones_everybody_knows():
+    header, _ = bp.parse_header(GENESIS_HEADER)
+    check(bp.hash_hex(header.hash) == "000000000019d6689c085ae165831e934f"
+          "f763ae46a2a6c172b3f1b60a8ce26f", "this is not the genesis header")
+    target = hd.target_of(header.bits)
+    check(target == 0xFFFF << 208, f"target of 0x1d00ffff: {target:#x}")
+    check(int.from_bytes(header.hash, "little") <= target,
+          "the genesis id is under its own target")
+    check(hd.work_of(target) == 0x100010001,
+          f"genesis work {hd.work_of(target):#x}, a node says 0x100010001")
+    for bits, why in ((0x1D80FFFF, "the sign bit is set"),
+                      (0x1D000000, "the mantissa is zero"),
+                      (0x23FFFFFF, "the target does not fit 256 bits"),
+                      (0x01000001, "the target shifts down to zero")):
+        check(hd.target_of(bits) is None, f"{bits:#x}: {why}, no target")
+    check(hd.target_of(0x207FFFFF) == 0x7FFFFF << 232,
+          "the widest compact target still has one")
+    print("ok  proof of work: target and work are arithmetic on the "
+          "header, and agree with the figures a node prints for genesis")
+
+
+def test_the_proof_of_work_is_reported_never_raised(archive, capsys):
+    """A chain nobody mined seals and verifies as before, and the page
+    says what it is: how many headers are under their own target, the
+    first that is not, and a chainwork that adds up only what was
+    earned. Outside the fingerprint, which stays the pinned one."""
+    _records, _last, _id, _bip34, tally = hd.audit_chain(archive)
+    check(tally["of"] == 6 and tally["met"] < 6,
+          f"the test chain is not mined: {tally}")
+    check(tally["first_miss"] is not None, "the first miss is named")
+    earned = 0
+    for _h, rec in hd.iter_records(archive):
+        target = hd.target_of(rec["bits"])
+        if target and int.from_bytes(rec["hash"], "little") <= target:
+            earned += hd.work_of(target)
+    check(tally["chainwork"] == f"{earned:064x}",
+          "chainwork adds up the headers that met their target, and only "
+          "those")
+
+    fp = hd.run_fingerprint(archive)
+    check(fp == GOLDEN, "measuring the work must not move the fingerprint")
+    manifest = json.load(open(os.path.join(archive, hd.MANIFEST_NAME)))
+    check(manifest["build"]["pow"] == tally,
+          "the tally is sealed in `build`, beside the BIP 34 one")
+    check("pow" not in manifest["identity"], "and not in the identity")
+    hd.run_verify(archive)
+    out = capsys.readouterr().out
+    check("proof of work:" in out and "not a mined chain" in out,
+          f"verify must say the chain was not mined, got:\n{out}")
+    check(f"chainwork {tally['chainwork']}" in out,
+          "and print the chainwork the way a node prints it")
+    print("ok  proof of work: reported on a chain that was not mined, "
+          "sealed outside the identity")
 
 
 def test_resume_equals_oneshot(tmp, chain):

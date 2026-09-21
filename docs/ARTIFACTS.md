@@ -231,7 +231,12 @@ the 80 bytes it kept, and `headers crosscheck --index` recomputes every Merkle
 root from the index's own txids. Check 3 cannot be repeated from anything kept,
 because the witness is deliberately not archived, and saying so is part of the
 claim.
-See [Headers-v2](formats/Headers-v2.md).
+
+`headers verify` also measures the proof of work: how many headers are under
+the target their own bits encode, and the chainwork that adds up to, printed
+the way a node prints it so that it can be held against any independent
+source. It is the anchor between these files and the chain everybody else
+means by the name. See [Headers-v2](formats/Headers-v2.md).
 
 ## Sealed, fingerprinted, and named by their children
 

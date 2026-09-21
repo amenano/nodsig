@@ -88,11 +88,44 @@ Check 3 is also the strongest **binding** between two artifacts in this project:
 it proves the index's transactions are exactly the ones the chain committed to,
 in the order it committed to them.
 
-**Proof of work is not checked**, and that absence is a different kind: it would
-be easy (the id must be under the target `bits` encodes) but it would be a
-consensus opinion, and this toolkit takes its chain from a node it runs beside.
-What the archive attests is that these headers are a chain, and that they are
-the ones the scan saw.
+### Proof of work: measured, and where the line is
+
+Whether a header's id is under the target its own `bits` encode is arithmetic
+on the 80 bytes kept here, the same kind of fact as check 1, and so is the work
+that target stands for, `2^256 / (target + 1)`. `verify` and `fingerprint`
+count the headers that meet their target and add the work up into the
+**chainwork** a node prints for the same tip, 64 hex digits, so the comparison
+is between two strings:
+
+```
+ok  proof of work: all 957,302 headers are under the target their own bits encode
+    chainwork 00000000000000000000000000000000000000013657d6784ec97d727c30cf2a
+```
+
+Whether `bits` is the *right* value for its height is the retarget rule. That
+is consensus, and it is **not** reimplemented here: a mistake in it would raise
+a false alarm over a true chain, and this toolkit takes its chain from a node
+it runs beside. It is also not needed for what the number is for. A fabricated
+chain that declares an easy target adds up to a chainwork that gives it away;
+one that declares a real target has to pay for it. So the chainwork is the one
+figure in this project that nobody could afford to forge, and the one to hold
+against an independent source: `bitcoin-cli getblockheader <tip>` on any node
+you trust, field `chainwork`. The rule is the node's to check, the sum is
+anybody's.
+
+It is **reported, never raised**, like the BIP 34 tally and for a reason of the
+same kind: a test chain does not mine its blocks, and an audit that refused it
+would say nothing about the chain that matters. The work of a header that
+misses its target is not added, and the report names the first height that
+does. The tally lands in `build.pow`, outside the identity: measuring the work
+does not move the fingerprint, and an archive sealed before 3.4.0 verifies
+unchanged.
+
+What the archive attests, then: these headers are a chain, they are the ones
+the scan saw, and this is the work it took to make them. What that binds is the
+header chain, and through `crosscheck --index` the index's transactions. The
+revelation archive is bound to the chain by re-execution only, since the
+witness it distills is not kept.
 
 ### The BIP 34 tally
 
@@ -110,7 +143,8 @@ slipped. The figure lands in `build.bip34` and in both reports.
 [Artifact](../contracts/Artifact.md): an `identity` the fingerprint covers (the
 tag `headers-v2`, the coverage `0..H`, the three file digests in the
 order `headers, coinbase, coinbase_off`) and a `build` block that does not
-(record counts, the last block id, the BIP 34 tally, the file names).
+(record counts, the last block id, the BIP 34 tally, the proof-of-work
+tally, the file names).
 
 The coverage is **exact** for this format: one record per height means the
 file's own length states the watermark, so `verify` derives it and refuses a
