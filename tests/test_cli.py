@@ -137,6 +137,21 @@ class TestCommandSurface(unittest.TestCase):
         for group in PUBLIC_SURFACE:
             self.assertIn(group, buf.getvalue())
 
+    def test_the_version_is_the_changelog_s_first_entry(self):
+        """v3.3.0 shipped with __version__ still saying 3.2.0: the tag
+        was right, the number the tool printed and sealed into every
+        producer field was not. The first `## ` heading of the changelog
+        is the release being prepared, and the number must be that one."""
+        import re
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        with open(os.path.join(root, "CHANGELOG.md"), encoding="utf-8") as f:
+            first = next(line for line in f if line.startswith("## "))
+        m = re.match(r"## (\d+\.\d+\.\d+)", first)
+        self.assertIsNotNone(m, first)
+        self.assertEqual(cli.__version__, m.group(1),
+                         "src/nodsig/__init__.py says one version, the "
+                         "changelog's first entry another")
+
     def test_version(self):
         buf = io.StringIO()
         with self.assertRaises(SystemExit), contextlib.redirect_stdout(buf):

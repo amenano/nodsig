@@ -21,6 +21,107 @@ contract, the **CLI** is convenience, and `reveal-archive-v2` inside a tool
 numbered 1.3.0 is not a discrepancy. Artifacts are identified by their
 fingerprint, never by a tag.
 
+## 3.4.0 (the artifacts in hand say what they answer, and the headers say what they cost to make)
+
+A release about the distance between the artifacts and the person holding
+them. Nothing in it changes a format or moves a fingerprint. What it changes
+is how much a reader has to know before asking a question, and how much a
+figure carries with it when it is cited.
+
+- **`NODSIG_HOME`.** Set it to a directory that holds the artifacts under
+  their roles' names (`archive`, `index`, `derived`, …) and the reading
+  commands find them without being named: `nodsig check --stdout <address>`,
+  `nodsig index lookup <txid>:<vout>`, `nodsig report`. The variable fills in
+  a directory a reading command would otherwise refuse to run without, and
+  nothing else: a command that writes an artifact takes no default, for its
+  output or its inputs, and an optional flag takes none either, because
+  there the flag is the request (`archive scan --graph` turns on a
+  co-emission). `check` and `report`, which speak about the artifacts as a
+  set, take every backend they find and say which. An explicit flag wins,
+  and with the variable unset every command behaves exactly as before. The
+  list of commands that take a default is written out by hand in the suite
+  and held against the parsers, so a default added to a builder fails by
+  name.
+- **`report` says what you can ask.** Which artifacts a question needs, in
+  which order they are built and which heights have to agree was knowledge
+  the documents held. The page now says it about the set in hand: each
+  question with its command when its artifacts are sealed, what it waits on
+  when they are not, and what builds the missing ones, in build order. It
+  prints a build and never runs one, and it still names no directory. Two
+  things cheap to see from the manifests and expensive to discover later get
+  a line: a set holding more than one height, and an archive whose `proof/`
+  is gone.
+- **`check` names the lock.** `derived history` takes a lock, not an
+  address, on purpose; `check` is the command that decodes addresses, so
+  beside every history summary that has events it now prints the lock in
+  the form `derived history --lock` takes. Text report only: the CSV and
+  `check-report-v3` are unchanged.
+- **`headers verify` measures the proof of work.** Whether a header's id is
+  under the target its own bits encode is arithmetic on the 80 bytes kept,
+  and so is the work that target stands for; `verify` and `fingerprint`
+  count the headers that meet their target and add the work up into the
+  **chainwork** a node prints for the same tip, so the comparison is between
+  two strings. Whether bits is the *right* value for its height is the
+  retarget rule: that is consensus, it is not reimplemented, and it is not
+  needed, since a chain that declares an easy target adds up to a chainwork
+  that gives it away. Reported, never raised, like the BIP 34 tally; the
+  tally lands in `build.pow`, outside the identity. On the chain through
+  957,301 all 957,302 headers meet their target, in nine seconds, and the
+  chainwork, `…013657d6784ec97d727c30cf2a`, is the one the node reports for
+  that tip.
+- **What a fingerprint proves, on one page.** `docs/trust-model.md`
+  separates the file being the artifact it claims to be (which `verify`
+  establishes) from the artifact being what the chain contains (which only
+  a rebuild or an independent builder's fingerprint establishes, and so far
+  the published fingerprints come from one builder) from the question of
+  which chain (the header archive's tip and chainwork). It lists, artifact
+  by artifact, what binds it to the chain and whether that can be re-checked
+  from what is kept.
+- **The README keeps the map, `docs/building.md` keeps the figures.** The
+  README opened with the largest number in the project; it now opens with
+  what a question actually needs, from nothing for a Taproot address to one
+  artifact of 54 GB for the exposure question. Its long middle moved,
+  verbatim, to `docs/building.md`: the sequence with the reasoning behind
+  each flag, every measured cost and the history of those measurements. The
+  archive figures three pages still quoted from the 1.x generation (97.7 GB,
+  3.58 billion records) are the sealed v4 archive's: 53.9 GB, 2.19 billion,
+  40.8 GB of it the key partition, read off the files.
+
+**Two corrections to 3.3.0, which stays as it was published.** The tag
+`v3.3.0` carries `__version__ = "3.2.0"`: `nodsig --version` from that tag
+answers 3.2.0, and an artifact built from it declares `producer.version`
+3.2.0 beside the right commit. This release bumps the number and adds a
+test holding it to the first entry of this file. And that entry says the
+1.x artifacts had been sealed "a year and two majors earlier": two majors,
+yes; the run that sealed them completed in August 2026 and the rebuild ran
+on 16-20 September 2026, weeks apart, not a year. The comparison stands as
+described; the interval was misstated.
+
+### Command line
+
+Nothing renamed, nothing removed. Added: the `NODSIG_HOME` variable; two
+sections in `report`; one line per address in `check`'s text report; the
+proof-of-work lines in `headers verify` and `headers fingerprint`.
+
+### Formats
+
+Nothing changed. `headers-v2` manifests gain `build.pow`, declared and
+outside the fingerprint, as `build.bip34` already was; an archive sealed
+without it verifies unchanged.
+
+### Do your artifacts still work?
+
+Yes, all of them, with the same fingerprints, and nothing here needs
+rebuilding.
+
+### Documentation
+
+README (rewritten around the map), `docs/building.md` (new, the moved
+figures), `docs/trust-model.md` (new), `docs/build-and-query.md`
+(`NODSIG_HOME`, `report`), `docs/formats/Headers-v2.md` (proof of work),
+`docs/ARTIFACTS.md`, `docs/exposure-check.md`, `docs/why-artifacts.md`,
+`docs/nonce-check.md`, `docs/quickstart.md`.
+
 ## 3.3.0 (every artifact rebuilt, and four fingerprints that did not move)
 
 No command changed, no format changed, and nothing here asks you to rebuild
