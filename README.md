@@ -12,10 +12,12 @@ them to someone else and they check them by recomputing that fingerprint.
 
 How much you build depends on the question. A Taproot address is answered
 from its encoding alone, with nothing on disk; "has this key already appeared
-on the chain?" needs one artifact of 54 GB, or its 41 GB key partition for
-single-key addresses; dated histories, fees and co-spends need the index and
-its derivatives, another 415 GB. Building every artifact there is costs about
-130 hours and 960 GB at today's height, measured rather than projected, and
+on the chain?" needs one artifact, 54 GB to keep once built (41 GB of it, the
+key partition, answers single-key addresses) and more while it is being
+built, since the scan writes ~145 GB of runs and the fusion needs room beside
+them; dated histories, fees and co-spends need the index and its derivatives,
+another 415 GB. Building every artifact there is costs about 130 hours and
+960 GB at today's height, measured rather than projected, and
 [`docs/building.md`](docs/building.md) says step by step which part of that
 each question needs. Nothing has to be installed or built to see how it
 behaves: the first commands under *Try it* run from a clone, with no node.
@@ -132,6 +134,10 @@ settled, everything that needs an artifact you have not built comes back
 perimeter of what any answer can mean is printed whether you asked for it or
 not. Which is the behaviour you want to see from a tool before trusting it with
 a question that matters.
+
+What the same command prints with the archive plugged in, three real
+addresses all of them exposed and one of them since height 1, is the run in
+[`docs/exposure-check.md`](docs/exposure-check.md).
 
 The next size up from trying is an afternoon:
 [`docs/quickstart.md`](docs/quickstart.md) walks two small exercises with your
@@ -306,7 +312,8 @@ Five ideas, each of which shows up everywhere in the code.
   compiler is there and skipped when it is not, or by hand from a checkout with
   `PYTHONPATH=src python3 -m nodsig.native.build`; a package without it runs
   the reference, unchanged. The scan takes the C road only when it is not
-  co-emitting: a scan with `--graph`, `--graph-digest` or `--nonces` reads the
+  co-emitting: a scan with `--graph`, `--graph-digest` (a rescan that checks
+  an existing graph instead of writing one) or `--nonces` reads the
   parsed block for the other artifact and keeps the Python road, so the block
   figure above is what a scan of the archive alone gains. `--headers` rides on
   either road, and the fusion's stage is native whenever the kernel is built. The archive's manifest says which road scanned it, outside the
@@ -338,21 +345,52 @@ artifact is defined by where it stopped, and pieces cut at different heights
 do not join.
 
 ```sh
+# only for the census and the reuse figures (questions 5 and 6): the snapshot
 bitcoin-cli dumptxoutset /path/snapshot.dat        # note the height it reports
 nodsig census /path/snapshot.dat                   # the set, by lock type and age
 nodsig reuse prepare --out <locks-dir> --height <S> /path/snapshot.dat
 
+# the one pass over the chain: the exposure question needs --archive alone,
+# --headers is cheap and worth having, --graph and --nonces are decisions
 nodsig archive scan --rpc <url> --cookie-file <path/.cookie> \
                     --end <H> --archive <archive-dir> \
-                    --graph <graph-dir> --headers <headers-dir> [--nonces <nonces-dir>]
+                    --headers <headers-dir> [--graph <graph-dir>] [--nonces <nonces-dir>]
 nodsig archive merge --archive <archive-dir>       # fuse runs, seal, fingerprint
+nodsig archive verify --archive <archive-dir> --deep
 
+# only for histories, fees and co-spends (questions 3 and 4): from the graph
 nodsig index   build --graph <graph-dir> --index <index-dir> --end <H>
 nodsig derived build --index <index-dir> --out <derived-dir>
 
-nodsig check --archive <archive-dir> --index <index-dir> --derived <derived-dir> \
+nodsig check --archive <archive-dir> [--index <index-dir> --derived <derived-dir>] \
              --stdout <address> [<address> …]
 ```
+
+`--end <H>` is required and is the height everything else is cut at: the
+snapshot's, if you took one. `--rest` sits beside `--rpc`, not in its place:
+same URL, and the blocks are then fetched from the node's REST interface on
+the same port (`rest=1` in `bitcoin.conf`), which authenticates nobody, so
+that step carries no credential.
+
+The scan's flags are the one choice that cannot be revisited without walking
+the chain again, so here is what each one costs and what you give up without it:
+
+| flag | cost | without it |
+|---|---|---|
+| (none) | ~145 GB of runs, 111.8 GB once merged | you still get the revelation archive: the exposure question |
+| `--graph` | 300-400 GB | no index, no derivatives, no block statistics: they are all built from it |
+| `--headers` | ~150 MB | dates need the node, and the scan's integrity checks cannot be repeated offline |
+| `--nonces` | 59.7 GB, ~10% CPU | the nonce census does not exist and no later pass can rebuild it |
+| `--rest` | none, saves ~half the bytes on the wire | JSON-RPC instead: correct, slower, needs a credential |
+
+The hours, measured at height 957,301 on the machine
+[`docs/building.md`](docs/building.md) describes (a node over a LAN, the
+artifacts on a USB disk): the scan **~56 h** with the nonce census co-emitted,
+31 h 49 for a pass that emitted the archive and the headers alone;
+`archive merge` **4 h 43**; `archive verify --deep` ~1 h 20; `index build`
+**20 h 39**; `derived build` **21 h 52**. Checking everything you built costs
+about a twentieth of building it, and a local node with the artifacts on an
+NVMe disk should do better than every one of those figures.
 
 What a given question needs, at height 957,301:
 
@@ -378,10 +416,36 @@ rather than one address, `check --address-book` and
 [`docs/exposure-check.md`](docs/exposure-check.md).
 
 With `NODSIG_HOME` set to a directory that holds the artifacts under their
-roles' names, the reading commands find them without being named:
+roles' names (`archive`, `graph`, `headers`, `nonces`, `witness`, `index`,
+`derived`, `firstspend`, `firstreveal`, `locks`, `timeline`; a symlink does
+for one kept on another disk), the reading commands find them without being
+named:
 `nodsig check --stdout <address>`, `nodsig index lookup <txid>:<vout>`,
 `nodsig report`. The commands that write an artifact take no default, on
 purpose.
+
+### Checking what you built
+
+`index`, `derived`, `archive`, `headers` and
+`nonces` carry `verify`, which re-reads every byte against the manifest and rebuilds
+every search ladder from the file it indexes, so a ladder is checked for being
+*right* and not merely intact. `index` and `derived` also carry `stats`, which
+reports from the manifest alone and is instant, and `graph fingerprint`
+re-reads a graph and prints its fingerprint, which is the same check under
+another name.
+
+`archive verify --deep` adds the pass the digests cannot replace: every record
+read, digests strictly ascending (order and uniqueness at once), the flag
+bits the format defines, every first-seen height inside the claimed coverage,
+whose highest value then holds the watermark to a floor, and the proof: every
+script the archive holds is a program the chain created, and no candidate the
+proof set aside is. It
+costs a second read of the archive, so it is a flag and not the default, and
+without it the report says the coverage was taken on trust rather than staying
+silent about it. The recipe, for anyone writing their own reader, is in
+[`formats/RevealArchive-v4.md`](docs/formats/RevealArchive-v4.md). Checking everything you built costs about a twentieth of
+building it, and [`docs/trust-model.md`](docs/trust-model.md) says what that
+check establishes and what only an independent build can.
 
 ### What you can ask, once they exist
 
@@ -547,6 +611,16 @@ been completed against them. The changelog says, release by release, which
 artifacts each one invalidates. Rebuild
 from the same chain to the same height and the same numbers come back: that is
 the only claim this project makes, and it is checkable rather than persuasive.
+
+The fingerprints of the current run are not listed anywhere as numbers to
+check against, on purpose: a fingerprint is a fact about one build at one
+height under one set of formats, every rebuild retires it, and
+[`docs/gallery.md`](docs/gallery.md#reproducing-any-of-it) says why a
+repository that quoted it in five places would get five chances to be wrong.
+They appear where a transcript carries them (the run in
+[`docs/exposure-check.md`](docs/exposure-check.md) names the archive's), and
+the one to hold yours against is the one printed by your own build or by an
+independent one at the same height.
 
 Which revision built an artifact is recorded **in the artifact**, under
 `build.producer`: the version always, the commit and whether the tree carried

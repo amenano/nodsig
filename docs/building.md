@@ -4,8 +4,9 @@ This page was the long middle of the README: the build sequence with the
 reasoning behind each flag, the measured cost of every step and the history
 of those measurements, what to keep afterwards, the two costs that are
 properties of the formats, and what a run at chain scale has exercised. The
-README keeps the map; this keeps the figures. The same sequence with the
-reasoning taken out, as a page to follow while a build runs, is
+README keeps the map; this is the page to read **before** deciding what to
+build, and it keeps the figures. The same sequence with the reasoning taken
+out, as a page to follow **while** a build runs, is
 [`build-and-query.md`](build-and-query.md); what each artifact is, is
 [`ARTIFACTS.md`](ARTIFACTS.md).
 

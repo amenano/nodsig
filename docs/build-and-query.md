@@ -2,8 +2,10 @@
 
 The command sequence and nothing else: what to run, in which order, and what
 you may skip. Why any of it exists is elsewhere ([README](../README.md) for the
-reasoning, [ARTIFACTS](ARTIFACTS.md) for what each file is, `nodsig <command>
--h` for every option). This page is meant to be followed while a build runs.
+map, [building.md](building.md) for what each step costs and the reasoning
+behind each flag, which is the page to read before deciding what to build,
+[ARTIFACTS](ARTIFACTS.md) for what each file is, `nodsig <command> -h` for
+every option). This page is meant to be followed while a build runs.
 
 Sections 0 to 6 are the sequence. The [list at the end](#every-command-in-one-list)
 is the whole command surface, including what a build never runs: nothing in the
