@@ -17,15 +17,19 @@ command surface is deliberately NOT the module layout: it is one verb
 per ARTEFACT, stable by contract.
 
     nodsig census                 the UTXO-set census
-    nodsig reuse      prepare|scan|stats
+    nodsig reuse      prepare|scan|stats|verify
     nodsig archive    scan|merge|verify|crosscheck|derive|curve|lookup
     nodsig nonces     merge|verify|rewind|groups|lookup|address|bench
                       resolve|witness-verify
     nodsig headers    fingerprint|verify|crosscheck|stats|show
     nodsig graph      stats|fingerprint|show|digest
-    nodsig index      build|stats|verify|lookup
-    nodsig derived    build|stats|verify|history|fee|cospends
-    nodsig blockstats build|summary
+    nodsig index      build|rewind|stats|verify|lookup
+    nodsig derived    build|rewind|stats|verify|history|fee|cospends
+                      supply|timeline|timeline-verify
+    nodsig firstspend build|stats|verify|between|rewind
+    nodsig firstreveal build|stats|verify|between
+    nodsig blockstats build|summary|verify
+    nodsig price      import|series-verify|build|stats|verify|at|daily
     nodsig curve      deltas|dates
     nodsig check                  the address checker
     nodsig report                 what you hold, and what it cost
