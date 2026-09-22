@@ -36,7 +36,7 @@ nodsig census /path/snapshot.dat --csv census.csv
 ```
 
 One streaming pass over the snapshot: about 18 minutes at height 957,301 on
-the machine of the README's table, after the minutes to an hour the node
+the machine of [`building.md`](building.md)'s cost table, after the minutes to an hour the node
 takes to write the snapshot itself. It prints a summary and writes a CSV:
 for every script type, how many coins stand and how much value they hold,
 split by the height they were created at, per halving epoch and per
@@ -56,7 +56,7 @@ this slice is the one that fits in an afternoon: the same sequence the README
 describes at full height, at a small fraction of the cost.
 
 A note on the numbers here, in this repository's own terms: the times below
-are **projections from rates measured at full height** (the README's table),
+are **projections from rates measured at full height** ([`building.md`](building.md)'s cost table),
 not measurements of this slice. Once you have run it, `nodsig report` prints
 what yours actually cost, read from the manifests the builders sealed, and
 that figure is the one worth quoting.
@@ -161,6 +161,6 @@ that join belongs to a build whose `--end` is the snapshot's height, which
 is the full build. The same goes for any question about the present: this
 slice knows September 2012 and nothing after it.
 
-When the afternoon convinces you, the README's cost table is the map for the
+When the afternoon convinces you, [`building.md`](building.md)'s cost table is the map for the
 real thing. Pick one height and use it everywhere; the artifacts you built
 here do not join with it, but every command you just ran is the same.

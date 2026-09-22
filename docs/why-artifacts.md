@@ -18,7 +18,7 @@ set has discarded.
 
 So the query that objection imagines is not a query. It is a pass over block
 history: fetch every block, parse every input, reconstruct every scriptSig and
-witness, hash. That pass is in the README's cost table at about **two and a
+witness, hash. That pass is in [`building.md`](building.md)'s cost table at about **two and a
 half days**
 on a slow setup.
 

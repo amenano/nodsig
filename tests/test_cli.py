@@ -185,7 +185,11 @@ class TestTheRunnablePagesNameRealCommands(unittest.TestCase):
 
     ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     BUILD_PAGE = os.path.join(ROOT, "docs", "build-and-query.md")
-    PAGES = (os.path.join(ROOT, "README.md"), BUILD_PAGE)
+    PAGES = (os.path.join(ROOT, "README.md"), BUILD_PAGE,
+             os.path.join(ROOT, "docs", "building.md"))
+    # The README keeps the map and shows few commands on purpose; the
+    # two build pages carry the sequence.
+    AT_LEAST = {"README.md": 5}
 
     @staticmethod
     def _commands(path):
@@ -225,8 +229,10 @@ class TestTheRunnablePagesNameRealCommands(unittest.TestCase):
         # A parser that quietly matched nothing would make every
         # assertion below vacuous.
         for page in self.PAGES:
-            with self.subTest(page=os.path.basename(page)):
-                self.assertGreater(len(self._commands(page)), 10)
+            name = os.path.basename(page)
+            with self.subTest(page=name):
+                self.assertGreater(len(self._commands(page)),
+                                   self.AT_LEAST.get(name, 10))
 
     def test_every_command_on_the_pages_is_real(self):
         for page in self.PAGES:
