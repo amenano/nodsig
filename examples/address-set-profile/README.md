@@ -20,6 +20,28 @@ node keeps the chain:
 | had its key already appeared on-chain before the sweep | every key ever revealed (**by key**) |
 | were its coins ever spent together with coins under other locks | the inputs of each past spending transaction (**by spend**) |
 
+```mermaid
+flowchart LR
+    subgraph ask["question about each address"]
+        q1["first funded when?<br/>payments received?<br/>ever spent?"]
+        q2["key revealed before<br/>a given height?"]
+        q3["coins spent together<br/>with other locks?"]
+    end
+    subgraph order["order the question needs"]
+        o1["by lock"]
+        o2["by key"]
+        o3["by spending transaction"]
+    end
+    subgraph answer["what answers it"]
+        a1["derivatives:<br/>history"]
+        a2["reveal archive"]
+        a3["derivatives:<br/>transaction inputs"]
+    end
+    q1 --> o1 --> a1
+    q2 --> o2 --> a2
+    q3 --> o3 --> a3
+```
+
 A node answers none of these without re-reading its whole block history, once
 per question. With the artifacts, each is a lookup. The script here answers
 all three for a list of addresses and prints only aggregates, which is the form
