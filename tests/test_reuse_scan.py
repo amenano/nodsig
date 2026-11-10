@@ -261,7 +261,11 @@ def build_snapshot_file(path, base_hash_hex=None):
         f.write(out)
 
 
-def test_prepare(tmp, base_hash_hex=None, height=None, headers_dir=None):
+def test_prepare(tmp):
+    check_prepare(tmp)
+
+
+def check_prepare(tmp, base_hash_hex=None, height=None, headers_dir=None):
     """`height` is the snapshot's height as `dumptxoutset` would print
     it; a fixture with a fake base hash gets a fake height too, since
     the manifest refuses to exist without one."""
@@ -304,7 +308,7 @@ def test_locks_are_verified_against_their_manifest(tmp):
     it). Every number downstream of a LockSet is a published one, and
     the cross-check builds its LockSet from the SAME files: unverified,
     a broken file would make both roads agree on garbage."""
-    locks_dir = test_prepare(tmp)
+    locks_dir = check_prepare(tmp)
     with open(os.path.join(locks_dir, rs.MANIFEST_NAME)) as f:
         manifest = json.load(f)
     entry = rs.locks_types(manifest)["p2pkh"]
@@ -976,7 +980,7 @@ def test_the_scan_confronts_its_last_block_with_the_snapshot(tmp):
     blocks = build_chain()
     base3 = os.path.join(tmp, "base3")
     os.makedirs(base3)
-    locks = test_prepare(base3, base_hash_hex=blocks[3][0], height=3)
+    locks = check_prepare(base3, base_hash_hex=blocks[3][0], height=3)
     server, url = serve(blocks)
     try:
         try:
@@ -1204,7 +1208,7 @@ def test_prepare_reads_the_height_off_the_header_archive(tmp):
     hdir = th.emit(tmp, blocks, "hdr_for_prepare")
     base3 = os.path.join(tmp, "base3_headers")
     os.makedirs(base3)
-    locks = test_prepare(base3, base_hash_hex=blocks[3][0], headers_dir=hdir)
+    locks = check_prepare(base3, base_hash_hex=blocks[3][0], headers_dir=hdir)
     manifest = rs._load_manifest(locks)
     check(rs.locks_height(manifest) == 3
           and manifest["build"]["height_source"] == "headers"
@@ -1216,7 +1220,7 @@ def test_prepare_reads_the_height_off_the_header_archive(tmp):
     base3b = os.path.join(tmp, "base3_declared")
     os.makedirs(base3b)
     declared = rs._load_manifest(
-        test_prepare(base3b, base_hash_hex=blocks[3][0], height=3))
+        check_prepare(base3b, base_hash_hex=blocks[3][0], height=3))
     check(declared["fingerprint"] == manifest["fingerprint"],
           "the height's source must not change the lock set's name")
     snapshot = os.path.join(tmp, "foreign.dat")
@@ -1237,7 +1241,7 @@ def test_a_wrong_declared_height_is_caught_by_the_scan(tmp):
     blocks = build_chain()
     wrong = os.path.join(tmp, "base3_wrong")
     os.makedirs(wrong)
-    locks = test_prepare(wrong, base_hash_hex=blocks[3][0], height=2)
+    locks = check_prepare(wrong, base_hash_hex=blocks[3][0], height=2)
     server, url = serve(blocks)
     try:
         rs.run_scan(locks, url, "user:pass", 3, os.path.join(tmp, "cp_wrong"),
@@ -1346,7 +1350,7 @@ def main():
     with tempfile.TemporaryDirectory() as tmp:
         test_locks_are_verified_against_their_manifest(tmp)
     with tempfile.TemporaryDirectory() as tmp:
-        locks_dir = test_prepare(tmp)
+        locks_dir = check_prepare(tmp)
         test_scan(tmp, locks_dir)
         test_checkpoint_survives_a_crash_between_its_writes(tmp, locks_dir)
         test_resume_refuses_a_different_perimeter(tmp, locks_dir)

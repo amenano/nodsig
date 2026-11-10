@@ -284,6 +284,10 @@ def built(tmp):
 
 
 def test_build_matches_model(tmp):
+    check_build_matches_model(tmp)
+
+
+def check_build_matches_model(tmp):
     blocks, txids = index_chain()
     graph = emit_graph(tmp, blocks)
     index = os.path.join(tmp, "index")
@@ -1101,7 +1105,7 @@ def test_verify_confirms_the_parent_it_was_handed(built):
 
 def main():
     with tempfile.TemporaryDirectory() as tmp:
-        graph, index, txids = test_build_matches_model(tmp)
+        graph, index, txids = check_build_matches_model(tmp)
         quartet = (tmp, graph, index, txids)
         test_determinism_multirun(quartet)
         test_append_equals_rebuild(quartet)

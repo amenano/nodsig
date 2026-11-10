@@ -190,6 +190,10 @@ def dbuilt(tmp):
 
 
 def test_build_matches_model(tmp):
+    check_build_matches_model(tmp)
+
+
+def check_build_matches_model(tmp):
     blocks, txids = derived_chain()
     graph, index = build_index(tmp, blocks)
     derived = os.path.join(tmp, "derived")
@@ -1054,7 +1058,7 @@ def test_verify_catches_a_wrong_ladder(dbuilt):
 def main():
     with tempfile.TemporaryDirectory() as tmp:
         graph, index, derived, txids, locks = \
-            test_build_matches_model(tmp)
+            check_build_matches_model(tmp)
         sextet = (tmp, graph, index, derived, txids, locks)
         test_determinism_tiny(sextet)
         test_append_equals_rebuild(tmp)

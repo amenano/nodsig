@@ -99,6 +99,10 @@ def test_compactsize():
 # ---------------------------------------------------------------------------
 
 def test_emission_content(tmp, blocks):
+    check_emission_content(tmp, blocks)
+
+
+def check_emission_content(tmp, blocks):
     server, url = trs.serve(blocks)
     graph = os.path.join(tmp, "graph_a")
     try:
@@ -433,6 +437,10 @@ def _digest_scan(tmp, blocks, reference, name, end=4, resume_at=None):
 
 
 def test_digest_agrees(tmp, blocks, graph_oneshot):
+    check_digest_agrees(tmp, blocks, graph_oneshot)
+
+
+def check_digest_agrees(tmp, blocks, graph_oneshot):
     """The digest of a rescan must match the archive that rescan did
     not write — and it must reach that result interval by interval,
     against the per-run digests the reference already recorded."""
@@ -680,9 +688,9 @@ def main():
     ge.GraphEmitter.__init__ = tiny_init
     try:
         with tempfile.TemporaryDirectory() as tmp:
-            locks_dir = trs.test_prepare(tmp)
+            locks_dir = trs.check_prepare(tmp)
             blocks = trs.build_chain()
-            graph = test_emission_content(tmp, blocks)
+            graph = check_emission_content(tmp, blocks)
             test_host_independence(tmp, blocks, locks_dir, graph)
             test_determinism(tmp, blocks, graph)
             test_crash_window(tmp, blocks, graph)
@@ -691,7 +699,7 @@ def main():
             test_run_names_from_the_state_stay_inside_the_directory(tmp)
             test_a_run_the_disk_lost_is_refused_on_load(tmp)
             test_cli_readers(graph)
-            test_digest_agrees(tmp, blocks, graph)
+            check_digest_agrees(tmp, blocks, graph)
             test_digest_host_independence(tmp, blocks, locks_dir, graph)
             test_digest_catches_a_change(tmp, blocks, graph)
             test_digest_resume(tmp, blocks, graph)

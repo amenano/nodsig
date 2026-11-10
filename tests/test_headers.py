@@ -183,7 +183,7 @@ def emit(tmp, blocks, name="headers", end=None, host=ra):
         else:
             locks = os.path.join(tmp, name + "_l")
             os.makedirs(locks, exist_ok=True)
-            rs.run_scan(trs.test_prepare(locks),
+            rs.run_scan(trs.check_prepare(locks),
                         url, "user:pass", end or max(blocks),
                         os.path.join(tmp, name + "_host"),
                         batch_size=2, checkpoint_every=2, headers_dir=hdir)

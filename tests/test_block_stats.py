@@ -130,6 +130,10 @@ def test_verify_is_the_shared_audit(tmp, graph):
 
 
 def test_build_matches_parsed(tmp, blocks, graph):
+    check_build_matches_parsed(tmp, blocks, graph)
+
+
+def check_build_matches_parsed(tmp, blocks, graph):
     out = os.path.join(tmp, "stats.csv")
     bs.run_build(graph, out)
     got = list(bs.read_series(out))
@@ -276,7 +280,7 @@ def main():
     blocks = trs.build_chain()
     with tempfile.TemporaryDirectory() as tmp:
         graph = build_graph(tmp)
-        out = test_build_matches_parsed(tmp, blocks, graph)
+        out = check_build_matches_parsed(tmp, blocks, graph)
         test_fingerprint_deterministic(tmp, graph)
         test_the_recorded_digest_is_the_files_own_sha256(tmp, graph)
         test_summary(tmp, blocks, out)

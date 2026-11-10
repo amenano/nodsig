@@ -103,6 +103,10 @@ def archive_records(archive_dir, cat, with_height=False):
 # ---------------------------------------------------------------------------
 
 def test_scan_content(tmp, blocks):
+    check_scan_content(tmp, blocks)
+
+
+def check_scan_content(tmp, blocks):
     server, url = trs.serve(blocks)
     archive = os.path.join(tmp, "archive_a")
     try:
@@ -261,7 +265,6 @@ def test_merge_determinism(tmp, blocks, archive_oneshot):
           "re-merge with no new runs changed the fingerprint")
     print("ok  merge: appended+fused == one-shot, byte for byte; "
           "re-merge is a no-op")
-    return archive_b
 
 
 def test_merge_crash_recovery(tmp, blocks):
@@ -861,7 +864,7 @@ def test_the_two_roads_meet_on_the_forms_v3_sees(tmp, blocks):
     under every perimeter."""
     base5 = os.path.join(tmp, "base5")
     os.makedirs(base5)
-    locks5 = trs.test_prepare(base5, base_hash_hex=blocks[5][0], height=5)
+    locks5 = trs.check_prepare(base5, base_hash_hex=blocks[5][0], height=5)
     server, url = trs.serve(blocks)
     archive = os.path.join(tmp, "archive_roads5")
     try:
@@ -1209,8 +1212,8 @@ def test_golden_fingerprint(archive):
 def main():
     with tempfile.TemporaryDirectory() as tmp:
         blocks = trs.build_chain()
-        locks_dir = trs.test_prepare(tmp, base_hash_hex=blocks[4][0], height=4)
-        archive = test_scan_content(tmp, blocks)
+        locks_dir = trs.check_prepare(tmp, base_hash_hex=blocks[4][0], height=4)
+        archive = check_scan_content(tmp, blocks)
         test_scan_content_v3(tmp, blocks)
         test_stale_run_cleanup(tmp, blocks)
         test_merge_determinism(tmp, blocks, archive)
