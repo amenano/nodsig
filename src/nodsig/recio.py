@@ -14,6 +14,9 @@ so the mechanics live here once:
     network mount. When many sorted files are merged at once, every open
     source holds a buffer, so the sources of one merge SHARE a fixed budget
     (`budgeted_slab`) — otherwise a fragmented archive is un-mergeable.
+    They also share the process's limit on open files, which the same
+    call raises as far as the merge needs, or refuses with the number
+    (`reserve_descriptors`).
   - `read_slabs` / `read_fixed` — stream a fixed-width file, by slab or by
     record. `read_fixed` verifies the sealed sha256 on the way; the files are
     trusted for nothing (like the blocks): a truncated file or a sha mismatch
@@ -56,6 +59,11 @@ IO_CHUNK = 8 * 2**20
 _MERGE_READ_BUDGET = 512 * 2**20
 _MIN_SLAB = 256 * 2**10
 
+# What a merge holds open besides its sources: the output and its ladder,
+# the state and lock files, the three standard streams, whatever the
+# interpreter keeps for itself. A margin, not a count.
+_FD_HEADROOM = 64
+
 
 class RecordError(RuntimeError):
     """Default type raised on a corrupt or truncated record file. Callers
@@ -93,12 +101,56 @@ def checked_name(name, error=RecordError, what="file"):
     return name
 
 
-def budgeted_slab(n_sources):
+def reserve_descriptors(n_sources, error=RecordError):
+    """Make sure the process may hold `n_sources` files open at once,
+    before the first of them is opened, or refuse and say the number.
+
+    A many-way merge opens every source together. A full-chain scan
+    leaves more than a thousand runs in one category, and the usual
+    soft limit on open files is 1,024: without this the merge dies on
+    whichever file crosses the limit, hours into the build, with an
+    `[Errno 24]` that names a file and not a remedy.
+
+    The soft limit is the process's own to raise, up to the hard one,
+    so that is done here and only as far as the merge needs. When the
+    hard limit is too low nothing here can help, and the answer is the
+    number to ask for. A platform without these limits has nothing to
+    check."""
+    try:
+        import resource
+    except ImportError:
+        return
+    need = n_sources + _FD_HEADROOM
+    soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+    unlimited = resource.RLIM_INFINITY
+    if soft == unlimited or soft >= need:
+        return
+    if hard == unlimited or hard >= need:
+        try:
+            resource.setrlimit(resource.RLIMIT_NOFILE, (need, hard))
+            return
+        except (ValueError, OSError):
+            pass
+    raise error(
+        f"this step merges {n_sources:,} sorted files at once and needs "
+        f"{need:,} open files; this process may hold {soft:,} and cannot "
+        f"raise that far. Raise the limit where the command is launched "
+        f"(`ulimit -n {need}` in the shell, `LimitNOFILE={need}` in a "
+        "systemd unit) and run it again: it stopped before opening them")
+
+
+def budgeted_slab(n_sources, error=RecordError):
     """Per-source read-buffer size when n_sources are merged together,
     sharing _MERGE_READ_BUDGET so total buffering stays bounded however
-    fragmented the archive is. One source keeps the full slab."""
+    fragmented the archive is. One source keeps the full slab.
+
+    Every many-way merge comes through here to learn its slab, with the
+    number of files it is about to open, so this is also where the other
+    thing those files share is checked: the process's limit on open
+    files (`reserve_descriptors`)."""
     if n_sources <= 1:
         return IO_CHUNK
+    reserve_descriptors(n_sources, error)
     return max(_MIN_SLAB, min(IO_CHUNK, _MERGE_READ_BUDGET // n_sources))
 
 

@@ -21,6 +21,50 @@ contract, the **CLI** is convenience, and `reveal-archive-v2` inside a tool
 numbered 1.3.0 is not a discrepancy. Artifacts are identified by their
 fingerprint, never by a tag.
 
+## 3.4.1 (a fusion asks for the open files it needs)
+
+A correction, and nothing else: no format moves, no fingerprint moves, no
+command changes.
+
+A many-way merge opens every one of its sources together. A scan to height
+957,301 leaves 1,154 runs in one category, and the usual soft limit on open
+files is 1,024: on a system with that limit the first `archive merge` after
+the scan stopped on whichever run crossed it, with an `[Errno 24] Too many
+open files` that named a file and no remedy, after the hours of the scan.
+Nothing was lost (the runs were intact and the merge ran once the limit was
+raised by hand), but nothing in the tool or in its documents said what to do.
+It had not shown before because the machine every earlier build ran on has a
+limit a thousand times higher.
+
+Now every merge asks first. The call each of them already makes to size its
+read buffers (`recio.budgeted_slab`) also raises the process's soft limit as
+far as that merge needs, which the process is allowed to do up to the hard
+limit. When the hard limit itself is too low, the step refuses before opening
+anything and prints the number to ask for, as `ulimit -n` and as
+`LimitNOFILE=`. This covers the fusions of the archive, the index, the
+derivatives, the nonces, the first-spend and first-reveal tables, and the
+reads that merge pending runs.
+
+The cost is one `getrlimit` per merge. No per-record path changed.
+
+### Command line
+
+Nothing changed.
+
+### Formats
+
+Nothing changed, and no artifact byte moves.
+
+### Do your artifacts still work?
+
+Yes, all of them, as they are.
+
+### Documentation
+
+`docs/building.md`, under *Running it at chain scale*, says that a fusion
+opens every run at once and what happens when the limit is too low.
+`docs/ARCHITECTURE.md` names the new call in its description of `recio`.
+
 ## 3.4.0 (the artifacts in hand say what they answer, and the headers say what they cost to make)
 
 A release about the distance between the artifacts and the person holding

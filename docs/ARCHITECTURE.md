@@ -155,7 +155,8 @@ something else. An audit finds what it looks for; a test looks every time.
 1. **`hashing`** — sha256d, ripemd160 (with a pure-Python fallback for
    OpenSSL-legacy), hash160. The deepest leaf: pure bytes, no imports.
 2. **`recio`** — slab I/O for fixed-width record files: the read/write budget
-   (`IO_CHUNK`, `budgeted_slab`), the sha-verifying slab reader (`read_fixed`,
+   (`IO_CHUNK`, `budgeted_slab`) and, through the same call, the open files a
+   merge needs (`reserve_descriptors`), the sha-verifying slab reader (`read_fixed`,
    which takes the caller's exception class), whole-file sha, atomic JSON.
 3. **`recsort`** — the sorted-run writer (`write_run`) and the ladder-backed
    search (`bisect_blob`, `SortedFile`) over fixed-width big-endian records.

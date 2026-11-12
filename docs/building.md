@@ -425,6 +425,13 @@ before writing, if the space is not there). That is the price of the guarantee: 
 leaves the previous generation whole, and the artifact is never in a state that
 has to be believed.
 
+**A fusion opens every run at once.** A scan to height 957,301 left 1,154 runs
+in one category, and the first fusion reads them together; the usual soft limit
+on open files is 1,024. The fusion raises its own soft limit as far as it
+needs, which is all an ordinary system asks. Where the hard limit is lower than
+that (a container, a service unit with its own setting) it stops before opening
+anything and prints the number to ask for, as `ulimit -n` or `LimitNOFILE=`.
+
 **An append re-reads the spend side once, whole.** A new block can spend an
 output written years earlier, so the record for that output changes below
 wherever a previous run stopped: a resuming scan cannot seek, it partitions.

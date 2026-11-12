@@ -118,7 +118,7 @@ from nodsig.artifact import (WallClock, make_identity, producer,
 from nodsig.blockparse import scriptsig_pushes
 from nodsig.genstore import GenStore, new_state_fields
 from nodsig.recio import (atomic_json, checked_name, locked, read_fixed,
-                          read_json)
+                          read_json, reserve_descriptors)
 from nodsig.recsort import SortedFile
 
 FORMAT_TAG = "nonces-v3"
@@ -1343,6 +1343,7 @@ def run_groups(nonces_dir, min_count=2, limit=20, csv_path=None,
             os.path.join(nonces_dir, RUNS_DIR,
                          checked_name(run["name"], NonceError, "run")), REC,
             expect_sha=run["sha256"], error=NonceError))
+    reserve_descriptors(len(sources), NonceError)
     stream = sources[0] if len(sources) == 1 else heapq.merge(*sources)
     groups = []
     current = None

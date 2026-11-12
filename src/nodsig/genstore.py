@@ -965,7 +965,7 @@ class GenStore:
         gen = self.state["generation"] + 1
         out_name = f"{logical}_g{gen:04d}.bin"
         lad_name = f"{logical}_g{gen:04d}.lad"
-        slab = budgeted_slab(len(todo))
+        slab = budgeted_slab(len(todo), self.error)
         # The previous generation goes in as a CURSOR rather than as one
         # more stream, so its long untouched stretches move in one piece
         # (see merge_to_file). Not when a sift is in play: a sift may
