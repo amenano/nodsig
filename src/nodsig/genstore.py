@@ -1039,7 +1039,27 @@ class GenStore:
         way the files are somebody's hours. Refused, with everything
         left where it was. The same goes for the shape of a name: a
         generation is exactly `<logical>_g<4 digits>.bin|.lad`, and
-        nothing else with `_g` in it is this store's to remove."""
+        nothing else with `_g` in it is this store's to remove.
+
+        Every refusal comes before the first removal: see
+        check_orphans, which a host with several stores calls on all of
+        them before it lets any one of them sweep."""
+        stale_runs, stale_top = self.check_orphans(keep)
+        runs_dir = os.path.join(self.dir, self.runs_dir)
+        for name in stale_runs:
+            os.remove(os.path.join(runs_dir, name))
+            print(f"  {self.label}: removed stale run {name} "
+                  "(not named by the state)", file=sys.stderr)
+        for name in stale_top:
+            os.remove(self.path(name))
+            print(f"  {self.label}: removed stale file {name} "
+                  "(not named by the state)", file=sys.stderr)
+
+    def check_orphans(self, keep=()):
+        """clean_orphans with nothing removed: raise every refusal the
+        sweep can raise, and return the (runs, top-level files) it would
+        delete. Read-only, so it is safe to call before a sibling
+        artifact has had its own say."""
         runs_dir = os.path.join(self.dir, self.runs_dir)
         fresh = not os.path.exists(self.path(self.state_name))
         stale_runs = []
@@ -1051,7 +1071,9 @@ class GenStore:
         known_top = ({e["file"] for e in self.state["files"].values()}
                      | {e["file"] for e in self.state["caches"].values()}
                      | set(keep))
-        stale_top = [name for name in sorted(os.listdir(self.dir))
+        listing = (sorted(os.listdir(self.dir))
+                   if os.path.isdir(self.dir) else [])
+        stale_top = [name for name in listing
                      if not os.path.isdir(self.path(name))
                      and (name.endswith(".tmp")
                           or (_GENERATION.fullmatch(name)
@@ -1063,10 +1085,6 @@ class GenStore:
                 "generation or tmp file(s) — not a crash to sweep but a "
                 "lost state or the wrong directory; restore the state, "
                 "or start in an empty directory")
-        for name in stale_runs:
-            os.remove(os.path.join(runs_dir, name))
-            print(f"  {self.label}: removed stale run {name} "
-                  "(not named by the state)", file=sys.stderr)
         # A run the state names with a size the disk does not hold is
         # not a crash leftover: the state was written, the run's bytes
         # never reached the disk (a power loss, a mount that lied). No
@@ -1085,10 +1103,7 @@ class GenStore:
                     f"{actual:,} — the run was lost after the state "
                     "was written (power loss?); the heights it covered "
                     "have to be scanned again")
-        for name in stale_top:
-            os.remove(self.path(name))
-            print(f"  {self.label}: removed stale file {name} "
-                  "(not named by the state)", file=sys.stderr)
+        return stale_runs, stale_top
 
     def truncate_appended(self, todo):
         """Files that grow in place are not committed atomically: a

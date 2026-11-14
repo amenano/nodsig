@@ -692,10 +692,17 @@ class NonceEmitter:
         state.update(new_state_fields())
         return state
 
-    def load(self, start_height):
-        """Open (or create) the archive and line it up with a scan that
-        will feed inputs from `start_height` on."""
-        os.makedirs(self.dir, exist_ok=True)
+    def check(self, start_height):
+        """Every refusal load() can raise, with nothing on disk touched.
+
+        A scan opens several plugs and each one heals on load, cutting
+        what is ahead of its host. A refusal that comes after another
+        plug has already healed leaves that plug changed by a scan that
+        never ran (a sealed header archive cut back to genesis, the
+        case that found this). So the host calls check() on every plug
+        first and load() on none of them until all have passed.
+        Returns the state load() starts from: the one on disk, or a new
+        one when there is none."""
         state_path = os.path.join(self.dir, STATE_NAME)
         if not os.path.exists(state_path):
             if start_height > 1:
@@ -705,11 +712,11 @@ class NonceEmitter:
                     "whole: the signatures below it would have to come from a "
                     "pass that is already over. Emission cannot be turned on "
                     "midway, use a fresh scan directory")
-            self.state = self._new_state()
+            state = self._new_state()
         else:
             with open(state_path) as f:
-                self.state = json.load(f)
-            found = self.state.get("format")
+                state = json.load(f)
+            found = state.get("format")
             if found != FORMAT_TAG:
                 raise NonceError(
                     f"this archive is {found!r} and this scan emits "
@@ -717,6 +724,17 @@ class NonceEmitter:
                     "with the release that wrote it, and feeding one into "
                     "this scan would write a file no rebuild reproduces. Use "
                     "a fresh scan directory")
+        store_of(self.dir, state).check_orphans()
+        self._heal_plan(state, start_height)
+        return state
+
+    def load(self, start_height):
+        """Open (or create) the archive and line it up with a scan that
+        will feed inputs from `start_height` on."""
+        fresh = not os.path.exists(os.path.join(self.dir, STATE_NAME))
+        self.state = self.check(start_height)
+        os.makedirs(self.dir, exist_ok=True)
+        if not fresh:
             saved = self.state["scan_stats"]
             self.stats = dict(saved) if saved else new_stats()
             self.stats_valid = saved is not None
@@ -735,6 +753,39 @@ class NonceEmitter:
         self.seg_start = start_height
         return start_height
 
+    @staticmethod
+    def _heal_plan(state, start_height):
+        """The runs _heal keeps and drops, and every refusal it owes,
+        read off `state` without changing it."""
+        keep, drop = [], []
+        for run in state["runs"]:
+            if run.get("start", 0) >= start_height:
+                drop.append(run)
+            elif run.get("end", 0) >= start_height:
+                raise NonceError(
+                    f"run {run['name']} straddles the resume height "
+                    f"{start_height}: this archive did not grow with this "
+                    "scan")
+            else:
+                keep.append(run)
+        if state["merged_height"] >= start_height:
+            raise NonceError(
+                f"this archive is fused through height "
+                f"{state['merged_height']:,} but the scan resumes from "
+                f"{start_height:,}: a fusion cannot be undone by dropping "
+                f"runs. Bring it back first with `nonces rewind --to-height "
+                f"{start_height - 1}`")
+        # After a drop the watermark becomes the block before the resume
+        # point (see _heal), so only an archive with nothing to drop can
+        # be behind its host.
+        if not drop and state["last_height"] + 1 < start_height:
+            raise NonceError(
+                f"nonce archive covers 1..{state['last_height']:,} but "
+                f"the scan resumes from {start_height:,}: the gap between "
+                "them would never be filled. Emission cannot be turned on "
+                "midway, use a fresh scan directory")
+        return keep, drop
+
     def _heal(self, start_height):
         """Reconcile an archive that knows more than the host's state.
 
@@ -746,26 +797,8 @@ class NonceEmitter:
         cannot happen when checkpoints are shared, and refusing beats
         guessing where to cut a file.
         """
-        keep, drop = [], []
-        for run in self.state["runs"]:
-            if run.get("start", 0) >= start_height:
-                drop.append(run)
-            elif run.get("end", 0) >= start_height:
-                raise NonceError(
-                    f"run {run['name']} straddles the resume height "
-                    f"{start_height}: this archive did not grow with this "
-                    "scan")
-            else:
-                keep.append(run)
+        keep, drop = self._heal_plan(self.state, start_height)
         self.state["runs"] = keep
-
-        if self.state["merged_height"] >= start_height:
-            raise NonceError(
-                f"this archive is fused through height "
-                f"{self.state['merged_height']:,} but the scan resumes from "
-                f"{start_height:,}: a fusion cannot be undone by dropping "
-                f"runs. Bring it back first with `nonces rewind --to-height "
-                f"{start_height - 1}`")
         if drop:
             # The HOST is authoritative for the coverage, so the watermark
             # becomes the block before its resume point. It is not the
@@ -808,12 +841,6 @@ class NonceEmitter:
                 print(f"  nonces: dropped run {run['name']}, past the "
                       "scan's resume point, will be re-emitted",
                       file=sys.stderr)
-        if self.state["last_height"] + 1 < start_height:
-            raise NonceError(
-                f"nonce archive covers 1..{self.state['last_height']:,} but "
-                f"the scan resumes from {start_height:,}: the gap between "
-                "them would never be filled. Emission cannot be turned on "
-                "midway, use a fresh scan directory")
 
     # -- feeding -----------------------------------------------------------
 

@@ -247,33 +247,29 @@ class GraphEmitter:
 
     # -- lifecycle ---------------------------------------------------------
 
-    def load(self, start_height):
-        """Open (or create) the archive and line it up with a scan that
-        will feed blocks from `start_height` on."""
-        os.makedirs(os.path.join(self.dir, RUNS_DIR), exist_ok=True)
+    def check(self, start_height):
+        """Every refusal load() can raise, with nothing on disk touched:
+        see NonceEmitter.check for why the host asks every plug before
+        it lets any one of them heal. Returns load()'s plan: the state
+        on disk (None for a new archive), the unnamed run files it will
+        sweep, and the runs it keeps and drops."""
         state_path = os.path.join(self.dir, STATE_NAME)
-        # Built unconditionally: a FRESH archive has no state to carry a
-        # total from, and it is exactly the first stretch of a long scan.
-        # Building the clock only on the resume path would have left the
-        # first session unmeasured, which is the session that matters most.
-        self.clock = WallClock("scan")
+        state, runs, watermark = None, [], 0
         if os.path.exists(state_path):
             with open(state_path) as f:
                 state = json.load(f)
-            self.clock = WallClock("scan", state)
             if state.get("format") != FORMAT_TAG:
                 raise GraphError(
                     f"graph archive state says {state.get('format')!r}, "
                     f"not {FORMAT_TAG!r}: an archive of an earlier format "
                     "is read and grown with the release that wrote it")
-            self.runs = state["runs"]
-            self.watermark = state["last_height"]
-            self.last_hash = state["last_block_hash"]
+            runs = state["runs"]
+            watermark = state["last_height"]
 
         # Every run name the state carries is checked before anything
         # below joins it to a path: the state is untrusted input the
         # moment this process did not write it.
-        for run in self.runs:
+        for run in runs:
             path = _run_path(self.dir, run["name"])
             actual = os.path.getsize(path) if os.path.exists(path) else -1
             if "bytes" in run and actual != run["bytes"]:
@@ -289,20 +285,16 @@ class GraphEmitter:
         # leaves a run or two unnamed; a directory of runs with NO state
         # is a lost state or a wrong `--graph`, and sweeping it would
         # delete the whole archive in seconds. Refused, runs intact.
-        known = {r["name"] for r in self.runs}
-        stale = [name for name in sorted(os.listdir(
-                     os.path.join(self.dir, RUNS_DIR)))
-                 if name not in known]
-        if stale and not os.path.exists(state_path):
+        known = {r["name"] for r in runs}
+        runs_dir = os.path.join(self.dir, RUNS_DIR)
+        listing = sorted(os.listdir(runs_dir)) if os.path.isdir(runs_dir) else []
+        stale = [name for name in listing if name not in known]
+        if stale and state is None:
             raise GraphError(
                 f"{self.dir}: no {STATE_NAME}, but {RUNS_DIR}/ holds "
                 f"{len(stale)} run file(s) — not a crash to sweep but a "
                 "lost state or the wrong directory; restore the state, "
                 "or use an empty directory for a fresh scan")
-        for name in stale:
-            os.remove(os.path.join(self.dir, RUNS_DIR, name))
-            print(f"  graph: removed stale run {name} "
-                  "(not named by the state)", file=sys.stderr)
 
         # The ahead case: the graph knows heights the host's state does
         # not (the crash window between the two checkpoint writes, or
@@ -311,7 +303,7 @@ class GraphEmitter:
         # runs would emit their blocks twice: dropping the suffix is
         # not data loss, it is the only state that can converge.
         keep, drop = [], []
-        for run in self.runs:
+        for run in runs:
             if run["start"] >= start_height:
                 drop.append(run)
             elif run["end"] >= start_height:
@@ -328,10 +320,43 @@ class GraphEmitter:
             # an archive that already covers the chain. Healing it would
             # be deleting the archive and re-emitting it over days.
             raise GraphError(
-                f"graph archive covers 1..{self.watermark} but the scan "
+                f"graph archive covers 1..{watermark} but the scan "
                 f"starts from {start_height}: every run would be dropped "
                 "— a fresh scan needs a fresh graph directory, and a "
                 "resumed scan needs its own checkpoint directory")
+        if drop:
+            watermark = keep[-1]["end"]
+        self._check_tiling(keep, watermark)
+        if watermark != start_height - 1:
+            raise GraphError(
+                f"graph archive covers 1..{watermark} but the scan "
+                f"resumes from {start_height}: the graph must grow with "
+                "the SAME scan from the SAME height — use a fresh "
+                "directory for a fresh scan (the flag cannot be turned "
+                "on midway: the missed blocks would never come back)")
+        return state, stale, keep, drop
+
+    def load(self, start_height):
+        """Open (or create) the archive and line it up with a scan that
+        will feed blocks from `start_height` on."""
+        state, stale, keep, drop = self.check(start_height)
+        os.makedirs(os.path.join(self.dir, RUNS_DIR), exist_ok=True)
+        # Built unconditionally: a FRESH archive has no state to carry a
+        # total from, and it is exactly the first stretch of a long scan.
+        # Building the clock only on the resume path would have left the
+        # first session unmeasured, which is the session that matters most.
+        self.clock = WallClock("scan")
+        if state is not None:
+            self.clock = WallClock("scan", state)
+            self.runs = state["runs"]
+            self.watermark = state["last_height"]
+            self.last_hash = state["last_block_hash"]
+
+        for name in stale:
+            os.remove(os.path.join(self.dir, RUNS_DIR, name))
+            print(f"  graph: removed stale run {name} "
+                  "(not named by the state)", file=sys.stderr)
+
         if drop:
             print(f"  graph: dropping {len(drop)} run(s) past the scan's "
                   f"resume point {start_height} "
@@ -339,7 +364,7 @@ class GraphEmitter:
                   f"{sum(r['bytes'] for r in drop):,} bytes): they will "
                   "be re-emitted", file=sys.stderr)
             self.runs = keep
-            self.watermark = keep[-1]["end"] if keep else 0
+            self.watermark = keep[-1]["end"]
             # The recorded hash belonged to the dropped watermark; the
             # new one is unknown until the next checkpoint. Honest null
             # beats a stale value.
@@ -358,28 +383,21 @@ class GraphEmitter:
                       "scan's resume point, will be re-emitted",
                       file=sys.stderr)
 
-        self._check_tiling()
-        if self.watermark != start_height - 1:
-            raise GraphError(
-                f"graph archive covers 1..{self.watermark} but the scan "
-                f"resumes from {start_height}: the graph must grow with "
-                "the SAME scan from the SAME height — use a fresh "
-                "directory for a fresh scan (the flag cannot be turned "
-                "on midway: the missed blocks would never come back)")
         self.seg_start = start_height
         self.pending = self._zero_counts()
 
-    def _check_tiling(self):
+    @staticmethod
+    def _check_tiling(runs, watermark):
         """The recorded runs must tile 1..watermark with no gap and no
         overlap — the property every reader relies on."""
         expect = 1
-        for run in self.runs:
+        for run in runs:
             if run["start"] != expect:
                 raise GraphError(
                     f"graph runs do not tile the chain: expected a run "
                     f"starting at {expect}, found {run['name']}")
             expect = run["end"] + 1
-        if self.runs and self.runs[-1]["end"] != self.watermark:
+        if runs and runs[-1]["end"] != watermark:
             raise GraphError("graph state watermark does not match "
                              "the last run")
 
@@ -555,15 +573,33 @@ class GraphDigest:
     def _state_path(self):
         return os.path.join(self.state_dir, DIGEST_STATE_NAME)
 
-    def load(self, start_height):
-        """Line up with a scan that will feed blocks from
-        `start_height` on."""
+    def check(self, start_height):
+        """Every refusal load() can raise (see NonceEmitter.check). The
+        digest writes nothing on load, but the host asks it with the
+        others so that no plug's refusal depends on the order they open
+        in. Returns the state on disk, or None."""
         path = self._state_path()
         if os.path.exists(path):
             with open(path) as f:
                 state = json.load(f)
             if state.get("format") != FORMAT_TAG:
                 raise GraphError("unknown graph digest state format")
+            return state
+        if start_height > 1:
+            # A digest measures the stream from height 1. Asked to join
+            # one it never saw, it would look like this check while
+            # measuring something else.
+            raise GraphError(
+                f"a graph digest cannot start at height {start_height}: "
+                "it measures the stream from 1, so it has to see it from "
+                "1 (scan into a fresh archive, or drop --graph-digest)")
+        return None
+
+    def load(self, start_height):
+        """Line up with a scan that will feed blocks from
+        `start_height` on."""
+        state = self.check(start_height)
+        if state is not None:
             # The digest can only be AHEAD of the host, never behind,
             # because it is checkpointed first. Drop what the host is
             # about to feed again.
@@ -589,14 +625,6 @@ class GraphDigest:
                       f"{start_height:,}: {len(gap)} reference "
                       "interval(s) in between will be reported as not "
                       "verified", file=sys.stderr)
-        elif start_height > 1:
-            # A digest measures the stream from height 1. Asked to join
-            # one it never saw, it would look like this check while
-            # measuring something else.
-            raise GraphError(
-                f"a graph digest cannot start at height {start_height}: "
-                "it measures the stream from 1, so it has to see it from "
-                "1 (scan into a fresh archive, or drop --graph-digest)")
 
         # Heights already past the reference need no digest and are
         # counted, not stored: the arithmetic is exact and survives any

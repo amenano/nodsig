@@ -21,6 +21,53 @@ contract, the **CLI** is convenience, and `reveal-archive-v2` inside a tool
 numbered 1.3.0 is not a discrepancy. Artifacts are identified by their
 fingerprint, never by a tag.
 
+## 3.4.2 (a scan refuses before it changes anything)
+
+A correction, and nothing else: no format moves, no fingerprint moves, no
+command changes.
+
+A scan opens up to three plugs beside its own archive: the graph, the header
+archive and the nonce census. Opening one heals it: a plug that is ahead of
+the scan's resume point (the crash window between two checkpoint writes) cuts
+itself back to that point, and the scan then feeds the blocks again. The
+plugs were opened one after the other, each one checking and healing in the
+same step. So when a later plug refused the scan, the earlier ones had
+already been cut by a scan that never ran.
+
+The case that found it: a fresh scan directory pointed at a sealed header
+archive and at a fused nonce census. The census refuses, rightly, because a
+fusion cannot be undone by dropping runs; but the header archive had opened
+first and cut itself back to genesis, leaving the manifest of the sealed
+archive beside the shorter files. Putting it back took a whole scan. The graph
+had the same exposure when it was ahead of its host and a later plug refused.
+
+Now every plug answers a read-only check first, with every refusal its
+opening can raise, and the scan opens none of them until all have passed.
+The same holds for `reuse-scan`, which carries the graph and the headers. The
+sweep of files no state names (`clean_orphans`) also raises its refusals
+before it removes the first file. What a refused scan can still leave behind
+is the crash debris of its own archive (runs its state does not name) and an
+empty directory for the lock: nothing a state committed.
+
+The cost is reading each plug's state twice when a scan starts. No
+per-record path changed.
+
+### Command line
+
+Nothing changed.
+
+### Formats
+
+Nothing changed, and no artifact byte moves.
+
+### Do your artifacts still work?
+
+Yes, all of them, as they are.
+
+### Documentation
+
+Nothing changed: no document described the order in which the plugs open.
+
 ## 3.4.1 (a fusion asks for the open files it needs)
 
 A correction, and nothing else: no format moves, no fingerprint moves, no

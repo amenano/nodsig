@@ -980,10 +980,8 @@ def run_scan(rpc_url, auth, end_height, archive_dir,
             "afterwards if you wrote it)")
     if graph_dir:
         emitter = graphemit.GraphEmitter(graph_dir)
-        emitter.load(start_height)
     elif graph_digest_dir:
         emitter = graphemit.GraphDigest(graph_digest_dir, archive_dir)
-        emitter.load(start_height)
 
     # The header archive (--headers), the one plug that can move this
     # scan's starting point: a fresh archive begins at genesis, because
@@ -993,7 +991,6 @@ def run_scan(rpc_url, auth, end_height, archive_dir,
     feed_from = start_height
     if headers_dir:
         header_emitter = headers.HeaderEmitter(headers_dir)
-        feed_from = header_emitter.load(start_height)
 
     # The nonce census (--nonces): the one plug that consumes what this
     # scan has ALREADY parsed rather than the block. It is fed per input,
@@ -1002,6 +999,21 @@ def run_scan(rpc_url, auth, end_height, archive_dir,
     nonce_emitter = None
     if nonces_dir:
         nonce_emitter = nonces.NonceEmitter(nonces_dir)
+
+    # Every plug is asked before any plug is opened. Opening heals: a
+    # plug ahead of this scan cuts itself back to the resume point, which
+    # is right only if the scan then runs and regrows it. Opened one by
+    # one, a refusal from a later plug found the earlier ones already
+    # cut, and a sealed header archive came out of a refused scan as
+    # genesis alone.
+    plugs = [p for p in (emitter, header_emitter, nonce_emitter) if p]
+    for plug in plugs:
+        plug.check(start_height)
+    if emitter:
+        emitter.load(start_height)
+    if header_emitter:
+        feed_from = header_emitter.load(start_height)
+    if nonce_emitter:
         nonce_emitter.load(start_height)
 
     if start_height > end_height:

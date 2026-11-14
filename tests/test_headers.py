@@ -52,6 +52,7 @@ import pytest
 from nodsig import block_dates as bd
 from nodsig import blockparse as bp
 from nodsig import headers as hd
+from nodsig import nonces as nn
 from nodsig import outpoint_index as oi
 from nodsig import reveal_archive as ra
 from nodsig import reuse_scan as rs
@@ -698,3 +699,46 @@ def test_the_scan_leaves_its_seconds_in_the_header_state(tmp):
     check("seconds" in st and "scan" in st["seconds"],
           f"the scan left no seconds in the header state: {list(st)}")
     print("ok  scan seconds: the header archive records them too")
+
+
+def test_a_refusal_after_the_headers_plug_leaves_the_headers_untouched(tmp):
+    """A scan that refuses must refuse BEFORE it changes anything. The
+    header plug heals an archive ahead of its host by cutting it back,
+    and that is right when the scan then runs and regrows it. But the
+    nonce plug opens AFTER the header plug, and a fused census refuses a
+    scan that would restart below its fusion: if the headers were cut
+    first, the scan stops with a sealed header archive shortened to
+    genesis and its manifest left beside the shorter files."""
+    blocks, _model = headers_chain()
+    hdir = os.path.join(tmp, "hdr")
+    nd = os.path.join(tmp, "nonces")
+    server, url = trs.serve(blocks)
+    try:
+        ra.run_scan(url, "user:pass", 5, os.path.join(tmp, "host"),
+                    batch_size=2, checkpoint_every=2, headers_dir=hdir,
+                    nonces_dir=nd)
+    finally:
+        server.shutdown()
+    hd.run_fingerprint(hdir)
+    nn.run_merge(nd)
+    before = read_files(hdir)
+
+    # A fresh host directory (a new scan) pointed at the two sealed
+    # artifacts: the census must refuse it.
+    server, url = trs.serve(blocks)
+    try:
+        with pytest.raises(nn.NonceError):
+            ra.run_scan(url, "user:pass", 5, os.path.join(tmp, "fresh_host"),
+                        batch_size=2, checkpoint_every=2, headers_dir=hdir,
+                        nonces_dir=nd)
+    finally:
+        server.shutdown()
+
+    after = read_files(hdir)
+    for name, _fn in hd.FILES:
+        check(before[name] == after[name],
+              f"{name}: a refused scan changed the sealed header archive "
+              f"({len(before[name])} bytes before, {len(after[name])} after)")
+    hd.run_verify(hdir)
+    print("ok  refusal: a scan the census refuses leaves the sealed header "
+          "archive as it was")

@@ -1414,10 +1414,8 @@ def run_scan(locks_dir, rpc_url, auth, end_height, checkpoint_dir,
             "afterwards if you wrote it)")
     if graph_dir:
         emitter = graphemit.GraphEmitter(graph_dir)
-        emitter.load(start_height)
     elif graph_digest_dir:
         emitter = graphemit.GraphDigest(graph_digest_dir, checkpoint_dir)
-        emitter.load(start_height)
 
     # The header archive (also OFF by default). It is the one plug that
     # can move the scan's own starting point: a chain of headers has to
@@ -1428,6 +1426,16 @@ def run_scan(locks_dir, rpc_url, auth, end_height, checkpoint_dir,
     feed_from = start_height
     if headers_dir:
         header_emitter = headers.HeaderEmitter(headers_dir)
+
+    # Every plug is asked before any plug is opened, because opening
+    # heals (see reveal_archive.run_scan): a refusal must find nothing
+    # already cut.
+    for plug in (emitter, header_emitter):
+        if plug:
+            plug.check(start_height)
+    if emitter:
+        emitter.load(start_height)
+    if header_emitter:
         feed_from = header_emitter.load(start_height)
 
     def checkpoint(height, block_hash_display):

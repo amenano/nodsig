@@ -307,6 +307,52 @@ def test_refusals(tmp, blocks, graph_oneshot):
               "fingerprint")
 
 
+def _files_of(directory):
+    """Every file under `directory`, path -> bytes."""
+    out = {}
+    for root, _dirs, names in os.walk(directory):
+        for name in names:
+            path = os.path.join(root, name)
+            with open(path, "rb") as f:
+                out[os.path.relpath(path, directory)] = f.read()
+    return out
+
+
+def test_a_refusal_by_a_later_plug_leaves_the_graph_untouched(tmp, blocks):
+    """The graph heals on load: ahead of its host, it drops the runs
+    past the resume point. That is right when the scan then runs and
+    re-emits them, and wrong when another plug refuses the scan: the
+    host asks every plug before it opens any. Here the host is put back
+    to an older state, so the graph is ahead, and a fresh nonce census
+    refuses a scan that resumes past height 1."""
+    import shutil
+    host = os.path.join(tmp, "host_refusal")
+    graph = os.path.join(tmp, "graph_refusal")
+    server, url = trs.serve(blocks)
+    try:
+        ra.run_scan(url, "user:pass", 2, host, batch_size=2,
+                    checkpoint_every=2, graph_dir=graph)
+        shutil.copytree(host, host + "_at_2")
+        ra.run_scan(url, "user:pass", 4, host, batch_size=2,
+                    checkpoint_every=2, graph_dir=graph)
+        shutil.rmtree(host)
+        shutil.copytree(host + "_at_2", host)
+        before = _files_of(graph)
+        try:
+            ra.run_scan(url, "user:pass", 4, host, batch_size=2,
+                        checkpoint_every=2, graph_dir=graph,
+                        nonces_dir=os.path.join(tmp, "nonces_fresh"))
+            fail("a fresh nonce census accepted a scan resuming at 3")
+        except ra.nonces.NonceError:
+            pass
+    finally:
+        server.shutdown()
+    check(_files_of(graph) == before,
+          "a scan refused by the nonce census changed the graph archive")
+    print("ok  refusal: a scan another plug refuses leaves the graph as it "
+          "was")
+
+
 def _graph_with_runs(tmp, name, n=4, state=True):
     """A graph directory as a crash or a wrong `--graph` could leave
     it: `n` runs tiling 1..n, with or without the state that names

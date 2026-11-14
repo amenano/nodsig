@@ -329,15 +329,12 @@ class HeaderEmitter:
 
     # -- lifecycle ---------------------------------------------------------
 
-    def load(self, start_height):
-        """Open (or create) the archive, line it up with a scan that
-        will feed blocks from `start_height` on, and return the height
-        the host must actually start feeding from."""
-        os.makedirs(self.dir, exist_ok=True)
+    def check(self, start_height):
+        """Every refusal load() can raise, with nothing on disk touched:
+        see NonceEmitter.check for why the host asks every plug before
+        it lets any one of them heal. Returns the state on disk, or None
+        for an archive that does not exist yet."""
         state_path = os.path.join(self.dir, STATE_NAME)
-        # See GraphWriter.load: unconditional, so the first stretch of a
-        # scan is measured too and not just the resumes.
-        self.clock = WallClock("scan")
         if not os.path.exists(state_path):
             if start_height > 1:
                 raise HeaderError(
@@ -346,17 +343,43 @@ class HeaderEmitter:
                     "made whole: the headers below it would have to come "
                     "from a pass that is already over. Emission cannot be "
                     "turned on midway — use a fresh scan directory")
+            return None
+        with open(state_path) as f:
+            state = json.load(f)
+        if state.get("format") != FORMAT_TAG:
+            raise HeaderError("unknown header archive format")
+        for name, file_name in FILES:
+            self._refuse_short(name, file_name, state["sizes"][name])
+        watermark = state["last_height"]
+        if watermark is None:
+            return state
+        if watermark + 1 < start_height:
+            raise HeaderError(
+                f"header archive covers {state['from_height']}..{watermark} "
+                f"but the scan resumes from {start_height}: the archive must "
+                "grow with the SAME scan from the SAME height — use a fresh "
+                "directory for a fresh scan")
+        if watermark + 1 > start_height:
+            self._refuse_cut(state["from_height"], start_height - 1)
+        return state
+
+    def load(self, start_height):
+        """Open (or create) the archive, line it up with a scan that
+        will feed blocks from `start_height` on, and return the height
+        the host must actually start feeding from."""
+        state = self.check(start_height)
+        os.makedirs(self.dir, exist_ok=True)
+        # See GraphWriter.load: unconditional, so the first stretch of a
+        # scan is measured too and not just the resumes.
+        self.clock = WallClock("scan")
+        if state is None:
             for name, _ in FILES:
                 open(_path(self.dir, name), "ab").close()
             self.watermark = None
             self._write_state()
             return GENESIS
 
-        with open(state_path) as f:
-            state = json.load(f)
         self.clock = WallClock("scan", state)
-        if state.get("format") != FORMAT_TAG:
-            raise HeaderError("unknown header archive format")
         self.from_height = state["from_height"]
         self.watermark = state["last_height"]
         self.last_hash = state["last_block_hash"]
@@ -365,12 +388,6 @@ class HeaderEmitter:
 
         if self.watermark is None:
             return GENESIS
-        if self.watermark + 1 < start_height:
-            raise HeaderError(
-                f"header archive covers {self.from_height}..{self.watermark} "
-                f"but the scan resumes from {start_height}: the archive must "
-                "grow with the SAME scan from the SAME height — use a fresh "
-                "directory for a fresh scan")
         if self.watermark + 1 > start_height:
             # The other misalignment is the crash window this emitter
             # creates on purpose: it checkpoints BEFORE the host writes
@@ -399,12 +416,8 @@ class HeaderEmitter:
         beyond them is cut, anything short of them is corruption."""
         for name, file_name in FILES:
             path = _path(self.dir, name)
-            actual = os.path.getsize(path) if os.path.exists(path) else 0
             committed = self.sizes[name]
-            if actual < committed:
-                raise HeaderError(
-                    f"{file_name}: {actual} bytes on disk but the state "
-                    f"committed {committed} — the file lost data")
+            actual = self._refuse_short(name, file_name, committed)
             if actual > committed:
                 with open(path, "ab") as f:
                     f.truncate(committed)
@@ -412,17 +425,33 @@ class HeaderEmitter:
                       f"{committed} bytes (tail past the last checkpoint)",
                       file=sys.stderr)
 
+    def _refuse_short(self, name, file_name, committed):
+        """A file shorter than its committed size lost data: refused.
+        Returns the size on disk."""
+        path = _path(self.dir, name)
+        actual = os.path.getsize(path) if os.path.exists(path) else 0
+        if actual < committed:
+            raise HeaderError(
+                f"{file_name}: {actual} bytes on disk but the state "
+                f"committed {committed} — the file lost data")
+        return actual
+
+    @staticmethod
+    def _refuse_cut(from_height, to_height):
+        """An archive cannot be cut below its first record."""
+        if to_height - from_height + 1 < 1:
+            raise HeaderError(
+                f"cannot cut the archive back to height {to_height}: it "
+                f"starts at {from_height}")
+
     def _cut_back(self, to_height):
         """Drop every record above `to_height` and commit the shorter
         archive, leaving exactly the bytes a scan that checkpointed
         there would have written. The positional files cut by record
         count; coinbase.bin is variable-width, so its cut point is where
         the first dropped script begins, which coinbase_off.bin says."""
+        self._refuse_cut(self.from_height, to_height)
         records = to_height - self.from_height + 1
-        if records < 1:
-            raise HeaderError(
-                f"cannot cut the archive back to height {to_height}: it "
-                f"starts at {self.from_height}")
         with open(_path(self.dir, "coinbase_off"), "rb") as f:
             f.seek(records * OFF_REC)
             first_dropped = int.from_bytes(f.read(OFF_REC), "big")
